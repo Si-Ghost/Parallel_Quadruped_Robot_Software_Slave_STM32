@@ -45,11 +45,15 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
+    APP/GO-M8010-6/GO-M8010-6.c
 )
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
+    APP/GO-M8010-6/crc_ccitt.h
+    APP/GO-M8010-6/motor_control.h
+    APP/GO-M8010-6/ris_protocol.h
 )
 
 # Add project symbols (macros)
