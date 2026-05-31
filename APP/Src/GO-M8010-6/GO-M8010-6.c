@@ -1,5 +1,5 @@
-#include "motor_control.h"
-#include "crc_ccitt.h"
+#include "../../Inc/GO-M8010-6/motor_control.h"
+#include "../../Inc/GO-M8010-6/crc_ccitt.h"
 #include "stdio.h"
 
 #define SATURATE(_IN, _MIN, _MAX) {\
