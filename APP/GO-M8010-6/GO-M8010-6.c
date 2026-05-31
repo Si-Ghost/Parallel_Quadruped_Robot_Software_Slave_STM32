@@ -1,4 +1,3 @@
-#include "usart.h"
 #include "motor_control.h"
 #include "crc_ccitt.h"
 #include "stdio.h"
@@ -8,103 +7,85 @@
  _IN = _MIN;\
  else if (_IN > _MAX)\
  _IN = _MAX;\
- } 
+ }
 
-
-//uint32_t crc32_core(uint32_t* ptr, uint32_t len)
-//{
-//    uint32_t xbit = 0;
-//    uint32_t data = 0;
-//    uint32_t CRC32 = 0xFFFFFFFF;
-//    const uint32_t dwPolynomial = 0x04c11db7;
-//    for (uint32_t i = 0; i < len; i++)
-//    {
-//        xbit = 1 << 31;
-//        data = ptr[i];
-//        for (uint32_t bits = 0; bits < 32; bits++)
-//        {
-//            if (CRC32 & 0x80000000)
-//            {
-//                CRC32 <<= 1;
-//                CRC32 ^= dwPolynomial;
-//            }
-//            else
-//                CRC32 <<= 1;
-//            if (data & xbit)
-//                CRC32 ^= dwPolynomial;
-
-//            xbit >>= 1;
-//        }
-//    }
-//    return CRC32;
-//}
-
+/**
+ * @brief 调整发送的数据
+ * @param motor_s: 用于接收发送的数据
+ * @retval 如果成功则返回0
+ */
 int modify_data(MOTOR_send *motor_s)
 {
+	// 指定包长度和包头
     motor_s->hex_len = 17;
     motor_s->motor_send_data.head[0] = 0xFE;
     motor_s->motor_send_data.head[1] = 0xEE;
-	
-//		SATURATE(motor_s->id,   0,    15);
-//		SATURATE(motor_s->mode, 0,    7);
-		SATURATE(motor_s->K_P,  0.0f,   25.599f);
-		SATURATE(motor_s->K_W,  0.0f,   25.599f);
-		SATURATE(motor_s->T,   -127.99f,  127.99f);
-		SATURATE(motor_s->W,   -804.00f,  804.00f);
-		SATURATE(motor_s->Pos, -411774.0f,  411774.0f);
 
+	// 对数据进行限幅
+	SATURATE(motor_s->id,   0,    15);
+	SATURATE(motor_s->mode, 0,    2);
+	SATURATE(motor_s->K_P,  0.0f,   25.599f);
+	SATURATE(motor_s->K_W,  0.0f,   25.599f);
+	SATURATE(motor_s->T,   -127.99f,  127.99f);
+	SATURATE(motor_s->W,   -804.00f,  804.00f);
+	SATURATE(motor_s->Pos, -411774.0f,  411774.0f);
+
+	// 将可读的数据转化为要传输的数据
     motor_s->motor_send_data.mode.id   = motor_s->id;
     motor_s->motor_send_data.mode.status  = motor_s->mode;
-    motor_s->motor_send_data.comd.k_pos  = motor_s->K_P/25.6f*32768;
-    motor_s->motor_send_data.comd.k_spd  = motor_s->K_W/25.6f*32768;
+	motor_s->motor_send_data.comd.tor_des  = motor_s->T*256;
+	motor_s->motor_send_data.comd.spd_des  = motor_s->W/6.2832f*256;
     motor_s->motor_send_data.comd.pos_des  = motor_s->Pos/6.2832f*32768;
-    motor_s->motor_send_data.comd.spd_des  = motor_s->W/6.2832f*256;
-    motor_s->motor_send_data.comd.tor_des  = motor_s->T*256;
+	motor_s->motor_send_data.comd.k_pos  = motor_s->K_P/25.6f*32768;
+	motor_s->motor_send_data.comd.k_spd  = motor_s->K_W/25.6f*32768;
     motor_s->motor_send_data.CRC16 = crc_ccitt(0, (uint8_t *)&motor_s->motor_send_data, 15);
     return 0;
 }
 
+/**
+ * @brief 解压发送来的数据
+ * @param motor_r: 用于接收发来的数据
+ * @retval 如果成功则返回1，失败返回0
+ */
 int extract_data(MOTOR_recv *motor_r)
 {
-    if(motor_r->motor_recv_data.CRC16 !=
-        crc_ccitt(0, (uint8_t *)&motor_r->motor_recv_data, 14)){
-        // printf("[WARNING] Receive data CRC error");
+	// CRC校验，成功则继续执行，失败则退出
+    if(motor_r->motor_recv_data.CRC16 != crc_ccitt(0, (uint8_t *)&motor_r->motor_recv_data, 14))
+    {
         motor_r->correct = 0;
         return motor_r->correct;
     }
-    else
-		{
-        motor_r->motor_id = motor_r->motor_recv_data.mode.id;
-        motor_r->mode = motor_r->motor_recv_data.mode.status;
-        motor_r->Temp = motor_r->motor_recv_data.fbk.temp;
-        motor_r->MError = motor_r->motor_recv_data.fbk.MError;
-        motor_r->W = ((float)motor_r->motor_recv_data.fbk.speed/256)*6.2832f ;
-        motor_r->T = ((float)motor_r->motor_recv_data.fbk.torque) / 256;
-        motor_r->Pos = 6.2832f*((float)motor_r->motor_recv_data.fbk.pos) / 32768;
-				motor_r->footForce = motor_r->motor_recv_data.fbk.force;
-				motor_r->correct = 1;
-        return motor_r->correct;
-    }
+
+	// 读取数据
+    motor_r->motor_id = motor_r->motor_recv_data.mode.id;
+    motor_r->mode = motor_r->motor_recv_data.mode.status;
+	motor_r->T = ((float)motor_r->motor_recv_data.fbk.torque) / 256;
+	motor_r->W = ((float)motor_r->motor_recv_data.fbk.speed/256)*6.2832f ;
+	motor_r->Pos = 6.2832f*((float)motor_r->motor_recv_data.fbk.pos) / 32768;
+    motor_r->Temp = motor_r->motor_recv_data.fbk.temp;
+    motor_r->MError = motor_r->motor_recv_data.fbk.MError;
+	motor_r->footForce = motor_r->motor_recv_data.fbk.force;
+	motor_r->correct = 1;
+    return motor_r->correct;
 }
 
+/**
+ * @brief 发送和接收电机信息
+ * @param pData: 发送的数据
+ * @param rData: 接受的数据
+ * @retval 如果成功则返回1，失败返回0
+ */
 HAL_StatusTypeDef SERVO_Send_recv(MOTOR_send *pData, MOTOR_recv *rData)
 {
     uint16_t rxlen = 0;
 
+	//调整数据然后发送并等待接收
     modify_data(pData);
-    
-		SET_485_DE_UP();
-		SET_485_RE_UP();
-    HAL_UART_Transmit(&huart1, (uint8_t *)pData, sizeof(pData->motor_send_data), 10); 
-		
-
-		SET_485_RE_DOWN();
-		SET_485_DE_DOWN();
+    HAL_UART_Transmit(&huart1, (uint8_t *)pData, sizeof(pData->motor_send_data), 10);
     HAL_UARTEx_ReceiveToIdle(&huart1, (uint8_t *)rData, sizeof(rData->motor_recv_data), &rxlen, 10);
 		
 
     if(rxlen == 0)
-
       return HAL_TIMEOUT;
 
     if(rxlen != sizeof(rData->motor_recv_data))
