@@ -71,10 +71,20 @@ typedef struct
 
 } MOTOR_recv;
 
+typedef struct
+{
+    MOTOR_recv motor_recv_data0;
+    MOTOR_recv motor_recv_data1;
+    MOTOR_send motor_send_data0;
+    MOTOR_send motor_send_data1;
+    GPIO_TypeDef *GPIOx;
+    uint16_t GPIO_Pin;
+    UART_HandleTypeDef *huart;
+} LegModule_t;                              // 腿的数据结构体，存放每条腿要发送的数据，接收到的数据，以及每条腿控制发送对应的IO口以及UART句柄
 
 uint32_t crc32_core(uint32_t *ptr, uint32_t len);
 int modify_data(MOTOR_send *motor_s);
 int extract_data(MOTOR_recv *motor_r);
-HAL_StatusTypeDef SERVO_Send_recv(MOTOR_send *pData, MOTOR_recv *rData);
+HAL_StatusTypeDef SERVO_Send_recv(MOTOR_send *pData, MOTOR_recv *rData, GPIO_TypeDef *Port, uint16_t Pin, UART_HandleTypeDef *huart);
 
 #endif

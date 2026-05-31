@@ -75,14 +75,20 @@ int extract_data(MOTOR_recv *motor_r)
  * @param rData: 接受的数据
  * @retval 如果成功则返回1，失败返回0
  */
-HAL_StatusTypeDef SERVO_Send_recv(MOTOR_send *pData, MOTOR_recv *rData)
+HAL_StatusTypeDef SERVO_Send_recv(MOTOR_send *pData, MOTOR_recv *rData, GPIO_TypeDef *Port, uint16_t Pin, UART_HandleTypeDef *huart)
 {
     uint16_t rxlen = 0;
 
 	//调整数据然后发送并等待接收
     modify_data(pData);
-    HAL_UART_Transmit(&huart1, (uint8_t *)pData, sizeof(pData->motor_send_data), 10);
-    HAL_UARTEx_ReceiveToIdle(&huart1, (uint8_t *)rData, sizeof(rData->motor_recv_data), &rxlen, 10);
+
+	//设置为发送，然后发送数据
+	HAL_GPIO_WritePin(Port, Pin, GPIO_PIN_SET);
+    HAL_UART_Transmit(huart, (uint8_t *)&(pData->motor_send_data), sizeof(pData->motor_send_data), 10);
+
+	//设置为接收模式，然后接收数据
+	HAL_GPIO_WritePin(Port, Pin, GPIO_PIN_RESET);
+	HAL_UARTEx_ReceiveToIdle(huart, (uint8_t *)&(rData->motor_recv_data), sizeof(rData->motor_recv_data), &rxlen, 10);
 		
 
     if(rxlen == 0)
@@ -100,4 +106,17 @@ HAL_StatusTypeDef SERVO_Send_recv(MOTOR_send *pData, MOTOR_recv *rData)
     }
     
     return HAL_ERROR;
+}
+
+HAL_StatusTypeDef Leg_Control(LegModule_t *leg)
+{
+	HAL_StatusTypeDef status0;
+	HAL_StatusTypeDef status1;
+	status0 = SERVO_Send_recv(&(leg->motor_send_data0), &(leg->motor_recv_data0), leg->GPIOx, leg->GPIO_Pin, leg->huart);
+	status1 = SERVO_Send_recv(&(leg->motor_send_data1), &(leg->motor_recv_data1), leg->GPIOx, leg->GPIO_Pin, leg->huart);
+	if(status0 != HAL_OK || status1 != HAL_OK)
+	{
+		return HAL_ERROR;
+	}
+	return HAL_OK;
 }
