@@ -221,7 +221,7 @@ static void MX_UART4_Init(void)
 
   /* USER CODE END UART4_Init 1 */
   huart4.Instance = UART4;
-  huart4.Init.BaudRate = 4000000;
+  huart4.Init.BaudRate = 406800;
   huart4.Init.WordLength = UART_WORDLENGTH_8B;
   huart4.Init.StopBits = UART_STOPBITS_1;
   huart4.Init.Parity = UART_PARITY_NONE;
@@ -509,7 +509,7 @@ static void MX_USART6_UART_Init(void)
 
   /* USER CODE END USART6_Init 1 */
   huart6.Instance = USART6;
-  huart6.Init.BaudRate = 4000000;
+  huart6.Init.BaudRate = 115200;
   huart6.Init.WordLength = UART_WORDLENGTH_8B;
   huart6.Init.StopBits = UART_STOPBITS_1;
   huart6.Init.Parity = UART_PARITY_NONE;
@@ -590,13 +590,10 @@ static void MX_GPIO_Init(void)
   /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOE_CLK_ENABLE();
   __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOE_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOE, Right_Front_Leg_Control_Pin|Left_Back_Leg_Control_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
@@ -605,14 +602,10 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(Left_Front_Leg_Control_GPIO_Port, Left_Front_Leg_Control_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(Right_Back_Leg_Control_GPIO_Port, Right_Back_Leg_Control_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Left_Back_Leg_Control_GPIO_Port, Left_Back_Leg_Control_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pins : Right_Front_Leg_Control_Pin Left_Back_Leg_Control_Pin */
-  GPIO_InitStruct.Pin = Right_Front_Leg_Control_Pin|Left_Back_Leg_Control_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, Right_Back_Leg_Control_Pin|Right_Front_Leg_Control_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : LED_Pin */
   GPIO_InitStruct.Pin = LED_Pin;
@@ -628,12 +621,19 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(Left_Front_Leg_Control_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : Right_Back_Leg_Control_Pin */
-  GPIO_InitStruct.Pin = Right_Back_Leg_Control_Pin;
+  /*Configure GPIO pin : Left_Back_Leg_Control_Pin */
+  GPIO_InitStruct.Pin = Left_Back_Leg_Control_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(Right_Back_Leg_Control_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(Left_Back_Leg_Control_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : Right_Back_Leg_Control_Pin Right_Front_Leg_Control_Pin */
+  GPIO_InitStruct.Pin = Right_Back_Leg_Control_Pin|Right_Front_Leg_Control_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 

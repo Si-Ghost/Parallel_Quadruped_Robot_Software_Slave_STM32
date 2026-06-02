@@ -57,8 +57,6 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define Right_Front_Leg_Control_Pin GPIO_PIN_5
-#define Right_Front_Leg_Control_GPIO_Port GPIOE
 #define LED_Pin GPIO_PIN_13
 #define LED_GPIO_Port GPIOC
 #define Left_Front_Leg_Control_Pin GPIO_PIN_4
@@ -67,6 +65,8 @@ void Error_Handler(void);
 #define Left_Back_Leg_Control_GPIO_Port GPIOE
 #define Right_Back_Leg_Control_Pin GPIO_PIN_15
 #define Right_Back_Leg_Control_GPIO_Port GPIOB
+#define Right_Front_Leg_Control_Pin GPIO_PIN_9
+#define Right_Front_Leg_Control_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 
