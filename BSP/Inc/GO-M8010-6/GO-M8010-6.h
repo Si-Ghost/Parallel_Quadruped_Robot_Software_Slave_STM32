@@ -2,17 +2,9 @@
 #define __MOTOR_CONTORL_H
 
 #include <stdint.h>
-#include "main.h" // stm32 hal
+#include "main.h"   // 直接包含main.h，间接包含hal库，增加可移植性
 #include "ris_protocol.h"
 #pragma pack(1)
-typedef union
-{
-    int32_t     L;
-    uint8_t     u8[4];
-    uint16_t    u16[2];
-    uint32_t    u32;
-    float       F;
-} COMData32;
 
 typedef struct
 {
@@ -36,7 +28,7 @@ typedef struct
 typedef struct
 {
     // 定义 发送格式化数据
-    ControlData_t motor_send_data;   //电机控制数据结构体
+    ControlData_t motor_send_data;       //电机控制数据结构体
     int hex_len;                        //发送的16进制命令数组长度, 34
     long long send_time;                //发送该命令的时间, 微秒(us)
     // 待发送的各项数据
@@ -49,13 +41,12 @@ typedef struct
     float Pos;                          //期望关节位置（rad）
     float K_P;                          //关节刚度系数
     float K_W;                          //关节速度系数
-    COMData32 Res;                    // 通讯 保留字节  用于实现别的一些通讯内容
 } MOTOR_send;
 
 typedef struct
 {
     // 定义 接收数据
-    MotorData_t motor_recv_data;    //电机接收数据结构体，详见motor_msg.h
+    MotorData_t motor_recv_data;        //电机接收数据结构体，详见motor_msg.h
     int hex_len;                        //接收的16进制命令数组长度, 78
     long long resv_time;                //接收该命令的时间, 微秒(us)
     int correct;                        //接收数据是否完整（1完整，0不完整）
@@ -65,22 +56,9 @@ typedef struct
     int Temp;                           //温度
     unsigned char MError;               //错误码
     float T;                            // 当前实际电机输出力矩
-		float W;														// speed
+    float W;														// speed
     float Pos;                          // 当前电机位置（主控0点修正，电机关节还是以编码器0点为准）
-		float footForce;												// 足端气压传感器数据 12bit (0-4095)
-
 } MOTOR_recv;
-
-typedef struct
-{
-    MOTOR_recv motor_recv_data0;
-    MOTOR_recv motor_recv_data1;
-    MOTOR_send motor_send_data0;
-    MOTOR_send motor_send_data1;
-    GPIO_TypeDef *GPIOx;
-    uint16_t GPIO_Pin;
-    UART_HandleTypeDef *huart;
-} LegModule_t;                              // 腿的数据结构体，存放每条腿要发送的数据，接收到的数据，以及每条腿控制发送对应的IO口以及UART句柄
 
 uint32_t crc32_core(uint32_t *ptr, uint32_t len);
 int modify_data(MOTOR_send *motor_s);

@@ -1,4 +1,4 @@
-#include "../../Inc/GO-M8010-6/motor_control.h"
+#include "../../Inc/GO-M8010-6/GO-M8010-6.h"
 #include "../../Inc/GO-M8010-6/crc_ccitt.h"
 #include "stdio.h"
 
@@ -64,7 +64,6 @@ int extract_data(MOTOR_recv *motor_r)
 	motor_r->Pos = 6.2832f*((float)motor_r->motor_recv_data.fbk.pos) / 32768;
     motor_r->Temp = motor_r->motor_recv_data.fbk.temp;
     motor_r->MError = motor_r->motor_recv_data.fbk.MError;
-	motor_r->footForce = motor_r->motor_recv_data.fbk.force;
 	motor_r->correct = 1;
     return motor_r->correct;
 }
@@ -73,6 +72,9 @@ int extract_data(MOTOR_recv *motor_r)
  * @brief 发送和接收电机信息
  * @param pData: 发送的数据
  * @param rData: 接受的数据
+ * @param Port: 用于控制RS485使能的引脚端口
+ * @param Pin: 用于控制RS485使能的引脚
+ * @param huart: 用以发送的句柄
  * @retval 如果成功则返回1，失败返回0
  */
 HAL_StatusTypeDef SERVO_Send_recv(MOTOR_send *pData, MOTOR_recv *rData, GPIO_TypeDef *Port, uint16_t Pin, UART_HandleTypeDef *huart)
@@ -90,13 +92,14 @@ HAL_StatusTypeDef SERVO_Send_recv(MOTOR_send *pData, MOTOR_recv *rData, GPIO_Typ
 	HAL_GPIO_WritePin(Port, Pin, GPIO_PIN_RESET);
 	HAL_UARTEx_ReceiveToIdle(huart, (uint8_t *)&(rData->motor_recv_data), sizeof(rData->motor_recv_data), &rxlen, 10);
 		
-
+	// 接收处理，如果数据长度为零则是超时，不对就是错误
     if(rxlen == 0)
       return HAL_TIMEOUT;
 
     if(rxlen != sizeof(rData->motor_recv_data))
 			return HAL_ERROR;
 
+	//
     uint8_t *rp = (uint8_t *)&rData->motor_recv_data;
     if(rp[0] == 0xFE && rp[1] == 0xEE)
     {
@@ -106,17 +109,4 @@ HAL_StatusTypeDef SERVO_Send_recv(MOTOR_send *pData, MOTOR_recv *rData, GPIO_Typ
     }
     
     return HAL_ERROR;
-}
-
-HAL_StatusTypeDef Leg_Control(LegModule_t *leg)
-{
-	HAL_StatusTypeDef status0;
-	HAL_StatusTypeDef status1;
-	status0 = SERVO_Send_recv(&(leg->motor_send_data0), &(leg->motor_recv_data0), leg->GPIOx, leg->GPIO_Pin, leg->huart);
-	status1 = SERVO_Send_recv(&(leg->motor_send_data1), &(leg->motor_recv_data1), leg->GPIOx, leg->GPIO_Pin, leg->huart);
-	if(status0 != HAL_OK || status1 != HAL_OK)
-	{
-		return HAL_ERROR;
-	}
-	return HAL_OK;
 }
