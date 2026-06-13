@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "motor_control.h"
+#include "GO-M8010-6.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -41,6 +41,8 @@
 
 /* Private variables ---------------------------------------------------------*/
 
+TIM_HandleTypeDef htim7;
+
 UART_HandleTypeDef huart4;
 UART_HandleTypeDef huart5;
 UART_HandleTypeDef huart7;
@@ -48,6 +50,8 @@ UART_HandleTypeDef huart8;
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart6;
+DMA_HandleTypeDef hdma_uart7_rx;
+DMA_HandleTypeDef hdma_uart7_tx;
 
 PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
@@ -58,6 +62,7 @@ PCD_HandleTypeDef hpcd_USB_OTG_FS;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_UART4_Init(void);
@@ -66,6 +71,7 @@ static void MX_UART7_Init(void);
 static void MX_UART8_Init(void);
 static void MX_USART6_UART_Init(void);
 static void MX_USB_OTG_FS_PCD_Init(void);
+static void MX_TIM7_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -104,6 +110,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
   MX_UART4_Init();
@@ -112,16 +119,17 @@ int main(void)
   MX_UART8_Init();
   MX_USART6_UART_Init();
   MX_USB_OTG_FS_PCD_Init();
+  MX_TIM7_Init();
   /* USER CODE BEGIN 2 */
   MOTOR_send cmd;
   MOTOR_recv data;
 
   cmd.mode = 1;
-  cmd.T = 0;
-  cmd.W = 20;
+  cmd.T = 0.05;
+  cmd.W = 0;
   cmd.Pos = 0;
   cmd.K_P = 0;
-  cmd.K_W = 0.05;
+  cmd.K_W = 0;
   HAL_GPIO_WritePin(Left_Front_Leg_Control_GPIO_Port, Left_Front_Leg_Control_Pin, GPIO_PIN_SET);
   /* USER CODE END 2 */
 
@@ -130,13 +138,13 @@ int main(void)
   while (1)
   {
     cmd.id = 0;
-    SERVO_Send_recv(&cmd, &data, Left_Front_Leg_Control_GPIO_Port, Left_Front_Leg_Control_Pin, &huart2);
+    SERVO_Send_recv(&cmd, &data, Left_Back_Leg_Control_GPIO_Port, Left_Back_Leg_Control_Pin, &huart7);
     HAL_Delay(1);
     cmd.id = 1;
-    SERVO_Send_recv(&cmd, &data, Left_Front_Leg_Control_GPIO_Port, Left_Front_Leg_Control_Pin, &huart2);
+    SERVO_Send_recv(&cmd, &data, Left_Back_Leg_Control_GPIO_Port, Left_Back_Leg_Control_Pin, &huart7);
     HAL_Delay(1);
     cmd.id = 2;
-    SERVO_Send_recv(&cmd, &data, Left_Front_Leg_Control_GPIO_Port, Left_Front_Leg_Control_Pin, &huart2);
+    SERVO_Send_recv(&cmd, &data, Left_Back_Leg_Control_GPIO_Port, Left_Back_Leg_Control_Pin, &huart7);
     HAL_Delay(1);
     /* USER CODE END WHILE */
 
@@ -203,6 +211,44 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief TIM7 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM7_Init(void)
+{
+
+  /* USER CODE BEGIN TIM7_Init 0 */
+
+  /* USER CODE END TIM7_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM7_Init 1 */
+
+  /* USER CODE END TIM7_Init 1 */
+  htim7.Instance = TIM7;
+  htim7.Init.Prescaler = 480;
+  htim7.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim7.Init.Period = 1000;
+  htim7.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim7) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim7, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM7_Init 2 */
+
+  /* USER CODE END TIM7_Init 2 */
+
 }
 
 /**
@@ -578,6 +624,25 @@ static void MX_USB_OTG_FS_PCD_Init(void)
 }
 
 /**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Stream0_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream0_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream0_IRQn);
+  /* DMA1_Stream1_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream1_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream1_IRQn);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -643,6 +708,28 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 
 /* USER CODE END 4 */
+
+/**
+  * @brief  Period elapsed callback in non blocking mode
+  * @note   This function is called  when TIM6 interrupt took place, inside
+  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+  * a global variable "uwTick" used as application time base.
+  * @param  htim : TIM handle
+  * @retval None
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  /* USER CODE BEGIN Callback 0 */
+
+  /* USER CODE END Callback 0 */
+  if (htim->Instance == TIM6)
+  {
+    HAL_IncTick();
+  }
+  /* USER CODE BEGIN Callback 1 */
+
+  /* USER CODE END Callback 1 */
+}
 
 /**
   * @brief  This function is executed in case of error occurrence.
