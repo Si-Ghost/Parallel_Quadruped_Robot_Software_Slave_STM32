@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "GO-M8010-6.h"
+#include "Leg_Control.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -56,7 +57,10 @@ DMA_HandleTypeDef hdma_uart7_tx;
 PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
 /* USER CODE BEGIN PV */
-
+Leg_HandlerTypeDef Left_Front_Leg;
+Leg_HandlerTypeDef Right_Front_Leg;
+Leg_HandlerTypeDef Left_Back_Leg;
+Leg_HandlerTypeDef Right_Back_Leg;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -79,6 +83,24 @@ static void MX_TIM7_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+// UART接受满回调函数
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+  // 检测是否是腿部控制的通道，是的话跳转到专门的处理函数中
+  if (huart->Instance == USART2 || huart->Instance == UART5 || huart->Instance == UART7 || huart->Instance == UART8)
+  {
+    Leg_TxCpltCallback(huart);
+  }
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+  // 检测是否是腿部控制的通道，是的话跳转到专门的处理函数中
+  if (huart->Instance == USART2 || huart->Instance == UART5 || huart->Instance == UART7 || huart->Instance == UART8)
+  {
+    Leg_RxCpltCallback(huart);
+  }
+}
 /* USER CODE END 0 */
 
 /**
@@ -121,31 +143,13 @@ int main(void)
   MX_USB_OTG_FS_PCD_Init();
   MX_TIM7_Init();
   /* USER CODE BEGIN 2 */
-  MOTOR_send cmd;
-  MOTOR_recv data;
 
-  cmd.mode = 1;
-  cmd.T = 0.05;
-  cmd.W = 0;
-  cmd.Pos = 0;
-  cmd.K_P = 0;
-  cmd.K_W = 0;
-  HAL_GPIO_WritePin(Left_Front_Leg_Control_GPIO_Port, Left_Front_Leg_Control_Pin, GPIO_PIN_SET);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    cmd.id = 0;
-    SERVO_Send_recv(&cmd, &data, Left_Back_Leg_Control_GPIO_Port, Left_Back_Leg_Control_Pin, &huart7);
-    HAL_Delay(1);
-    cmd.id = 1;
-    SERVO_Send_recv(&cmd, &data, Left_Back_Leg_Control_GPIO_Port, Left_Back_Leg_Control_Pin, &huart7);
-    HAL_Delay(1);
-    cmd.id = 2;
-    SERVO_Send_recv(&cmd, &data, Left_Back_Leg_Control_GPIO_Port, Left_Back_Leg_Control_Pin, &huart7);
-    HAL_Delay(1);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -728,6 +732,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   }
   /* USER CODE BEGIN Callback 1 */
 
+  // 开启电机控制
+  if (htim->Instance == TIM7)
+  {
+    Leg_Control_Start();
+  }
   /* USER CODE END Callback 1 */
 }
 
