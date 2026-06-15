@@ -30,7 +30,6 @@ typedef struct
     // 定义 发送格式化数据
     ControlData_t motor_send_data;       //电机控制数据结构体
     int hex_len;                        //发送的16进制命令数组长度, 34
-    long long send_time;                //发送该命令的时间, 微秒(us)
     // 待发送的各项数据
     unsigned short id;                  //电机ID，0代表全部电机
     unsigned short mode;                // 0:空闲, 5:开环转动, 10:闭环FOC控制
@@ -48,7 +47,6 @@ typedef struct
     // 定义 接收数据
     MotorData_t motor_recv_data;        //电机接收数据结构体，详见motor_msg.h
     int hex_len;                        //接收的16进制命令数组长度, 78
-    long long resv_time;                //接收该命令的时间, 微秒(us)
     int correct;                        //接收数据是否完整（1完整，0不完整）
     //解读得出的电机数据
     unsigned char motor_id;             //电机ID

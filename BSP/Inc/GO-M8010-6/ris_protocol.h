@@ -52,8 +52,7 @@ typedef struct
     int32_t  pos;           // 实际关节输出位置 unit: rad     (q15)
     int8_t   temp;          // 电机温度: -128~127°C
     uint8_t  MError :3;     // 电机错误标识: 0.正常 1.过热 2.过流 3.过压 4.编码器故障 5-7.保留
-    uint16_t force  :12;    // 足端气压传感器数据 12bit (0-4095)，这个不用管，用不上
-    uint8_t  none   :1;     // 保留位
+    uint16_t  none   :13;     // 保留位
 } RIS_Fbk_t;   // 状态数据 11Byte
 
 
