@@ -33,7 +33,7 @@ typedef struct __Leg_HandlerTypeDef {
 }Leg_HandlerTypeDef;
 
 void Leg_Control_Start(void);
-void Leg_TxCpltCallback(UART_HandleTypeDef *huart);
-void Leg_RxCpltCallback(UART_HandleTypeDef *huart);
+void Leg_TxCpltCallback(const UART_HandleTypeDef *huart);
+void Leg_RxCpltCallback(const UART_HandleTypeDef *huart);
 
 #endif //PARALLEL_QUADRUPED_ROBOT_STM32_LEG_CONTROL_H

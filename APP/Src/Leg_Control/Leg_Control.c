@@ -60,7 +60,7 @@ static void Leg_Tx_Handler(Leg_HandlerTypeDef *hleg)
   }
 }
 
-void Leg_TxCpltCallback(UART_HandleTypeDef *huart)
+void Leg_TxCpltCallback(const UART_HandleTypeDef *huart)
 {
   for (int i = 0; i < 4; i++)
   {
@@ -105,7 +105,7 @@ static void Leg_Rx_Handler(Leg_HandlerTypeDef *hleg)
   }
 }
 
-void Leg_RxCpltCallback(UART_HandleTypeDef *huart)
+void Leg_RxCpltCallback(const UART_HandleTypeDef *huart)
 {
   for (int i = 0; i < 4; i++)
   {
