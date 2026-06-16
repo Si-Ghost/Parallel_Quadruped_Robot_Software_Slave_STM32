@@ -27,35 +27,36 @@ typedef struct
 
 typedef struct
 {
-    // 定义 发送格式化数据
-    ControlData_t motor_send_data;       //电机控制数据结构体
-    int hex_len;                        //发送的16进制命令数组长度, 34
+    // 电机控制指令数据包
+    ControlData_t motor_send_data;      // 电机控制数据结构体
+
     // 待发送的各项数据
-    unsigned short id;                  //电机ID，0代表全部电机
-    unsigned short mode;                // 0:空闲, 5:开环转动, 10:闭环FOC控制
-    //实际给FOC的指令力矩为：
-    // K_P*delta_Pos + K_W*delta_W + T
-    float T;                            //期望关节的输出力矩（电机本身的力矩）（Nm）
-    float W;                            //期望关节速度（电机本身的速度）(rad/s)
-    float Pos;                          //期望关节位置（rad）
-    float K_P;                          //关节刚度系数
-    float K_W;                          //关节速度系数
+    uint8_t id;                         // 电机ID
+    uint8_t mode;                       // 0:锁定, 1:FOC控制, 2:编码器校准
+    float T;                            // 期望关节的输出力矩（电机本身的力矩）（Nm）
+    float W;                            // 期望关节速度（电机本身的速度）(rad/s)
+    float Pos;                          // 期望关节位置（rad）
+    float K_P;                          // 关节刚度系数
+    float K_W;                          // 关节速度系数
 } MOTOR_send;
 
 typedef struct
 {
-    // 定义 接收数据
-    MotorData_t motor_recv_data;        //电机接收数据结构体，详见motor_msg.h
-    int hex_len;                        //接收的16进制命令数组长度, 78
-    int correct;                        //接收数据是否完整（1完整，0不完整）
+    // 电机接收数据数据包
+    MotorData_t motor_recv_data;        // 电机接收数据结构体
+
+    // 数据包的状态
+    uint16_t rx_len;                    // 接收到的数据长度
+    int correct;                        // 接收数据是否有问题（1完整，0不完整）
+
     //解读得出的电机数据
-    unsigned char motor_id;             //电机ID
-    unsigned char mode;                 // 0:空闲, 5:开环转动, 10:闭环FOC控制
-    int Temp;                           //温度
-    unsigned char MError;               //错误码
-    float T;                            // 当前实际电机输出力矩
-    float W;														// speed
-    float Pos;                          // 当前电机位置（主控0点修正，电机关节还是以编码器0点为准）
+    uint8_t motor_id;                   // 电机ID
+    uint8_t mode;                       // 0:锁定, 1:FOC控制, 2:编码器校准
+    float T;                            // 当前电机实际输出力矩
+    float W;							// 当前电机实际角速度
+    float Pos;                          // 前电机实际角速度
+    int Temp;                           // 温度
+    uint8_t MError;                     // 错误码
 } MOTOR_recv;
 
 uint32_t crc32_core(uint32_t *ptr, uint32_t len);

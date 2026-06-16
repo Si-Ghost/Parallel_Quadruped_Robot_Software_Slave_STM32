@@ -61,6 +61,15 @@ Leg_HandlerTypeDef Left_Front_Leg;
 Leg_HandlerTypeDef Right_Front_Leg;
 Leg_HandlerTypeDef Left_Back_Leg;
 Leg_HandlerTypeDef Right_Back_Leg;
+
+// 腿部结构体
+Leg_HandlerTypeDef* Legs[4] = {
+  &Left_Front_Leg,
+  &Right_Front_Leg,
+  &Left_Back_Leg,
+  &Right_Back_Leg,
+};
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -86,19 +95,57 @@ static void MX_TIM7_Init(void);
 // UART接受满回调函数
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
-  // 检测是否是腿部控制的通道，是的话跳转到专门的处理函数中
-  if (huart->Instance == USART2 || huart->Instance == UART5 || huart->Instance == UART7 || huart->Instance == UART8)
+  if (huart->Instance == USART1)
   {
-    Leg_TxCpltCallback(huart);
+    // 调试串口
+  }
+  else if (huart->Instance == UART4)
+  {
+    // IMU
+  }
+  else if (huart->Instance == USART6)
+  {
+    // ESP32
+  }
+  else
+  {
+    // 电机的通道
+    for (int i = 0; i < 4; i++)
+    {
+      if (huart->Instance == Legs[i]->huartx->Instance)
+      {
+        Leg_Tx_Handler(Legs[i]);
+        break;
+      }
+    }
   }
 }
 
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
-  // 检测是否是腿部控制的通道，是的话跳转到专门的处理函数中
-  if (huart->Instance == USART2 || huart->Instance == UART5 || huart->Instance == UART7 || huart->Instance == UART8)
+  if (huart->Instance == USART1)
   {
-    Leg_RxCpltCallback(huart);
+    // 调试串口
+  }
+  else if (huart->Instance == UART4)
+  {
+    // IMU
+  }
+  else if (huart->Instance == USART6)
+  {
+    // ESP32
+  }
+  else
+  {
+   // 电机的通道
+    for (int i = 0; i < 4; i++)
+    {
+      if (huart->Instance == Legs[i]->huartx->Instance)
+      {
+        Leg_Tx_Handler(Legs[i]);
+        break;
+      }
+    }
   }
 }
 /* USER CODE END 0 */

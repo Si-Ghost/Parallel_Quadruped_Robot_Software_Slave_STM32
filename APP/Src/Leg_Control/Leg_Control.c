@@ -13,12 +13,7 @@ extern Leg_HandlerTypeDef Right_Front_Leg;
 extern Leg_HandlerTypeDef Left_Back_Leg;
 extern Leg_HandlerTypeDef Right_Back_Leg;
 
-Leg_HandlerTypeDef* Legs[4] = {
-  &Left_Front_Leg,
-  &Right_Front_Leg,
-  &Left_Back_Leg,
-  &Right_Back_Leg,
-};
+extern Leg_HandlerTypeDef* Legs[4];
 
 void Leg_Control_Start(void)
 {
@@ -40,7 +35,7 @@ void Leg_Control_Start(void)
   }
 }
 
-static void Leg_Tx_Handler(Leg_HandlerTypeDef *hleg)
+void Leg_Tx_Handler(Leg_HandlerTypeDef *hleg)
 {
   // 开启接受
   HAL_GPIO_WritePin(hleg->GPIOx, hleg->GPIO_Pin, GPIO_PIN_RESET);
@@ -60,33 +55,17 @@ static void Leg_Tx_Handler(Leg_HandlerTypeDef *hleg)
   }
 }
 
-void Leg_TxCpltCallback(const UART_HandleTypeDef *huart)
-{
-  for (int i = 0; i < 4; i++)
-  {
-    if (huart->Instance == Legs[i]->huartx->Instance)
-    {
-      Leg_Tx_Handler(Legs[i]);
-      break;
-    }
-  }
-}
-
-static void Leg_Rx_Handler(Leg_HandlerTypeDef *hleg)
+void Leg_Rx_Handler(Leg_HandlerTypeDef *hleg, uint16_t Size)
 {
   HAL_GPIO_WritePin(hleg->GPIOx, hleg->GPIO_Pin, GPIO_PIN_SET);
 
   // 如果是完成了电机0的接收，那么发送电机1的指令
   if (hleg->Leg_Status == Leg_RX_M0)
   {
-    // 解读数据
-    if (hleg->motor_data[0].motor_recv_data.head[0] == 0xFE && hleg->motor_data[0].motor_recv_data.head[1] == 0xEE)
-    {
-      hleg->motor_data[0].correct = 1;
-      extract_data(&hleg->motor_data[0]);
-    }
+    // 记录接收到的数据长度
+    hleg->motor_data[0].rx_len = Size;
 
-    // 发送数据
+    // 切换状态，发送数据
     hleg->Leg_Status = Leg_TX_M1;
     HAL_UART_Transmit_DMA(hleg->huartx, (uint8_t *)&(hleg->motor_cmd[1].motor_send_data), sizeof(hleg->motor_cmd[1].motor_send_data));
   }
@@ -94,25 +73,10 @@ static void Leg_Rx_Handler(Leg_HandlerTypeDef *hleg)
   // 如果完成了电机1的接收，那么循环完成
   if (hleg->Leg_Status == Leg_RX_M1)
   {
-    // 解读数据
-    if (hleg->motor_data[1].motor_recv_data.head[0] == 0xFE && hleg->motor_data[1].motor_recv_data.head[1] == 0xEE)
-    {
-      hleg->motor_data[1].correct = 1;
-      extract_data(&hleg->motor_data[1]);
-    }
+    // 记录接收到的数据长度
+    hleg->motor_data[1].rx_len = Size;
 
+    // 切换状态
     hleg->Leg_Status = Leg_Done;
-  }
-}
-
-void Leg_RxCpltCallback(const UART_HandleTypeDef *huart)
-{
-  for (int i = 0; i < 4; i++)
-  {
-    if (huart->Instance == Legs[i]->huartx->Instance)
-    {
-      Leg_Rx_Handler(Legs[i]);
-      break;
-    }
   }
 }

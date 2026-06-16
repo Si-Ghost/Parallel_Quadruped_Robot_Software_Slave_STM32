@@ -16,11 +16,6 @@
  */
 int modify_data(MOTOR_send *motor_s)
 {
-	// 指定包长度和包头
-    motor_s->hex_len = 17;
-    motor_s->motor_send_data.head[0] = 0xFE;
-    motor_s->motor_send_data.head[1] = 0xEE;
-
 	// 对数据进行限幅
 	SATURATE(motor_s->id,   0,    15);
 	SATURATE(motor_s->mode, 0,    2);
@@ -29,6 +24,10 @@ int modify_data(MOTOR_send *motor_s)
 	SATURATE(motor_s->T,   -127.99f,  127.99f);
 	SATURATE(motor_s->W,   -804.00f,  804.00f);
 	SATURATE(motor_s->Pos, -411774.0f,  411774.0f);
+
+	// 指定包长度和包头
+    motor_s->motor_send_data.head[0] = 0xFE;
+    motor_s->motor_send_data.head[1] = 0xEE;
 
 	// 将可读的数据转化为要传输的数据
     motor_s->motor_send_data.mode.id   = motor_s->id;
