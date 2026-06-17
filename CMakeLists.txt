@@ -46,6 +46,7 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
         BSP/Src/GO-M8010-6/GO-M8010-6.c
+        APP/Src/PID/pid.c
         APP/Src/Leg_Control/Leg_Control.c
 )
 
@@ -53,6 +54,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
         BSP/Inc/GO-M8010-6
+        APP/Inc/PID
         APP/Inc/Leg_Control
 )
 

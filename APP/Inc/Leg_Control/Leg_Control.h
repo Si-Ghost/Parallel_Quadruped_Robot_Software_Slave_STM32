@@ -22,12 +22,12 @@ typedef enum
   Leg_Done
 } Leg_StatusTypeDef;
 
-// 应该要有一个句柄用于操作腿部
-typedef struct __Leg_HandlerTypeDef
+// 句柄用于操作腿部
+typedef struct
 {
   MOTOR_send motor_cmd[2];
   MOTOR_recv motor_data[2];
-  float P_init[2];              // 初始角度值
+  float p_init[2];              // 初始角度值
   GPIO_TypeDef *GPIOx;
   uint16_t GPIO_Pin;
   UART_HandleTypeDef* huartx;
