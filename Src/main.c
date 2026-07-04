@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include "GO-M8010-6.h"
 #include "Leg_Control.h"
+#include "communication.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -51,8 +52,16 @@ UART_HandleTypeDef huart8;
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart6;
+DMA_HandleTypeDef hdma_uart5_rx;
+DMA_HandleTypeDef hdma_uart5_tx;
 DMA_HandleTypeDef hdma_uart7_rx;
 DMA_HandleTypeDef hdma_uart7_tx;
+DMA_HandleTypeDef hdma_uart8_rx;
+DMA_HandleTypeDef hdma_uart8_tx;
+DMA_HandleTypeDef hdma_usart2_rx;
+DMA_HandleTypeDef hdma_usart2_tx;
+DMA_HandleTypeDef hdma_usart6_rx;
+DMA_HandleTypeDef hdma_usart6_tx;
 
 /* USER CODE BEGIN PV */
 volatile int main_task_start = 0;
@@ -69,6 +78,9 @@ Leg_HandlerTypeDef* Legs[4] = {
   &Left_Back_Leg,
   &Right_Back_Leg,
 };
+
+RC_DataTypeDef rc_data;
+volatile uint32_t last_valid_packet_tick = 0;
 
 /* USER CODE END PV */
 
@@ -113,7 +125,7 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
   }
   else if (huart->Instance == USART6)
   {
-    // ESP32
+    // ESP32 TX done
   }
   else
   {
@@ -141,7 +153,7 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
   }
   else if (huart->Instance == USART6)
   {
-    // ESP32
+    Communication_RxCallback(huart, Size);
   }
   else
   {
@@ -198,7 +210,18 @@ int main(void)
   MX_TIM7_Init();
   /* USER CODE BEGIN 2 */
 
-  // 开启定时器（中断频率为1kHz）
+  // 初始化ESP32通信（USART6接收中断启动）
+  Communication_Init(&huart6);
+
+  // 等待ESP32握手（收到第一包有效数据），LED闪烁指示等待状态
+  while (last_valid_packet_tick == 0)
+  {
+    HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
+    HAL_Delay(200);
+  }
+  HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_SET); // 握手成功，LED常亮
+
+  // 握手成功后再开启控制定时器
   HAL_TIM_Base_Start_IT(&htim7);
 
   
@@ -212,6 +235,14 @@ int main(void)
     if (main_task_start == 1)
     {
       main_task_start = 0;
+
+      if (!Communication_IsLinkAlive())
+      {
+        rc_data.ch0 = 0; rc_data.ch1 = 0;
+        rc_data.ch2 = 0; rc_data.ch3 = 0;
+        rc_data.s1  = 2;
+        rc_data.s2  = 3;
+      }
 
     }
     /* USER CODE END WHILE */
@@ -662,6 +693,7 @@ static void MX_DMA_Init(void)
 
   /* DMA controller clock enable */
   __HAL_RCC_DMA1_CLK_ENABLE();
+  __HAL_RCC_DMA2_CLK_ENABLE();
 
   /* DMA interrupt init */
   /* DMA1_Stream0_IRQn interrupt configuration */
@@ -670,6 +702,30 @@ static void MX_DMA_Init(void)
   /* DMA1_Stream1_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Stream1_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA1_Stream1_IRQn);
+  /* DMA1_Stream2_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream2_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream2_IRQn);
+  /* DMA1_Stream3_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream3_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream3_IRQn);
+  /* DMA1_Stream4_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream4_IRQn);
+  /* DMA1_Stream5_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream5_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream5_IRQn);
+  /* DMA1_Stream6_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream6_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream6_IRQn);
+  /* DMA1_Stream7_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream7_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream7_IRQn);
+  /* DMA2_Stream0_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Stream0_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Stream0_IRQn);
+  /* DMA2_Stream1_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Stream1_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Stream1_IRQn);
 
 }
 

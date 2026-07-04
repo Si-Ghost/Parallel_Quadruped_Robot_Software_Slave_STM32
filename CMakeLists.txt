@@ -48,14 +48,17 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         BSP/Src/GO-M8010-6/GO-M8010-6.c
         APP/Src/PID/pid.c
         APP/Src/Leg_Control/Leg_Control.c
+        APP/Src/Communication/communication.c
 )
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
+        Utils
         BSP/Inc/GO-M8010-6
         APP/Inc/PID
         APP/Inc/Leg_Control
+        APP/Inc/Communication
 )
 
 # Add project symbols (macros)

@@ -1,5 +1,5 @@
 #include "../../Inc/GO-M8010-6/GO-M8010-6.h"
-#include "../../Inc/GO-M8010-6/crc_ccitt.h"
+#include "crc_ccitt.h"
 #include "stdio.h"
 
 #define SATURATE(_IN, _MIN, _MAX) {\
