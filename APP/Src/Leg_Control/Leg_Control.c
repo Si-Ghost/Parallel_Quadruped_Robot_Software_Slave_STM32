@@ -23,8 +23,8 @@ extern UART_HandleTypeDef huart8;
 #define LEG_WEB_ANGLE_MIN_RAD      -1.50f
 #define LEG_WEB_ANGLE_MAX_RAD       1.50f
 #define LEG_WEB_MAX_STEP_RAD        0.15f
-#define LEG_WEB_KP                  0.05f
-#define LEG_WEB_KW                  0.20f
+#define LEG_WEB_KP                  0.8f
+#define LEG_WEB_KW                  0.01f
 #define LEG_HANDSHAKE_KW            0.05f
 #define LEG_HANDSHAKE_RETRY         2U
 
@@ -39,6 +39,8 @@ static uint8_t motor_angle_valid[8] = {0};
 static uint8_t motor_online_state[8] = {0};
 static uint8_t leg_online_state[4] = {0};
 static uint8_t motor_handshake_error[8] = {0};
+static float motor_target_offset[8] = {0};
+static uint8_t motor_target_active[8] = {0};
 static volatile uint8_t handshake_requested = 0;
 
 static float clampf(float value, float min_value, float max_value)
@@ -83,6 +85,49 @@ static uint8_t first_online_motor(uint8_t leg)
 static Leg_StatusTypeDef tx_status_for_motor(uint8_t motor)
 {
   return (motor == 0) ? Leg_TX_M0 : Leg_TX_M1;
+}
+
+static int apply_debug_target(uint8_t motor_index)
+{
+  if (motor_index >= 8 || !motor_online_state[motor_index])
+    return 0;
+
+  uint8_t leg = motor_index / 2;
+  uint8_t motor = motor_index % 2;
+  MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
+
+  float desired = Legs[leg]->p_init[motor] + motor_target_offset[motor_index];
+  float delta = desired - cmd->Pos;
+  if (delta > LEG_WEB_MAX_STEP_RAD)
+  {
+    cmd->Pos += LEG_WEB_MAX_STEP_RAD;
+  }
+  else if (delta < -LEG_WEB_MAX_STEP_RAD)
+  {
+    cmd->Pos -= LEG_WEB_MAX_STEP_RAD;
+  }
+  else
+  {
+    cmd->Pos = desired;
+    motor_target_active[motor_index] = 0;
+  }
+
+  cmd->mode = 1;
+  cmd->T = 0.0f;
+  cmd->W = 0.0f;
+  cmd->K_P = LEG_WEB_KP;
+  cmd->K_W = LEG_WEB_KW;
+  modify_data(cmd);
+  return 1;
+}
+
+static void update_debug_targets(void)
+{
+  for (uint8_t idx = 0; idx < 8; idx++)
+  {
+    if (motor_target_active[idx])
+      apply_debug_target(idx);
+  }
 }
 
 static void leg_abort_transfer(Leg_HandlerTypeDef *hleg)
@@ -139,6 +184,8 @@ void Leg_Control_InitSafe(void)
       motor_angle_valid[idx] = 0;
       motor_online_state[idx] = 0;
       motor_handshake_error[idx] = LEG_HS_TIMEOUT;
+      motor_target_offset[idx] = 0.0f;
+      motor_target_active[idx] = 0;
     }
     leg_online_state[leg] = 0;
   }
@@ -164,10 +211,12 @@ void Leg_Control_Handshake(void)
       motor_online_state[idx] = 0;
       motor_angle_valid[idx] = 0;
       motor_handshake_error[idx] = LEG_HS_TIMEOUT;
+      motor_target_offset[idx] = 0.0f;
+      motor_target_active[idx] = 0;
       cmd->id = motor;
       cmd->mode = 1;
       cmd->T = 0.0f;
-      cmd->W = 0.0f;
+      cmd->W = 0;
       cmd->Pos = 0.0f;
       cmd->K_P = 0.0f;
       cmd->K_W = LEG_HANDSHAKE_KW;
@@ -250,6 +299,7 @@ void Leg_Control_Service(uint32_t now_ms)
     return;
 
   last_service_tick = now_ms;
+  update_debug_targets();
   Leg_Control_Start();
 }
 
@@ -258,29 +308,12 @@ int Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad)
   if (motor_index >= 8)
     return 0;
 
-  uint8_t leg = motor_index / 2;
-  uint8_t motor = motor_index % 2;
   if (!motor_online_state[motor_index])
     return 0;
 
-  MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
-
-  float offset = clampf(angle_rad, LEG_WEB_ANGLE_MIN_RAD, LEG_WEB_ANGLE_MAX_RAD);
-  float target = Legs[leg]->p_init[motor] + offset;
-  float delta = target - cmd->Pos;
-  if (delta > LEG_WEB_MAX_STEP_RAD)
-    target = cmd->Pos + LEG_WEB_MAX_STEP_RAD;
-  else if (delta < -LEG_WEB_MAX_STEP_RAD)
-    target = cmd->Pos - LEG_WEB_MAX_STEP_RAD;
-
-  cmd->mode = 1;
-  cmd->T = 0.0f;
-  cmd->W = 0.0f;
-  cmd->Pos = target;
-  cmd->K_P = LEG_WEB_KP;
-  cmd->K_W = LEG_WEB_KW;
-  modify_data(cmd);
-  return 1;
+  motor_target_offset[motor_index] = clampf(angle_rad, LEG_WEB_ANGLE_MIN_RAD, LEG_WEB_ANGLE_MAX_RAD);
+  motor_target_active[motor_index] = 1;
+  return apply_debug_target(motor_index);
 }
 
 void Leg_Control_GetAngles(float angles[8], uint8_t valid[8])
