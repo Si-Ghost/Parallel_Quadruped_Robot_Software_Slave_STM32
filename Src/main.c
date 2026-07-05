@@ -81,6 +81,8 @@ Leg_HandlerTypeDef* Legs[4] = {
 
 RC_DataTypeDef rc_data;
 volatile uint32_t last_valid_packet_tick = 0;
+static uint32_t last_motor_angle_report_tick = 0;
+static uint32_t last_motor_status_report_tick = 0;
 
 /* USER CODE END PV */
 
@@ -125,7 +127,7 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
   }
   else if (huart->Instance == USART6)
   {
-    // ESP32 TX done
+    Communication_NotifyTxComplete();
   }
   else
   {
@@ -145,7 +147,7 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
   if (huart->Instance == USART1)
   {
-    // 调试串口
+    Communication_RxCallback(huart, Size);
   }
   else if (huart->Instance == UART4)
   {
@@ -162,7 +164,7 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
     {
       if (huart->Instance == Legs[i]->huartx->Instance)
       {
-        Leg_Tx_Handler(Legs[i]);
+        Leg_Rx_Handler(Legs[i], Size);
         break;
       }
     }
@@ -210,18 +212,31 @@ int main(void)
   MX_TIM7_Init();
   /* USER CODE BEGIN 2 */
 
-  // 初始化ESP32通信（USART6接收中断启动）
+  // 初始化ESP32通信（USART6 DMA接收）
   Communication_Init(&huart6);
+  // 初始化调试串口UART1（中断接收，用于双向转发测试）
+  Communication_DebugInit(&huart1);
+  Leg_Control_InitSafe();
 
   // 等待ESP32握手（收到第一包有效数据），LED闪烁指示等待状态
-  while (last_valid_packet_tick == 0)
+  uint32_t diag_tick = 0;
+  while (!Communication_IsHandshakeDone())
   {
     HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
     HAL_Delay(200);
+    // 每秒输出一次诊断信息到 UART1
+    if (HAL_GetTick() - diag_tick >= 1000)
+    {
+      diag_tick = HAL_GetTick();
+      Communication_DumpDiag();
+    }
   }
-  HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_SET); // 握手成功，LED常亮
+  HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET); // 握手成功，LED常亮
 
   // 握手成功后再开启控制定时器
+  Leg_Control_Handshake();
+  Communication_SendMotorStatus();
+  Communication_ResetWatchdog();
   HAL_TIM_Base_Start_IT(&htim7);
 
   
@@ -236,15 +251,24 @@ int main(void)
     {
       main_task_start = 0;
 
-      if (!Communication_IsLinkAlive())
+      Communication_Task();
+      Leg_Control_Service(HAL_GetTick());
+      if (HAL_GetTick() - last_motor_angle_report_tick >= 100)
       {
-        rc_data.ch0 = 0; rc_data.ch1 = 0;
-        rc_data.ch2 = 0; rc_data.ch3 = 0;
-        rc_data.s1  = 2;
-        rc_data.s2  = 3;
+        last_motor_angle_report_tick = HAL_GetTick();
+        Communication_SendMotorAngles();
+      }
+      if (HAL_GetTick() - last_motor_status_report_tick >= 1000)
+      {
+        last_motor_status_report_tick = HAL_GetTick();
+        Communication_SendMotorStatus();
       }
 
     }
+
+    // 有新遥控数据时通过 UART1 发送到串口调试助手
+    Communication_PrintRCData();
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -557,7 +581,7 @@ static void MX_USART1_UART_Init(void)
 
   /* USER CODE END USART1_Init 1 */
   huart1.Instance = USART1;
-  huart1.Init.BaudRate = 9600;
+  huart1.Init.BaudRate = 115200;
   huart1.Init.WordLength = UART_WORDLENGTH_8B;
   huart1.Init.StopBits = UART_STOPBITS_1;
   huart1.Init.Parity = UART_PARITY_NONE;
