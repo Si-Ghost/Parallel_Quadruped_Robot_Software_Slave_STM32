@@ -15,7 +15,7 @@
 /* Set to 1 when checking the raw UART6 <-> UART1 link with a serial tool. */
 #define ESP32_LINK_BRIDGE_TEST 0
 /* Set to 1 to echo UART6 receive status back to ESP32 for web-side link tests. */
-#define ESP32_LINK_ECHO_TEST 1
+#define ESP32_LINK_ECHO_TEST 0
 
 typedef struct {
     int16_t ch0;

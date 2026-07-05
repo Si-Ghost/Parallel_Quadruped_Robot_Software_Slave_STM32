@@ -27,11 +27,18 @@ extern UART_HandleTypeDef huart8;
 #define LEG_WEB_KW                  0.20f
 #define LEG_HANDSHAKE_RETRY         2U
 
+#define LEG_HS_OK                   0U
+#define LEG_HS_TIMEOUT              1U
+#define LEG_HS_UART_ERROR           2U
+#define LEG_HS_BAD_ID               3U
+
 static uint32_t last_service_tick = 0;
 static float motor_angles[8] = {0};
 static uint8_t motor_angle_valid[8] = {0};
 static uint8_t motor_online_state[8] = {0};
 static uint8_t leg_online_state[4] = {0};
+static uint8_t motor_handshake_error[8] = {0};
+static volatile uint8_t handshake_requested = 0;
 
 static float clampf(float value, float min_value, float max_value)
 {
@@ -96,6 +103,7 @@ void Leg_Control_InitSafe(void)
       motor_angles[idx] = 0.0f;
       motor_angle_valid[idx] = 0;
       motor_online_state[idx] = 0;
+      motor_handshake_error[idx] = LEG_HS_TIMEOUT;
     }
     leg_online_state[leg] = 0;
   }
@@ -115,6 +123,7 @@ void Leg_Control_Handshake(void)
 
       motor_online_state[idx] = 0;
       motor_angle_valid[idx] = 0;
+      motor_handshake_error[idx] = LEG_HS_TIMEOUT;
       cmd->id = motor;
       cmd->mode = 1;
       cmd->T = 0.0f;
@@ -132,11 +141,24 @@ void Leg_Control_Handshake(void)
         {
           motor_online_state[idx] = 1;
           motor_angle_valid[idx] = 1;
+          motor_handshake_error[idx] = LEG_HS_OK;
           motor_angles[idx] = fbk->Pos;
           Legs[leg]->p_init[motor] = fbk->Pos;
           cmd->Pos = fbk->Pos;
           modify_data(cmd);
           break;
+        }
+        else if (ret == HAL_TIMEOUT)
+        {
+          motor_handshake_error[idx] = LEG_HS_TIMEOUT;
+        }
+        else if (ret == HAL_OK)
+        {
+          motor_handshake_error[idx] = LEG_HS_BAD_ID;
+        }
+        else
+        {
+          motor_handshake_error[idx] = LEG_HS_UART_ERROR;
         }
       }
     }
@@ -146,6 +168,11 @@ void Leg_Control_Handshake(void)
     Legs[leg]->Leg_Status = Leg_Idle;
     HAL_GPIO_WritePin(Legs[leg]->GPIOx, Legs[leg]->GPIO_Pin, GPIO_PIN_RESET);
   }
+}
+
+void Leg_Control_RequestHandshake(void)
+{
+  handshake_requested = 1;
 }
 
 void Leg_Control_Start(void)
@@ -171,6 +198,12 @@ void Leg_Control_Start(void)
 
 void Leg_Control_Service(uint32_t now_ms)
 {
+  if (handshake_requested)
+  {
+    handshake_requested = 0;
+    Leg_Control_Handshake();
+  }
+
   if ((now_ms - last_service_tick) < LEG_SERVICE_PERIOD_MS)
     return;
 
@@ -226,6 +259,14 @@ void Leg_Control_GetOnline(uint8_t motor_online[8], uint8_t leg_online[4])
     motor_online[i] = motor_online_state[i];
   for (uint8_t i = 0; i < 4; i++)
     leg_online[i] = leg_online_state[i];
+  __enable_irq();
+}
+
+void Leg_Control_GetHandshakeErrors(uint8_t motor_error[8])
+{
+  __disable_irq();
+  for (uint8_t i = 0; i < 8; i++)
+    motor_error[i] = motor_handshake_error[i];
   __enable_irq();
 }
 
