@@ -18,8 +18,6 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Debug")
 endif()
 
-option(ENABLE_MOTOR_SPIN_TEST "Build left-front motor spin test firmware" OFF)
-
 # Set the project name
 set(CMAKE_PROJECT_NAME Parallel_Quadruped_Robot_STM32)
 
@@ -51,7 +49,6 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         APP/Src/PID/pid.c
         APP/Src/Leg_Control/Leg_Control.c
         APP/Src/Communication/communication.c
-        APP/Src/Motor_Test/motor_spin_test.c
 )
 
 # Add include paths
@@ -62,17 +59,12 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         APP/Inc/PID
         APP/Inc/Leg_Control
         APP/Inc/Communication
-        APP/Inc/Motor_Test
 )
 
 # Add project symbols (macros)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined symbols
 )
-
-if(ENABLE_MOTOR_SPIN_TEST)
-    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE MOTOR_SPIN_TEST=1)
-endif()
 
 # Remove wrong libob.a library dependency when using cpp files
 list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)

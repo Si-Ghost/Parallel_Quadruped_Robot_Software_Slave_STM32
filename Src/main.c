@@ -24,7 +24,6 @@
 #include "GO-M8010-6.h"
 #include "Leg_Control.h"
 #include "communication.h"
-#include "motor_spin_test.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -214,13 +213,6 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
   // 初始化ESP32通信（USART6 DMA接收）
-#ifdef MOTOR_SPIN_TEST
-  MotorSpinTest_Run(&huart1,
-                    &huart2,
-                    Left_Front_Leg_Control_GPIO_Port,
-                    Left_Front_Leg_Control_Pin);
-#endif
-
   Communication_Init(&huart6);
   // 初始化调试串口UART1（中断接收，用于双向转发测试）
   Communication_DebugInit(&huart1);
