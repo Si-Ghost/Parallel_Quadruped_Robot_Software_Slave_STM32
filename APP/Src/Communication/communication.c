@@ -338,6 +338,33 @@ void Communication_SendString(const char *str)
     Communication_SendBytes((const uint8_t *)str, strlen(str));
 }
 
+static int append_fixed4(char *buf, size_t size, int pos, float value)
+{
+    if (pos < 0 || (size_t)pos >= size)
+        return -1;
+
+    int32_t scaled;
+    if (value >= 0.0f)
+        scaled = (int32_t)(value * 10000.0f + 0.5f);
+    else
+        scaled = (int32_t)(value * 10000.0f - 0.5f);
+
+    const char *sign = "";
+    if (scaled < 0) {
+        sign = "-";
+        scaled = -scaled;
+    }
+
+    int written = snprintf(&buf[pos], size - (size_t)pos, "%s%ld.%04ld",
+                           sign,
+                           (long)(scaled / 10000),
+                           (long)(scaled % 10000));
+    if (written < 0 || written >= (int)(size - (size_t)pos))
+        return -1;
+
+    return pos + written;
+}
+
 void Communication_SendMotorAngles(void)
 {
     float angles[8];
@@ -345,12 +372,29 @@ void Communication_SendMotorAngles(void)
     Leg_Control_GetAngles(angles, valid);
 
     char buf[192];
-    int len = snprintf(buf, sizeof(buf),
-        "MOTOR_ANGLES %.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f %u,%u,%u,%u,%u,%u,%u,%u\n",
-        angles[0], angles[1], angles[2], angles[3],
-        angles[4], angles[5], angles[6], angles[7],
+    int len = snprintf(buf, sizeof(buf), "MOTOR_ANGLES ");
+    for (uint8_t i = 0; i < 8 && len > 0; i++) {
+        len = append_fixed4(buf, sizeof(buf), len, angles[i]);
+        if (len > 0) {
+            int written = snprintf(&buf[len], sizeof(buf) - (size_t)len,
+                                   "%c", (i == 7) ? ' ' : ',');
+            if (written < 0 || written >= (int)(sizeof(buf) - (size_t)len))
+                len = -1;
+            else
+                len += written;
+        }
+    }
+
+    if (len > 0) {
+        int written = snprintf(&buf[len], sizeof(buf) - (size_t)len,
+        "%u,%u,%u,%u,%u,%u,%u,%u\n",
         valid[0], valid[1], valid[2], valid[3],
         valid[4], valid[5], valid[6], valid[7]);
+        if (written < 0 || written >= (int)(sizeof(buf) - (size_t)len))
+            len = -1;
+        else
+            len += written;
+    }
 
     if (len > 0 && len < (int)sizeof(buf)) {
         Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
