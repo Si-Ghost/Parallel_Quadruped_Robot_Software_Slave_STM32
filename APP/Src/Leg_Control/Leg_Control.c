@@ -85,6 +85,18 @@ static Leg_StatusTypeDef tx_status_for_motor(uint8_t motor)
   return (motor == 0) ? Leg_TX_M0 : Leg_TX_M1;
 }
 
+static void leg_abort_transfer(Leg_HandlerTypeDef *hleg)
+{
+  if (hleg == NULL)
+    return;
+
+  if (hleg->huartx != NULL)
+    HAL_UART_Abort(hleg->huartx);
+
+  hleg->Leg_Status = Leg_Idle;
+  HAL_GPIO_WritePin(hleg->GPIOx, hleg->GPIO_Pin, GPIO_PIN_RESET);
+}
+
 void Leg_Control_InitSafe(void)
 {
   Left_Front_Leg.GPIOx = Left_Front_Leg_Control_GPIO_Port;
@@ -134,6 +146,11 @@ void Leg_Control_InitSafe(void)
 
 void Leg_Control_Handshake(void)
 {
+  for (uint8_t leg = 0; leg < 4; leg++)
+  {
+    leg_abort_transfer(Legs[leg]);
+  }
+
   for (uint8_t leg = 0; leg < 4; leg++)
   {
     leg_online_state[leg] = 0;
