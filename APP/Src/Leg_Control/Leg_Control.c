@@ -25,6 +25,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_WEB_MAX_STEP_RAD        0.03f
 #define LEG_WEB_KP                  0.05f
 #define LEG_WEB_KW                  0.20f
+#define LEG_HANDSHAKE_KW            0.05f
 #define LEG_HANDSHAKE_RETRY         2U
 
 #define LEG_HS_OK                   0U
@@ -60,6 +61,28 @@ static uint8_t leg_index_from_handle(Leg_HandlerTypeDef *hleg)
 static uint8_t motor_index_from_leg_motor(uint8_t leg, uint8_t motor)
 {
   return leg * 2U + motor;
+}
+
+static uint8_t motor_is_online(uint8_t leg, uint8_t motor)
+{
+  if (leg >= 4 || motor >= 2)
+    return 0;
+
+  return motor_online_state[motor_index_from_leg_motor(leg, motor)] != 0;
+}
+
+static uint8_t first_online_motor(uint8_t leg)
+{
+  if (motor_is_online(leg, 0))
+    return 0;
+  if (motor_is_online(leg, 1))
+    return 1;
+  return 0xFF;
+}
+
+static Leg_StatusTypeDef tx_status_for_motor(uint8_t motor)
+{
+  return (motor == 0) ? Leg_TX_M0 : Leg_TX_M1;
 }
 
 void Leg_Control_InitSafe(void)
@@ -130,7 +153,7 @@ void Leg_Control_Handshake(void)
       cmd->W = 0.0f;
       cmd->Pos = 0.0f;
       cmd->K_P = 0.0f;
-      cmd->K_W = 0.0f;
+      cmd->K_W = LEG_HANDSHAKE_KW;
 
       for (uint8_t retry = 0; retry < LEG_HANDSHAKE_RETRY; retry++)
       {
@@ -163,8 +186,7 @@ void Leg_Control_Handshake(void)
       }
     }
 
-    leg_online_state[leg] = (motor_online_state[motor_index_from_leg_motor(leg, 0)] &&
-                             motor_online_state[motor_index_from_leg_motor(leg, 1)]) ? 1 : 0;
+    leg_online_state[leg] = (motor_is_online(leg, 0) || motor_is_online(leg, 1)) ? 1 : 0;
     Legs[leg]->Leg_Status = Leg_Idle;
     HAL_GPIO_WritePin(Legs[leg]->GPIOx, Legs[leg]->GPIO_Pin, GPIO_PIN_RESET);
   }
@@ -185,14 +207,17 @@ void Leg_Control_Start(void)
     if (Legs[i]->Leg_Status != Leg_Idle && Legs[i]->Leg_Status != Leg_Done)
       continue;
 
-    Legs[i]->Leg_Status = Leg_TX_M0;
-    modify_data(&(Legs[i]->motor_cmd[0]));
-    modify_data(&(Legs[i]->motor_cmd[1]));
+    uint8_t motor = first_online_motor((uint8_t)i);
+    if (motor >= 2)
+      continue;
+
+    Legs[i]->Leg_Status = tx_status_for_motor(motor);
+    modify_data(&(Legs[i]->motor_cmd[motor]));
 
     HAL_GPIO_WritePin(Legs[i]->GPIOx, Legs[i]->GPIO_Pin, GPIO_PIN_SET);
     HAL_UART_Transmit_DMA(Legs[i]->huartx,
-                          (uint8_t *)&(Legs[i]->motor_cmd[0].motor_send_data),
-                          sizeof(Legs[i]->motor_cmd[0].motor_send_data));
+                          (uint8_t *)&(Legs[i]->motor_cmd[motor].motor_send_data),
+                          sizeof(Legs[i]->motor_cmd[motor].motor_send_data));
   }
 }
 
@@ -218,7 +243,7 @@ int Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad)
 
   uint8_t leg = motor_index / 2;
   uint8_t motor = motor_index % 2;
-  if (!leg_online_state[leg])
+  if (!motor_online_state[motor_index])
     return 0;
 
   MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
@@ -314,10 +339,18 @@ void Leg_Rx_Handler(Leg_HandlerTypeDef *hleg, uint16_t Size)
       motor_angle_valid[idx] = 0;
     }
 
-    hleg->Leg_Status = Leg_TX_M1;
-    HAL_UART_Transmit_DMA(hleg->huartx,
-                          (uint8_t *)&(hleg->motor_cmd[1].motor_send_data),
-                          sizeof(hleg->motor_cmd[1].motor_send_data));
+    if (leg < 4 && motor_is_online(leg, 1))
+    {
+      hleg->Leg_Status = Leg_TX_M1;
+      modify_data(&(hleg->motor_cmd[1]));
+      HAL_UART_Transmit_DMA(hleg->huartx,
+                            (uint8_t *)&(hleg->motor_cmd[1].motor_send_data),
+                            sizeof(hleg->motor_cmd[1].motor_send_data));
+    }
+    else
+    {
+      hleg->Leg_Status = Leg_Done;
+    }
   }
 
   if (hleg->Leg_Status == Leg_RX_M1)
