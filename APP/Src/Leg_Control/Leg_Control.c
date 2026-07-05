@@ -20,9 +20,9 @@ extern UART_HandleTypeDef huart7;
 extern UART_HandleTypeDef huart8;
 
 #define LEG_SERVICE_PERIOD_MS       50U
-#define LEG_WEB_ANGLE_MIN_RAD      -0.35f
-#define LEG_WEB_ANGLE_MAX_RAD       0.35f
-#define LEG_WEB_MAX_STEP_RAD        0.03f
+#define LEG_WEB_ANGLE_MIN_RAD      -1.50f
+#define LEG_WEB_ANGLE_MAX_RAD       1.50f
+#define LEG_WEB_MAX_STEP_RAD        0.15f
 #define LEG_WEB_KP                  0.05f
 #define LEG_WEB_KW                  0.20f
 #define LEG_HANDSHAKE_KW            0.05f
