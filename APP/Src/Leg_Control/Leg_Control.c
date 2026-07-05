@@ -7,6 +7,8 @@
   */
 
 #include "Leg_Control.h"
+#include "communication.h"
+#include <stdio.h>
 
 extern Leg_HandlerTypeDef Left_Front_Leg;
 extern Leg_HandlerTypeDef Right_Front_Leg;
@@ -27,6 +29,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_WEB_KW                  0.01f
 #define LEG_HANDSHAKE_KW            0.05f
 #define LEG_HANDSHAKE_RETRY         2U
+#define LEG_DEBUG_LOG_PERIOD_MS     250U
 
 #define LEG_HS_OK                   0U
 #define LEG_HS_TIMEOUT              1U
@@ -41,6 +44,7 @@ static uint8_t leg_online_state[4] = {0};
 static uint8_t motor_handshake_error[8] = {0};
 static float motor_target_offset[8] = {0};
 static uint8_t motor_target_active[8] = {0};
+static uint32_t motor_debug_last_log_tick[8] = {0};
 static volatile uint8_t handshake_requested = 0;
 
 static float clampf(float value, float min_value, float max_value)
@@ -87,7 +91,72 @@ static Leg_StatusTypeDef tx_status_for_motor(uint8_t motor)
   return (motor == 0) ? Leg_TX_M0 : Leg_TX_M1;
 }
 
-static int apply_debug_target(uint8_t motor_index)
+static int append_fixed4(char *buf, size_t size, int pos, float value)
+{
+  if (pos < 0 || (size_t)pos >= size)
+    return -1;
+
+  int32_t scaled;
+  if (value >= 0.0f)
+    scaled = (int32_t)(value * 10000.0f + 0.5f);
+  else
+    scaled = (int32_t)(value * 10000.0f - 0.5f);
+
+  const char *sign = "";
+  if (scaled < 0)
+  {
+    sign = "-";
+    scaled = -scaled;
+  }
+
+  int written = snprintf(&buf[pos], size - (size_t)pos, "%s%ld.%04ld",
+                         sign,
+                         (long)(scaled / 10000),
+                         (long)(scaled % 10000));
+  if (written < 0 || written >= (int)(size - (size_t)pos))
+    return -1;
+
+  return pos + written;
+}
+
+static void log_debug_target(uint8_t motor_index, const char *tag, float desired, float delta)
+{
+  if (motor_index >= 8)
+    return;
+
+  uint8_t leg = motor_index / 2;
+  uint8_t motor = motor_index % 2;
+  MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
+
+  char buf[192];
+  int len = snprintf(buf, sizeof(buf), "MOTOR_CMD %s idx=%u off=", tag, motor_index);
+  len = append_fixed4(buf, sizeof(buf), len, motor_target_offset[motor_index]);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " cmd=");
+  len = append_fixed4(buf, sizeof(buf), len, cmd->Pos);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " target=");
+  len = append_fixed4(buf, sizeof(buf), len, desired);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " fbk=");
+  len = append_fixed4(buf, sizeof(buf), len, motor_angles[motor_index]);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " delta=");
+  len = append_fixed4(buf, sizeof(buf), len, delta);
+  if (len > 0)
+  {
+    int written = snprintf(&buf[len], sizeof(buf) - (size_t)len,
+                           " raw_pos=%ld raw_kp=%d raw_kw=%d active=%u\r\n",
+                           (long)cmd->motor_send_data.comd.pos_des,
+                           (int)cmd->motor_send_data.comd.k_pos,
+                           (int)cmd->motor_send_data.comd.k_spd,
+                           motor_target_active[motor_index]);
+    if (written < 0 || written >= (int)(sizeof(buf) - (size_t)len))
+      return;
+    len += written;
+  }
+
+  if (len > 0 && len < (int)sizeof(buf))
+    Communication_SendString(buf);
+}
+
+static int apply_debug_target(uint8_t motor_index, uint8_t force_log)
 {
   if (motor_index >= 8 || !motor_online_state[motor_index])
     return 0;
@@ -118,6 +187,18 @@ static int apply_debug_target(uint8_t motor_index)
   cmd->K_P = LEG_WEB_KP;
   cmd->K_W = LEG_WEB_KW;
   modify_data(cmd);
+
+  uint32_t now = HAL_GetTick();
+  if (force_log || !motor_target_active[motor_index] ||
+      (now - motor_debug_last_log_tick[motor_index]) >= LEG_DEBUG_LOG_PERIOD_MS)
+  {
+    motor_debug_last_log_tick[motor_index] = now;
+    log_debug_target(motor_index,
+                     motor_target_active[motor_index] ? "step" : "done",
+                     desired,
+                     desired - cmd->Pos);
+  }
+
   return 1;
 }
 
@@ -126,7 +207,7 @@ static void update_debug_targets(void)
   for (uint8_t idx = 0; idx < 8; idx++)
   {
     if (motor_target_active[idx])
-      apply_debug_target(idx);
+      apply_debug_target(idx, 0);
   }
 }
 
@@ -186,6 +267,7 @@ void Leg_Control_InitSafe(void)
       motor_handshake_error[idx] = LEG_HS_TIMEOUT;
       motor_target_offset[idx] = 0.0f;
       motor_target_active[idx] = 0;
+      motor_debug_last_log_tick[idx] = 0;
     }
     leg_online_state[leg] = 0;
   }
@@ -213,6 +295,7 @@ void Leg_Control_Handshake(void)
       motor_handshake_error[idx] = LEG_HS_TIMEOUT;
       motor_target_offset[idx] = 0.0f;
       motor_target_active[idx] = 0;
+      motor_debug_last_log_tick[idx] = 0;
       cmd->id = motor;
       cmd->mode = 1;
       cmd->T = 0.0f;
@@ -313,7 +396,7 @@ int Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad)
 
   motor_target_offset[motor_index] = clampf(angle_rad, LEG_WEB_ANGLE_MIN_RAD, LEG_WEB_ANGLE_MAX_RAD);
   motor_target_active[motor_index] = 1;
-  return apply_debug_target(motor_index);
+  return apply_debug_target(motor_index, 1);
 }
 
 void Leg_Control_GetAngles(float angles[8], uint8_t valid[8])

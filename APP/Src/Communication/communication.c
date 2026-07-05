@@ -148,11 +148,28 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
                 copy_len = sizeof(cmd_buf) - 1;
             memcpy(cmd_buf, &data[i], copy_len);
             cmd_buf[copy_len] = '\0';
+            for (uint16_t j = 0; j < copy_len; j++) {
+                if (cmd_buf[j] == '\r' || cmd_buf[j] == '\n') {
+                    cmd_buf[j] = '\0';
+                    break;
+                }
+            }
 
             if (sscanf(cmd_buf, "MOTOR_SET %d %f", &motor, &angle) == 2) {
+                int accepted = 0;
                 if (motor >= 0 && motor < 8) {
-                    Leg_Control_SetDebugAngle((uint8_t)motor, angle);
+                    accepted = Leg_Control_SetDebugAngle((uint8_t)motor, angle);
                 }
+
+                char log_buf[96];
+                int log_len = snprintf(log_buf, sizeof(log_buf),
+                                       "MOTOR_SET_RX accepted=%d motor=%d cmd=%s\r\n",
+                                       accepted, motor, cmd_buf);
+                if (log_len > 0 && log_len < (int)sizeof(log_buf)) {
+                    Communication_SendBytes((const uint8_t *)log_buf, (uint16_t)log_len);
+                }
+            } else {
+                Communication_SendString("MOTOR_SET_RX parse_fail\r\n");
             }
             return;
         }
