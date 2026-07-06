@@ -31,6 +31,7 @@ static volatile uint16_t diag_last_recv_crc = 0;
 
 static const char esp32_hello[] = "ESP32_HELLO";
 static const char stm32_ack[] = "STM32_ACK\n";
+static const char motor_set_mrad_cmd[] = "MOTOR_SET_MRAD";
 static const char motor_set_cmd[] = "MOTOR_SET";
 static const char motor_rescan_cmd[] = "MOTOR_RESCAN";
 
@@ -223,9 +224,69 @@ static int parse_motor_set_command(const char *cmd, int *motor, float *angle)
     return *p == '\0';
 }
 
+static int parse_motor_set_mrad_command(const char *cmd, int *motor, float *angle)
+{
+    const char prefix[] = "MOTOR_SET_MRAD";
+    const char *p = cmd;
+    int angle_mrad = 0;
+
+    if (memcmp(p, prefix, sizeof(prefix) - 1) != 0)
+        return 0;
+
+    p += sizeof(prefix) - 1;
+    if (*p != ' ' && *p != '\t')
+        return 0;
+
+    if (!parse_int_value(&p, motor))
+        return 0;
+    if (!parse_int_value(&p, &angle_mrad))
+        return 0;
+
+    p = skip_spaces(p);
+    if (*p != '\0')
+        return 0;
+
+    *angle = (float)angle_mrad / 1000.0f;
+    return 1;
+}
+
+static void handle_motor_set_text(const char *cmd_buf)
+{
+    int motor = -1;
+    float angle = 0.0f;
+    int parsed = 0;
+    int accepted = 0;
+    char log_buf[96];
+
+    parsed = parse_motor_set_mrad_command(cmd_buf, &motor, &angle) ||
+             parse_motor_set_command(cmd_buf, &motor, &angle);
+    if (!parsed) {
+        int log_len = snprintf(log_buf, sizeof(log_buf),
+                               "MOTOR_SET_RX parse_fail cmd=%s\r\n", cmd_buf);
+        if (log_len > 0 && log_len < (int)sizeof(log_buf)) {
+            Communication_SendBytes((const uint8_t *)log_buf, (uint16_t)log_len);
+        }
+        return;
+    }
+
+    if (motor >= 0 && motor < 8) {
+        accepted = Leg_Control_SetDebugAngle((uint8_t)motor, angle);
+    }
+
+    if (!accepted) {
+        int log_len = snprintf(log_buf, sizeof(log_buf),
+                               "MOTOR_SET_RX rejected motor=%d cmd=%s\r\n",
+                               motor, cmd_buf);
+        if (log_len > 0 && log_len < (int)sizeof(log_buf)) {
+            Communication_SendBytes((const uint8_t *)log_buf, (uint16_t)log_len);
+        }
+    }
+}
+
 static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
 {
     if (len < sizeof(motor_set_cmd) - 1 &&
+        len < sizeof(motor_set_mrad_cmd) - 1 &&
         len < sizeof(motor_rescan_cmd) - 1)
         return;
 
@@ -236,10 +297,8 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         }
     }
 
-    for (uint16_t i = 0; i + sizeof(motor_set_cmd) - 1 <= len; i++) {
-        if (memcmp(&data[i], motor_set_cmd, sizeof(motor_set_cmd) - 1) == 0) {
-            int motor = -1;
-            float angle = 0.0f;
+    for (uint16_t i = 0; i + sizeof(motor_set_mrad_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], motor_set_mrad_cmd, sizeof(motor_set_mrad_cmd) - 1) == 0) {
             char cmd_buf[48];
             uint16_t copy_len = len - i;
             if (copy_len >= sizeof(cmd_buf))
@@ -253,35 +312,27 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
                 }
             }
 
-            if (parse_motor_set_command(cmd_buf, &motor, &angle)) {
-                int accepted = 0;
-                char log_buf[96];
-                int log_len = snprintf(log_buf, sizeof(log_buf),
-                                       "MOTOR_SET_RX parsed motor=%d cmd=%s\r\n",
-                                       motor, cmd_buf);
-                if (log_len > 0 && log_len < (int)sizeof(log_buf)) {
-                    Communication_SendBytes((const uint8_t *)log_buf, (uint16_t)log_len);
-                }
+            handle_motor_set_text(cmd_buf);
+            return;
+        }
+    }
 
-                if (motor >= 0 && motor < 8) {
-                    accepted = Leg_Control_SetDebugAngle((uint8_t)motor, angle);
-                }
-
-                if (!accepted) {
-                    log_len = snprintf(log_buf, sizeof(log_buf),
-                                       "MOTOR_SET_RX rejected motor=%d\r\n", motor);
-                }
-                if (!accepted && log_len > 0 && log_len < (int)sizeof(log_buf)) {
-                    Communication_SendBytes((const uint8_t *)log_buf, (uint16_t)log_len);
-                }
-            } else {
-                char log_buf[96];
-                int log_len = snprintf(log_buf, sizeof(log_buf),
-                                       "MOTOR_SET_RX parse_fail cmd=%s\r\n", cmd_buf);
-                if (log_len > 0 && log_len < (int)sizeof(log_buf)) {
-                    Communication_SendBytes((const uint8_t *)log_buf, (uint16_t)log_len);
+    for (uint16_t i = 0; i + sizeof(motor_set_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], motor_set_cmd, sizeof(motor_set_cmd) - 1) == 0) {
+            char cmd_buf[48];
+            uint16_t copy_len = len - i;
+            if (copy_len >= sizeof(cmd_buf))
+                copy_len = sizeof(cmd_buf) - 1;
+            memcpy(cmd_buf, &data[i], copy_len);
+            cmd_buf[copy_len] = '\0';
+            for (uint16_t j = 0; j < copy_len; j++) {
+                if (cmd_buf[j] == '\r' || cmd_buf[j] == '\n') {
+                    cmd_buf[j] = '\0';
+                    break;
                 }
             }
+
+            handle_motor_set_text(cmd_buf);
             return;
         }
     }
