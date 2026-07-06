@@ -34,6 +34,7 @@ static const char stm32_ack[] = "STM32_ACK\n";
 static const char motor_set_mrad_cmd[] = "MOTOR_SET_MRAD";
 static const char motor_set_cmd[] = "MOTOR_SET";
 static const char motor_rescan_cmd[] = "MOTOR_RESCAN";
+static const char motor_stop_all_cmd[] = "MOTOR_STOP_ALL";
 
 #define RC_RAW_MIN       0
 #define RC_RAW_MAX       2047
@@ -287,8 +288,17 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
 {
     if (len < sizeof(motor_set_cmd) - 1 &&
         len < sizeof(motor_set_mrad_cmd) - 1 &&
-        len < sizeof(motor_rescan_cmd) - 1)
+        len < sizeof(motor_rescan_cmd) - 1 &&
+        len < sizeof(motor_stop_all_cmd) - 1)
         return;
+
+    for (uint16_t i = 0; i + sizeof(motor_stop_all_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], motor_stop_all_cmd, sizeof(motor_stop_all_cmd) - 1) == 0) {
+            Leg_Control_StopAllDebugTargets(0);
+            Communication_SendString("MOTOR_STOP_ALL ok\r\n");
+            return;
+        }
+    }
 
     for (uint16_t i = 0; i + sizeof(motor_rescan_cmd) - 1 <= len; i++) {
         if (memcmp(&data[i], motor_rescan_cmd, sizeof(motor_rescan_cmd) - 1) == 0) {
@@ -586,17 +596,25 @@ void Communication_SendMotorStatus(void)
     uint8_t motor_online[8];
     uint8_t leg_online[4];
     uint8_t motor_error[8];
+    uint8_t target_active[8];
+    uint8_t target_result[8];
     Leg_Control_GetOnline(motor_online, leg_online);
     Leg_Control_GetHandshakeErrors(motor_error);
+    Leg_Control_GetTargetStates(target_active, target_result);
 
-    char buf[160];
+    char buf[240];
     int len = snprintf(buf, sizeof(buf),
-        "MOTOR_STATUS %u,%u,%u,%u,%u,%u,%u,%u %u,%u,%u,%u %u,%u,%u,%u,%u,%u,%u,%u\n",
+        "MOTOR_STATUS %u,%u,%u,%u,%u,%u,%u,%u %u,%u,%u,%u "
+        "%u,%u,%u,%u,%u,%u,%u,%u %u,%u,%u,%u,%u,%u,%u,%u %u,%u,%u,%u,%u,%u,%u,%u\n",
         motor_online[0], motor_online[1], motor_online[2], motor_online[3],
         motor_online[4], motor_online[5], motor_online[6], motor_online[7],
         leg_online[0], leg_online[1], leg_online[2], leg_online[3],
         motor_error[0], motor_error[1], motor_error[2], motor_error[3],
-        motor_error[4], motor_error[5], motor_error[6], motor_error[7]);
+        motor_error[4], motor_error[5], motor_error[6], motor_error[7],
+        target_active[0], target_active[1], target_active[2], target_active[3],
+        target_active[4], target_active[5], target_active[6], target_active[7],
+        target_result[0], target_result[1], target_result[2], target_result[3],
+        target_result[4], target_result[5], target_result[6], target_result[7]);
 
     if (len > 0 && len < (int)sizeof(buf)) {
         Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);

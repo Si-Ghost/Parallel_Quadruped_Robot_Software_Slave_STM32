@@ -28,6 +28,10 @@ extern UART_HandleTypeDef huart8;
 #define LEG_WEB_SPEED_MIN_RAD_S     0.8f
 #define LEG_WEB_SPEED_LIMIT_RAD_S   1.2f
 #define LEG_WEB_STOP_ERROR_RAD      0.02f
+#define LEG_WEB_TARGET_TIMEOUT_MS   3000U
+#define LEG_WEB_STALL_CHECK_MS      800U
+#define LEG_WEB_STALL_GRACE_MS      500U
+#define LEG_WEB_STALL_PROGRESS_RAD  0.01f
 #define LEG_WEB_KP                  0.0f
 #define LEG_WEB_KW                  0.05f
 #define LEG_HANDSHAKE_KW            0.05f
@@ -40,6 +44,13 @@ extern UART_HandleTypeDef huart8;
 #define LEG_HS_UART_ERROR           2U
 #define LEG_HS_BAD_ID               3U
 
+#define LEG_TARGET_IDLE             0U
+#define LEG_TARGET_ACTIVE           1U
+#define LEG_TARGET_DONE             2U
+#define LEG_TARGET_TIMEOUT          3U
+#define LEG_TARGET_STALL            4U
+#define LEG_TARGET_STOPPED          5U
+
 static uint32_t last_service_tick = 0;
 static float motor_angles[8] = {0};
 static uint8_t motor_angle_valid[8] = {0};
@@ -48,6 +59,10 @@ static uint8_t leg_online_state[4] = {0};
 static uint8_t motor_handshake_error[8] = {0};
 static float motor_target_offset[8] = {0};
 static uint8_t motor_target_active[8] = {0};
+static uint8_t motor_target_result[8] = {0};
+static uint32_t motor_target_start_tick[8] = {0};
+static uint32_t motor_target_progress_tick[8] = {0};
+static float motor_target_last_abs_error[8] = {0};
 static uint32_t motor_debug_last_log_tick[8] = {0};
 static uint32_t motor_io_error_last_log_tick[8] = {0};
 static volatile uint8_t handshake_requested = 0;
@@ -160,6 +175,30 @@ static void log_debug_target(uint8_t motor_index, const char *tag, float desired
     Communication_SendString(buf);
 }
 
+static void stop_debug_target(uint8_t motor_index, uint8_t result)
+{
+  if (motor_index >= 8)
+    return;
+
+  uint8_t leg = motor_index / 2;
+  uint8_t motor = motor_index % 2;
+  MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
+
+  motor_target_active[motor_index] = 0;
+  motor_target_result[motor_index] = result;
+  motor_target_start_tick[motor_index] = 0;
+  motor_target_progress_tick[motor_index] = 0;
+  motor_target_last_abs_error[motor_index] = 0.0f;
+
+  cmd->mode = 1;
+  cmd->T = 0.0f;
+  cmd->W = 0.0f;
+  cmd->K_P = 0.0f;
+  cmd->K_W = 0.0f;
+  cmd->Pos = motor_angles[motor_index];
+  modify_data(cmd);
+}
+
 static void log_motor_io_error(uint8_t motor_index, HAL_StatusTypeDef ret, MOTOR_recv *fbk)
 {
   if (motor_index >= 8)
@@ -194,8 +233,33 @@ static int apply_debug_target(uint8_t motor_index, uint8_t force_log)
 
   float desired = Legs[leg]->p_init[motor] + motor_target_offset[motor_index];
   float error = desired - motor_angles[motor_index];
-  if (absf_local(error) <= LEG_WEB_STOP_ERROR_RAD)
-    motor_target_active[motor_index] = 0;
+  float abs_error = absf_local(error);
+  uint32_t now = HAL_GetTick();
+
+  if (motor_target_active[motor_index])
+  {
+    if (abs_error <= LEG_WEB_STOP_ERROR_RAD)
+    {
+      stop_debug_target(motor_index, LEG_TARGET_DONE);
+    }
+    else if ((now - motor_target_start_tick[motor_index]) >= LEG_WEB_TARGET_TIMEOUT_MS)
+    {
+      stop_debug_target(motor_index, LEG_TARGET_TIMEOUT);
+    }
+    else if ((now - motor_target_start_tick[motor_index]) >= LEG_WEB_STALL_GRACE_MS &&
+             (now - motor_target_progress_tick[motor_index]) >= LEG_WEB_STALL_CHECK_MS)
+    {
+      if ((motor_target_last_abs_error[motor_index] - abs_error) < LEG_WEB_STALL_PROGRESS_RAD)
+      {
+        stop_debug_target(motor_index, LEG_TARGET_STALL);
+      }
+      else
+      {
+        motor_target_last_abs_error[motor_index] = abs_error;
+        motor_target_progress_tick[motor_index] = now;
+      }
+    }
+  }
 
   cmd->mode = 1;
   cmd->T = 0.0f;
@@ -217,7 +281,6 @@ static int apply_debug_target(uint8_t motor_index, uint8_t force_log)
   cmd->K_W = LEG_WEB_KW;
   modify_data(cmd);
 
-  uint32_t now = HAL_GetTick();
   if (force_log || !motor_target_active[motor_index] ||
       (now - motor_debug_last_log_tick[motor_index]) >= LEG_DEBUG_LOG_PERIOD_MS)
   {
@@ -296,6 +359,10 @@ void Leg_Control_InitSafe(void)
       motor_handshake_error[idx] = LEG_HS_TIMEOUT;
       motor_target_offset[idx] = 0.0f;
       motor_target_active[idx] = 0;
+      motor_target_result[idx] = LEG_TARGET_IDLE;
+      motor_target_start_tick[idx] = 0;
+      motor_target_progress_tick[idx] = 0;
+      motor_target_last_abs_error[idx] = 0.0f;
       motor_debug_last_log_tick[idx] = 0;
       motor_io_error_last_log_tick[idx] = 0;
     }
@@ -325,6 +392,10 @@ void Leg_Control_Handshake(void)
       motor_handshake_error[idx] = LEG_HS_TIMEOUT;
       motor_target_offset[idx] = 0.0f;
       motor_target_active[idx] = 0;
+      motor_target_result[idx] = LEG_TARGET_IDLE;
+      motor_target_start_tick[idx] = 0;
+      motor_target_progress_tick[idx] = 0;
+      motor_target_last_abs_error[idx] = 0.0f;
       motor_debug_last_log_tick[idx] = 0;
       motor_io_error_last_log_tick[idx] = 0;
       cmd->id = motor;
@@ -445,7 +516,23 @@ int Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad)
 
   motor_target_offset[motor_index] = clampf(angle_rad, LEG_WEB_ANGLE_MIN_RAD, LEG_WEB_ANGLE_MAX_RAD);
   motor_target_active[motor_index] = 1;
+  motor_target_result[motor_index] = LEG_TARGET_ACTIVE;
+  motor_target_start_tick[motor_index] = HAL_GetTick();
+  motor_target_progress_tick[motor_index] = motor_target_start_tick[motor_index];
+  motor_target_last_abs_error[motor_index] =
+      absf_local((Legs[motor_index / 2]->p_init[motor_index % 2] + motor_target_offset[motor_index]) -
+                 motor_angles[motor_index]);
   return apply_debug_target(motor_index, 1);
+}
+
+void Leg_Control_StopAllDebugTargets(uint8_t reason)
+{
+  uint8_t result = (reason == 0U) ? LEG_TARGET_STOPPED : reason;
+
+  for (uint8_t idx = 0; idx < 8; idx++)
+  {
+    stop_debug_target(idx, result);
+  }
 }
 
 void Leg_Control_GetAngles(float angles[8], uint8_t valid[8])
@@ -474,6 +561,17 @@ void Leg_Control_GetHandshakeErrors(uint8_t motor_error[8])
   __disable_irq();
   for (uint8_t i = 0; i < 8; i++)
     motor_error[i] = motor_handshake_error[i];
+  __enable_irq();
+}
+
+void Leg_Control_GetTargetStates(uint8_t active[8], uint8_t result[8])
+{
+  __disable_irq();
+  for (uint8_t i = 0; i < 8; i++)
+  {
+    active[i] = motor_target_active[i];
+    result[i] = motor_target_result[i];
+  }
   __enable_irq();
 }
 

@@ -42,9 +42,11 @@ void Leg_Control_Handshake(void);
 void Leg_Control_RequestHandshake(void);
 void Leg_Control_Service(uint32_t now_ms);
 int  Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad);
+void Leg_Control_StopAllDebugTargets(uint8_t reason);
 void Leg_Control_GetAngles(float angles[8], uint8_t valid[8]);
 void Leg_Control_GetOnline(uint8_t motor_online[8], uint8_t leg_online[4]);
 void Leg_Control_GetHandshakeErrors(uint8_t motor_error[8]);
+void Leg_Control_GetTargetStates(uint8_t active[8], uint8_t result[8]);
 
 
 #endif //PARALLEL_QUADRUPED_ROBOT_STM32_LEG_CONTROL_H
