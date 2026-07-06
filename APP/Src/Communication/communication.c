@@ -7,22 +7,29 @@
 extern RC_DataTypeDef rc_data;
 extern volatile uint32_t last_valid_packet_tick;
 
-static UART_HandleTypeDef *esp32_uart = NULL;
-
 #define RX_BUF_SIZE 128
-static uint8_t rx_it_buf[RX_BUF_SIZE];
-
 #define TX_IT_BUF_SIZE 256
-static uint8_t tx_it_buf[TX_IT_BUF_SIZE];
-static volatile uint8_t tx_it_busy = 0;
+#define RX_SNAPSHOT_SIZE 16
 
-static volatile uint8_t handshake_done = 0;
-static uint32_t last_hello_tick = 0;
+typedef struct
+{
+    UART_HandleTypeDef *uart;                  /* USART6 handle connected to ESP32. */
+    uint8_t rx_buf[RX_BUF_SIZE];               /* ReceiveToIdle buffer for RC frames and text commands. */
+    uint8_t tx_buf[TX_IT_BUF_SIZE];            /* Shared interrupt TX buffer for ESP32 replies. */
+    volatile uint8_t tx_busy;                  /* Non-zero while HAL_UART_Transmit_IT is in flight. */
+    volatile uint8_t handshake_done;           /* ESP32 hello or a valid RC frame has been received. */
+    uint32_t last_hello_tick;                  /* Last ACK retry tick before handshake completes. */
 #if ESP32_LINK_ECHO_TEST
-static uint32_t last_echo_tick = 0;
+    uint32_t last_echo_tick;                   /* Last echo diagnostic tick, used to throttle logs. */
 #endif
-static volatile uint16_t diag_last_calc_crc = 0;
-static volatile uint16_t diag_last_recv_crc = 0;
+    volatile uint32_t rx_count;                /* USART6 receive callback count for diagnostics. */
+    volatile uint16_t last_rx_size;            /* Byte count from the most recent receive event. */
+    volatile uint8_t rx_snapshot[RX_SNAPSHOT_SIZE]; /* First bytes from the most recent receive event. */
+    volatile uint16_t last_calc_crc;           /* CRC calculated for the most recent candidate RC frame. */
+    volatile uint16_t last_recv_crc;           /* CRC received in the most recent candidate RC frame. */
+} Communication_ContextTypeDef;
+
+static Communication_ContextTypeDef comm_ctx = {0};
 
 static const char esp32_hello[] = "ESP32_HELLO";
 static const char stm32_ack[] = "STM32_ACK\n";
@@ -36,15 +43,11 @@ static const char motor_stop_all_cmd[] = "MOTOR_STOP_ALL";
 #define RC_CENTER        1024
 #define RC_DEADZONE      363
 
-/* ---- 诊断用变量 ---- */
-volatile uint32_t diag_usart6_rx_count = 0;   // USART6 RX 回调触发次数
-volatile uint16_t diag_last_rx_size   = 0;    // 最后一次收到的字节数
-volatile uint8_t  diag_rx_snapshot[16] = {0}; // 最后一次收到数据的前16字节快照
 
 static void restart_esp32_rx(void)
 {
-    if (esp32_uart) {
-        HAL_UARTEx_ReceiveToIdle_IT(esp32_uart, rx_it_buf, RX_BUF_SIZE);
+    if (comm_ctx.uart) {
+        HAL_UARTEx_ReceiveToIdle_IT(comm_ctx.uart, comm_ctx.rx_buf, RX_BUF_SIZE);
     }
 }
 
@@ -52,28 +55,28 @@ static void send_esp32_rx_echo(uint16_t size, int parsed_frame)
 {
 #if ESP32_LINK_ECHO_TEST
     uint32_t now = HAL_GetTick();
-    if (now - last_echo_tick < 500) {
+    if (now - comm_ctx.last_echo_tick < 500) {
         return;
     }
-    last_echo_tick = now;
+    comm_ctx.last_echo_tick = now;
 
     char buf[80];
     int len;
     if (parsed_frame) {
         len = snprintf(buf, sizeof(buf),
                        "STM32_RX cnt=%lu size=%u frame=1\r\n",
-                       diag_usart6_rx_count,
+                       comm_ctx.rx_count,
                        (unsigned int)size);
     } else {
         len = snprintf(buf, sizeof(buf),
                        "STM32_RX cnt=%lu size=%u frame=0 head=%02X%02X tail=%02X crc=%04X/%04X\r\n",
-                       diag_usart6_rx_count,
+                       comm_ctx.rx_count,
                        (unsigned int)size,
-                       diag_rx_snapshot[0],
-                       diag_rx_snapshot[1],
-                       size > 0 ? diag_rx_snapshot[(size < 16 ? size : 16) - 1] : 0,
-                       diag_last_recv_crc,
-                       diag_last_calc_crc);
+                       comm_ctx.rx_snapshot[0],
+                       comm_ctx.rx_snapshot[1],
+                       size > 0 ? comm_ctx.rx_snapshot[(size < RX_SNAPSHOT_SIZE ? size : RX_SNAPSHOT_SIZE) - 1] : 0,
+                       comm_ctx.last_recv_crc,
+                       comm_ctx.last_calc_crc);
     }
     if (len > 0) {
         Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
@@ -103,8 +106,8 @@ static void handle_hello(const uint8_t *data, uint16_t len)
 
     for (uint16_t i = 0; i + sizeof(esp32_hello) - 1 <= len; i++) {
         if (memcmp(&data[i], esp32_hello, sizeof(esp32_hello) - 1) == 0) {
-            handshake_done = 1;
-            last_hello_tick = HAL_GetTick();
+            comm_ctx.handshake_done = 1;
+            comm_ctx.last_hello_tick = HAL_GetTick();
             Communication_SendBytes((const uint8_t *)stm32_ack, sizeof(stm32_ack) - 1);
             return;
         }
@@ -343,8 +346,8 @@ static int parse_frame(const uint8_t *data, uint16_t len)
 
         uint16_t calc_crc = crc_ccitt(0xFFFF, &data[i + 2], 10);
         uint16_t recv_crc = ((uint16_t)data[i + 12] << 8) | data[i + 13];
-        diag_last_calc_crc = calc_crc;
-        diag_last_recv_crc = recv_crc;
+        comm_ctx.last_calc_crc = calc_crc;
+        comm_ctx.last_recv_crc = recv_crc;
         if (calc_crc != recv_crc)
             continue;
 
@@ -383,7 +386,7 @@ static int parse_frame(const uint8_t *data, uint16_t len)
         __disable_irq();
         rc_data = tmp;
         __enable_irq();
-        handshake_done = 1;
+        comm_ctx.handshake_done = 1;
         last_valid_packet_tick = HAL_GetTick();
         return i + ESP32_FRAME_LEN;
     }
@@ -392,10 +395,9 @@ static int parse_frame(const uint8_t *data, uint16_t len)
 
 void Communication_Init(UART_HandleTypeDef *huart)
 {
-    esp32_uart = huart;
-    tx_it_busy = 0;
-    handshake_done = 0;
-    last_hello_tick = HAL_GetTick();
+    memset(&comm_ctx, 0, sizeof(comm_ctx));
+    comm_ctx.uart = huart;
+    comm_ctx.last_hello_tick = HAL_GetTick();
 
     Communication_SetSafeRCData();
     last_valid_packet_tick = 0;
@@ -405,33 +407,33 @@ void Communication_Init(UART_HandleTypeDef *huart)
 
 void Communication_RxCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
-    /* USART6: 来自 ESP32 的遥控帧 */
+    /* USART6 carries ESP32 RC frames and text debug commands. */
     if (huart->Instance != USART6 || Size == 0) {
         restart_esp32_rx();
         return;
     }
 
-    /* 诊断记录 */
-    diag_usart6_rx_count++;
-    diag_last_rx_size = Size;
-    uint16_t snap_len = Size < 16 ? Size : 16;
-    memcpy((void *)diag_rx_snapshot, rx_it_buf, snap_len);
+    /* Keep a small receive snapshot for optional echo diagnostics. */
+    comm_ctx.rx_count++;
+    comm_ctx.last_rx_size = Size;
+    uint16_t snap_len = Size < RX_SNAPSHOT_SIZE ? Size : RX_SNAPSHOT_SIZE;
+    memcpy((void *)comm_ctx.rx_snapshot, comm_ctx.rx_buf, snap_len);
 
-    handle_hello(rx_it_buf, Size);
-    handle_motor_debug_command(rx_it_buf, Size);
-    int parsed_len = parse_frame(rx_it_buf, Size);
+    handle_hello(comm_ctx.rx_buf, Size);
+    handle_motor_debug_command(comm_ctx.rx_buf, Size);
+    int parsed_len = parse_frame(comm_ctx.rx_buf, Size);
     send_esp32_rx_echo(Size, parsed_len > 0);
     restart_esp32_rx();
 }
 
 int Communication_IsHandshakeDone(void)
 {
-    return handshake_done != 0;
+    return comm_ctx.handshake_done != 0;
 }
 
 int Communication_IsLinkAlive(void)
 {
-    return handshake_done && (HAL_GetTick() - last_valid_packet_tick) < ESP32_WATCHDOG_TIMEOUT_MS;
+    return comm_ctx.handshake_done && (HAL_GetTick() - last_valid_packet_tick) < ESP32_WATCHDOG_TIMEOUT_MS;
 }
 
 void Communication_ResetWatchdog(void)
@@ -441,40 +443,40 @@ void Communication_ResetWatchdog(void)
 
 void Communication_Task(void)
 {
-    if (!handshake_done && esp32_uart &&
-        (HAL_GetTick() - last_hello_tick) >= 500) {
-        last_hello_tick = HAL_GetTick();
+    if (!comm_ctx.handshake_done && comm_ctx.uart &&
+        (HAL_GetTick() - comm_ctx.last_hello_tick) >= 500) {
+        comm_ctx.last_hello_tick = HAL_GetTick();
         Communication_SendBytes((const uint8_t *)stm32_ack, sizeof(stm32_ack) - 1);
     }
 
-    if (handshake_done && !Communication_IsLinkAlive()) {
+    if (comm_ctx.handshake_done && !Communication_IsLinkAlive()) {
         Communication_SetSafeRCData();
     }
 }
 
 void Communication_NotifyTxComplete(void)
 {
-    tx_it_busy = 0;
+    comm_ctx.tx_busy = 0;
 }
 
-/* ---- DMA 发送到 ESP32（非阻塞，ISR 中可安全调用） ---- */
+/* Interrupt TX helpers share comm_ctx.tx_buf, so callers silently drop while busy. */
 void Communication_SendByte(uint8_t byte)
 {
-    if (!esp32_uart || tx_it_busy)
+    if (!comm_ctx.uart || comm_ctx.tx_busy)
         return;
-    tx_it_buf[0] = byte;
-    if (HAL_UART_Transmit_IT(esp32_uart, tx_it_buf, 1) == HAL_OK) {
-        tx_it_busy = 1;
+    comm_ctx.tx_buf[0] = byte;
+    if (HAL_UART_Transmit_IT(comm_ctx.uart, comm_ctx.tx_buf, 1) == HAL_OK) {
+        comm_ctx.tx_busy = 1;
     }
 }
 
 void Communication_SendBytes(const uint8_t *data, uint16_t len)
 {
-    if (!esp32_uart || tx_it_busy || len > TX_IT_BUF_SIZE)
+    if (!comm_ctx.uart || comm_ctx.tx_busy || len > TX_IT_BUF_SIZE)
         return;
-    memcpy(tx_it_buf, data, len);
-    if (HAL_UART_Transmit_IT(esp32_uart, tx_it_buf, len) == HAL_OK) {
-        tx_it_busy = 1;
+    memcpy(comm_ctx.tx_buf, data, len);
+    if (HAL_UART_Transmit_IT(comm_ctx.uart, comm_ctx.tx_buf, len) == HAL_OK) {
+        comm_ctx.tx_busy = 1;
     }
 }
 
@@ -548,7 +550,7 @@ void Communication_SendMotorAngles(void)
     }
 }
 
-/* ---- 诊断输出：打印 USART6 接收状态（阻塞式，仅供调试用） ---- */
+/* Send compact per-motor handshake and target state for the ESP32 web UI. */
 void Communication_SendMotorStatus(void)
 {
     uint8_t motor_online[8];

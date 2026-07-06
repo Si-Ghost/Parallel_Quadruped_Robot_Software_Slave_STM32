@@ -16,12 +16,12 @@
 #define ESP32_LINK_ECHO_TEST 0
 
 typedef struct {
-    int16_t ch0;
-    int16_t ch1;
-    int16_t ch2;
-    int16_t ch3;
-    uint8_t s1;
-    uint8_t s2;
+    int16_t ch0;  /* Centered RC channel 0, deadzone applied. */
+    int16_t ch1;  /* Centered RC channel 1, deadzone applied. */
+    int16_t ch2;  /* Centered RC channel 2, deadzone applied. */
+    int16_t ch3;  /* Centered RC channel 3, deadzone applied. */
+    uint8_t s1;   /* Primary mode switch from ESP32, valid range 1..3. */
+    uint8_t s2;   /* Secondary mode switch from ESP32, valid range 1..3. */
 } RC_DataTypeDef;
 
 void Communication_Init(UART_HandleTypeDef *huart);
