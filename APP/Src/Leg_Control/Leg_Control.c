@@ -32,6 +32,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_HANDSHAKE_KW            0.05f
 #define LEG_HANDSHAKE_RETRY         2U
 #define LEG_DEBUG_LOG_PERIOD_MS     250U
+#define LEG_IO_ERROR_LOG_PERIOD_MS  1000U
 
 #define LEG_HS_OK                   0U
 #define LEG_HS_TIMEOUT              1U
@@ -47,6 +48,7 @@ static uint8_t motor_handshake_error[8] = {0};
 static float motor_target_offset[8] = {0};
 static uint8_t motor_target_active[8] = {0};
 static uint32_t motor_debug_last_log_tick[8] = {0};
+static uint32_t motor_io_error_last_log_tick[8] = {0};
 static volatile uint8_t handshake_requested = 0;
 
 static float clampf(float value, float min_value, float max_value)
@@ -82,15 +84,6 @@ static uint8_t motor_is_online(uint8_t leg, uint8_t motor)
     return 0;
 
   return motor_online_state[motor_index_from_leg_motor(leg, motor)] != 0;
-}
-
-static uint8_t first_online_motor(uint8_t leg)
-{
-  if (motor_is_online(leg, 0))
-    return 0;
-  if (motor_is_online(leg, 1))
-    return 1;
-  return 0xFF;
 }
 
 static Leg_StatusTypeDef tx_status_for_motor(uint8_t motor)
@@ -162,6 +155,29 @@ static void log_debug_target(uint8_t motor_index, const char *tag, float desired
     len += written;
   }
 
+  if (len > 0 && len < (int)sizeof(buf))
+    Communication_SendString(buf);
+}
+
+static void log_motor_io_error(uint8_t motor_index, HAL_StatusTypeDef ret, MOTOR_recv *fbk)
+{
+  if (motor_index >= 8)
+    return;
+
+  uint32_t now = HAL_GetTick();
+  if ((now - motor_io_error_last_log_tick[motor_index]) < LEG_IO_ERROR_LOG_PERIOD_MS)
+    return;
+
+  motor_io_error_last_log_tick[motor_index] = now;
+
+  char buf[96];
+  int len = snprintf(buf, sizeof(buf),
+                     "MOTOR_IO fail idx=%u ret=%d rxlen=%u ok=%d err=%u\r\n",
+                     motor_index,
+                     (int)ret,
+                     (unsigned int)fbk->rx_len,
+                     fbk->correct,
+                     fbk->MError);
   if (len > 0 && len < (int)sizeof(buf))
     Communication_SendString(buf);
 }
@@ -272,6 +288,7 @@ void Leg_Control_InitSafe(void)
       motor_target_offset[idx] = 0.0f;
       motor_target_active[idx] = 0;
       motor_debug_last_log_tick[idx] = 0;
+      motor_io_error_last_log_tick[idx] = 0;
     }
     leg_online_state[leg] = 0;
   }
@@ -300,6 +317,7 @@ void Leg_Control_Handshake(void)
       motor_target_offset[idx] = 0.0f;
       motor_target_active[idx] = 0;
       motor_debug_last_log_tick[idx] = 0;
+      motor_io_error_last_log_tick[idx] = 0;
       cmd->id = motor;
       cmd->mode = 1;
       cmd->T = 0.0f;
@@ -350,6 +368,36 @@ void Leg_Control_RequestHandshake(void)
   handshake_requested = 1;
 }
 
+static void poll_online_motor(uint8_t leg, uint8_t motor)
+{
+  if (leg >= 4 || motor >= 2 || !motor_is_online(leg, motor))
+    return;
+
+  uint8_t idx = motor_index_from_leg_motor(leg, motor);
+  Leg_HandlerTypeDef *hleg = Legs[leg];
+  MOTOR_send *cmd = &hleg->motor_cmd[motor];
+  MOTOR_recv *fbk = &hleg->motor_data[motor];
+
+  hleg->Leg_Status = tx_status_for_motor(motor);
+  HAL_StatusTypeDef ret = SERVO_Send_recv(cmd, fbk,
+                                          hleg->GPIOx,
+                                          hleg->GPIO_Pin,
+                                          hleg->huartx);
+
+  if (ret == HAL_OK && fbk->correct && fbk->motor_id == motor)
+  {
+    motor_angles[idx] = fbk->Pos;
+    motor_angle_valid[idx] = 1;
+  }
+  else
+  {
+    motor_angle_valid[idx] = 0;
+    log_motor_io_error(idx, ret, fbk);
+  }
+
+  hleg->Leg_Status = Leg_Done;
+}
+
 void Leg_Control_Start(void)
 {
   for (int i = 0; i < 4; i++)
@@ -357,20 +405,8 @@ void Leg_Control_Start(void)
     if (!leg_online_state[i])
       continue;
 
-    if (Legs[i]->Leg_Status != Leg_Idle && Legs[i]->Leg_Status != Leg_Done)
-      continue;
-
-    uint8_t motor = first_online_motor((uint8_t)i);
-    if (motor >= 2)
-      continue;
-
-    Legs[i]->Leg_Status = tx_status_for_motor(motor);
-    modify_data(&(Legs[i]->motor_cmd[motor]));
-
-    HAL_GPIO_WritePin(Legs[i]->GPIOx, Legs[i]->GPIO_Pin, GPIO_PIN_SET);
-    HAL_UART_Transmit_DMA(Legs[i]->huartx,
-                          (uint8_t *)&(Legs[i]->motor_cmd[motor].motor_send_data),
-                          sizeof(Legs[i]->motor_cmd[motor].motor_send_data));
+    poll_online_motor((uint8_t)i, 0);
+    poll_online_motor((uint8_t)i, 1);
   }
 }
 
