@@ -28,10 +28,10 @@ extern UART_HandleTypeDef huart8;
 #define LEG_WEB_SPEED_MIN_RAD_S     0.8f
 #define LEG_WEB_SPEED_LIMIT_RAD_S   1.2f
 #define LEG_WEB_STOP_ERROR_RAD      0.02f
-#define LEG_WEB_TARGET_TIMEOUT_MS   3000U
-#define LEG_WEB_STALL_CHECK_MS      800U
+#define LEG_WEB_TARGET_TIMEOUT_MS   30000U
+#define LEG_WEB_NO_PROGRESS_MS      4000U
 #define LEG_WEB_STALL_GRACE_MS      500U
-#define LEG_WEB_STALL_PROGRESS_RAD  0.01f
+#define LEG_WEB_STALL_PROGRESS_RAD  0.005f
 #define LEG_WEB_KP                  0.0f
 #define LEG_WEB_KW                  0.05f
 #define LEG_HANDSHAKE_KW            0.05f
@@ -246,18 +246,15 @@ static int apply_debug_target(uint8_t motor_index, uint8_t force_log)
     {
       stop_debug_target(motor_index, LEG_TARGET_TIMEOUT);
     }
-    else if ((now - motor_target_start_tick[motor_index]) >= LEG_WEB_STALL_GRACE_MS &&
-             (now - motor_target_progress_tick[motor_index]) >= LEG_WEB_STALL_CHECK_MS)
+    else if ((motor_target_last_abs_error[motor_index] - abs_error) >= LEG_WEB_STALL_PROGRESS_RAD)
     {
-      if ((motor_target_last_abs_error[motor_index] - abs_error) < LEG_WEB_STALL_PROGRESS_RAD)
-      {
-        stop_debug_target(motor_index, LEG_TARGET_STALL);
-      }
-      else
-      {
-        motor_target_last_abs_error[motor_index] = abs_error;
-        motor_target_progress_tick[motor_index] = now;
-      }
+      motor_target_last_abs_error[motor_index] = abs_error;
+      motor_target_progress_tick[motor_index] = now;
+    }
+    else if ((now - motor_target_start_tick[motor_index]) >= LEG_WEB_STALL_GRACE_MS &&
+             (now - motor_target_progress_tick[motor_index]) >= LEG_WEB_NO_PROGRESS_MS)
+    {
+      stop_debug_target(motor_index, LEG_TARGET_STALL);
     }
   }
 
@@ -276,9 +273,9 @@ static int apply_debug_target(uint8_t motor_index, uint8_t force_log)
   {
     cmd->W = 0.0f;
   }
-  cmd->Pos = desired;
-  cmd->K_P = LEG_WEB_KP;
-  cmd->K_W = LEG_WEB_KW;
+  cmd->Pos = motor_target_active[motor_index] ? desired : motor_angles[motor_index];
+  cmd->K_P = motor_target_active[motor_index] ? LEG_WEB_KP : 0.0f;
+  cmd->K_W = motor_target_active[motor_index] ? LEG_WEB_KW : 0.0f;
   modify_data(cmd);
 
   if (force_log || !motor_target_active[motor_index] ||
