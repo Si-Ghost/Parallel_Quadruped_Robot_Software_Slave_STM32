@@ -84,7 +84,7 @@ typedef struct
   uint16_t GPIO_Pin;
   UART_HandleTypeDef* huartx;
   Leg_StatusTypeDef Leg_Status;
-  Motor_OnlineStateTypeDef online;
+  Motor_OnlineStateTypeDef has_online_motor;        // 这条腿至少有一个电机通过握手。
 } Leg_HandlerTypeDef;
 
 void Leg_Control_Start(void);

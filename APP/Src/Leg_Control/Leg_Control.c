@@ -367,7 +367,7 @@ void Leg_Control_InitSafe(void)
       Legs[leg]->motor_data[motor].correct = 0;
       reset_motor_runtime_state(&Legs[leg]->motor_state[motor]);
     }
-    Legs[leg]->online = Motor_Offline;
+    Legs[leg]->has_online_motor = Motor_Offline;
   }
 }
 
@@ -380,7 +380,7 @@ void Leg_Control_Handshake(void)
 
   for (uint8_t leg = 0; leg < 4; leg++)
   {
-    Legs[leg]->online = Motor_Offline;
+    Legs[leg]->has_online_motor = Motor_Offline;
 
     for (uint8_t motor = 0; motor < 2; motor++)
     {
@@ -428,7 +428,7 @@ void Leg_Control_Handshake(void)
       }
     }
 
-    Legs[leg]->online = (motor_is_online(leg, 0) || motor_is_online(leg, 1)) ? Motor_Online : Motor_Offline;
+    Legs[leg]->has_online_motor = (motor_is_online(leg, 0) || motor_is_online(leg, 1)) ? Motor_Online : Motor_Offline;
     Legs[leg]->Leg_Status = Leg_Idle;
     HAL_GPIO_WritePin(Legs[leg]->GPIOx, Legs[leg]->GPIO_Pin, GPIO_PIN_RESET);
   }
@@ -474,7 +474,7 @@ void Leg_Control_Start(void)
 {
   for (int i = 0; i < 4; i++)
   {
-    if (!Legs[i]->online)
+    if (!Legs[i]->has_online_motor)
       continue;
 
     poll_online_motor((uint8_t)i, 0);
@@ -549,7 +549,7 @@ void Leg_Control_GetOnline(uint8_t motor_online[8], uint8_t leg_online[4])
     motor_online[i] = state->online;
   }
   for (uint8_t i = 0; i < 4; i++)
-    leg_online[i] = Legs[i]->online;
+    leg_online[i] = Legs[i]->has_online_motor;
   __enable_irq();
 }
 
