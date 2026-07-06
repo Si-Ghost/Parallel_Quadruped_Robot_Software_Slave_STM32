@@ -13,20 +13,20 @@ extern volatile uint32_t last_valid_packet_tick;
 
 typedef struct
 {
-    UART_HandleTypeDef *uart;                  /* USART6 handle connected to ESP32. */
-    uint8_t rx_buf[RX_BUF_SIZE];               /* ReceiveToIdle buffer for RC frames and text commands. */
-    uint8_t tx_buf[TX_IT_BUF_SIZE];            /* Shared interrupt TX buffer for ESP32 replies. */
-    volatile uint8_t tx_busy;                  /* Non-zero while HAL_UART_Transmit_IT is in flight. */
-    volatile uint8_t handshake_done;           /* ESP32 hello or a valid RC frame has been received. */
-    uint32_t last_hello_tick;                  /* Last ACK retry tick before handshake completes. */
+    UART_HandleTypeDef *uart;                  /* 连接 ESP32 的 USART6 句柄。 */
+    uint8_t rx_buf[RX_BUF_SIZE];               /* 接收缓冲区，承载遥控帧和文本指令。 */
+    uint8_t tx_buf[TX_IT_BUF_SIZE];            /* ESP32 回复共用的中断发送缓冲区。 */
+    volatile uint8_t tx_busy;                  /* HAL_UART_Transmit_IT 发送期间为非 0。 */
+    volatile uint8_t handshake_done;           /* 收到 ESP32 hello 或有效遥控帧后置位。 */
+    uint32_t last_hello_tick;                  /* 握手完成前，ACK 重试的上次时间戳。 */
 #if ESP32_LINK_ECHO_TEST
-    uint32_t last_echo_tick;                   /* Last echo diagnostic tick, used to throttle logs. */
+    uint32_t last_echo_tick;                   /* 回显调试的上次时间戳，用于限频。 */
 #endif
-    volatile uint32_t rx_count;                /* USART6 receive callback count for diagnostics. */
-    volatile uint16_t last_rx_size;            /* Byte count from the most recent receive event. */
-    volatile uint8_t rx_snapshot[RX_SNAPSHOT_SIZE]; /* First bytes from the most recent receive event. */
-    volatile uint16_t last_calc_crc;           /* CRC calculated for the most recent candidate RC frame. */
-    volatile uint16_t last_recv_crc;           /* CRC received in the most recent candidate RC frame. */
+    volatile uint32_t rx_count;                /* USART6 接收回调触发次数。 */
+    volatile uint16_t last_rx_size;            /* 最近一次接收事件的字节数。 */
+    volatile uint8_t rx_snapshot[RX_SNAPSHOT_SIZE]; /* 最近一次接收数据的前几字节快照。 */
+    volatile uint16_t last_calc_crc;           /* 最近一次候选遥控帧计算得到的 CRC。 */
+    volatile uint16_t last_recv_crc;           /* 最近一次候选遥控帧接收到的 CRC。 */
 } Communication_ContextTypeDef;
 
 static Communication_ContextTypeDef comm_ctx = {0};
@@ -407,13 +407,13 @@ void Communication_Init(UART_HandleTypeDef *huart)
 
 void Communication_RxCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
-    /* USART6 carries ESP32 RC frames and text debug commands. */
+    /* USART6 承载来自 ESP32 的遥控帧和文本调试指令。 */
     if (huart->Instance != USART6 || Size == 0) {
         restart_esp32_rx();
         return;
     }
 
-    /* Keep a small receive snapshot for optional echo diagnostics. */
+    /* 保留一小段接收快照，供可选回显调试使用。 */
     comm_ctx.rx_count++;
     comm_ctx.last_rx_size = Size;
     uint16_t snap_len = Size < RX_SNAPSHOT_SIZE ? Size : RX_SNAPSHOT_SIZE;
@@ -459,7 +459,7 @@ void Communication_NotifyTxComplete(void)
     comm_ctx.tx_busy = 0;
 }
 
-/* Interrupt TX helpers share comm_ctx.tx_buf, so callers silently drop while busy. */
+/* 中断发送共用 comm_ctx.tx_buf，忙碌时直接丢弃本次发送。 */
 void Communication_SendByte(uint8_t byte)
 {
     if (!comm_ctx.uart || comm_ctx.tx_busy)
@@ -550,7 +550,7 @@ void Communication_SendMotorAngles(void)
     }
 }
 
-/* Send compact per-motor handshake and target state for the ESP32 web UI. */
+/* 向 ESP32 网页端发送紧凑的电机握手与目标状态。 */
 void Communication_SendMotorStatus(void)
 {
     uint8_t motor_online[8];

@@ -12,16 +12,16 @@
 #define ESP32_HANDSHAKE_TIMEOUT_MS 3000
 #define ESP32_WATCHDOG_TIMEOUT_MS 500
 
-/* Set to 1 to echo UART6 receive status back to ESP32 for web-side link tests. */
+/* 设为 1 时，会把 UART6 接收状态回显给 ESP32，方便网页侧链路测试。 */
 #define ESP32_LINK_ECHO_TEST 0
 
 typedef struct {
-    int16_t ch0;  /* Centered RC channel 0, deadzone applied. */
-    int16_t ch1;  /* Centered RC channel 1, deadzone applied. */
-    int16_t ch2;  /* Centered RC channel 2, deadzone applied. */
-    int16_t ch3;  /* Centered RC channel 3, deadzone applied. */
-    uint8_t s1;   /* Primary mode switch from ESP32, valid range 1..3. */
-    uint8_t s2;   /* Secondary mode switch from ESP32, valid range 1..3. */
+    int16_t ch0;  /* 居中并处理过死区的遥控通道 0。 */
+    int16_t ch1;  /* 居中并处理过死区的遥控通道 1。 */
+    int16_t ch2;  /* 居中并处理过死区的遥控通道 2。 */
+    int16_t ch3;  /* 居中并处理过死区的遥控通道 3。 */
+    uint8_t s1;   /* 来自 ESP32 的主模式开关，合法范围 1..3。 */
+    uint8_t s2;   /* 来自 ESP32 的副模式开关，合法范围 1..3。 */
 } RC_DataTypeDef;
 
 void Communication_Init(UART_HandleTypeDef *huart);
