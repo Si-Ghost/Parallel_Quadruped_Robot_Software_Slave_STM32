@@ -8,7 +8,6 @@ extern RC_DataTypeDef rc_data;
 extern volatile uint32_t last_valid_packet_tick;
 
 static UART_HandleTypeDef *esp32_uart = NULL;
-static UART_HandleTypeDef *debug_uart = NULL;
 
 #define RX_BUF_SIZE 128
 static uint8_t rx_it_buf[RX_BUF_SIZE];
@@ -17,10 +16,6 @@ static uint8_t rx_it_buf[RX_BUF_SIZE];
 static uint8_t tx_it_buf[TX_IT_BUF_SIZE];
 static volatile uint8_t tx_it_busy = 0;
 
-#define DEBUG_RX_BUF_SIZE 256
-static uint8_t debug_rx_buf[DEBUG_RX_BUF_SIZE];
-
-static volatile uint8_t rc_data_updated = 0;
 static volatile uint8_t handshake_done = 0;
 static uint32_t last_hello_tick = 0;
 #if ESP32_LINK_ECHO_TEST
@@ -45,13 +40,6 @@ static const char motor_stop_all_cmd[] = "MOTOR_STOP_ALL";
 volatile uint32_t diag_usart6_rx_count = 0;   // USART6 RX 回调触发次数
 volatile uint16_t diag_last_rx_size   = 0;    // 最后一次收到的字节数
 volatile uint8_t  diag_rx_snapshot[16] = {0}; // 最后一次收到数据的前16字节快照
-
-static void send_debug_line(const char *str)
-{
-    if (debug_uart && str) {
-        HAL_UART_Transmit(debug_uart, (uint8_t *)str, strlen(str), 100);
-    }
-}
 
 static void restart_esp32_rx(void)
 {
@@ -115,13 +103,9 @@ static void handle_hello(const uint8_t *data, uint16_t len)
 
     for (uint16_t i = 0; i + sizeof(esp32_hello) - 1 <= len; i++) {
         if (memcmp(&data[i], esp32_hello, sizeof(esp32_hello) - 1) == 0) {
-            uint8_t first_handshake = !handshake_done;
             handshake_done = 1;
             last_hello_tick = HAL_GetTick();
             Communication_SendBytes((const uint8_t *)stm32_ack, sizeof(stm32_ack) - 1);
-            if (first_handshake) {
-                send_debug_line("[LINK] ESP32 handshake OK\r\n");
-            }
             return;
         }
     }
@@ -398,7 +382,6 @@ static int parse_frame(const uint8_t *data, uint16_t len)
 
         __disable_irq();
         rc_data = tmp;
-        rc_data_updated = 1;
         __enable_irq();
         handshake_done = 1;
         last_valid_packet_tick = HAL_GetTick();
@@ -420,25 +403,8 @@ void Communication_Init(UART_HandleTypeDef *huart)
     restart_esp32_rx();
 }
 
-void Communication_DebugInit(UART_HandleTypeDef *huart)
-{
-    debug_uart = huart;
-    /* 先发一条启动消息确认 UART1 TX 硬件通路 */
-    HAL_UART_Transmit(huart, (uint8_t *)"\r\n=== STM32 UART1 Debug Init OK ===\r\n", 38, 100);
-    HAL_UARTEx_ReceiveToIdle_IT(huart, debug_rx_buf, DEBUG_RX_BUF_SIZE);
-}
-
 void Communication_RxCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
-    /* UART1: 来自串口调试助手的数据 → 转发到 ESP32 */
-    if (huart->Instance == USART1)
-    {
-        if (Size > 0)
-            Communication_SendBytes(debug_rx_buf, Size);
-        HAL_UARTEx_ReceiveToIdle_IT(huart, debug_rx_buf, DEBUG_RX_BUF_SIZE);
-        return;
-    }
-
     /* USART6: 来自 ESP32 的遥控帧 */
     if (huart->Instance != USART6 || Size == 0) {
         restart_esp32_rx();
@@ -450,14 +416,6 @@ void Communication_RxCallback(UART_HandleTypeDef *huart, uint16_t Size)
     diag_last_rx_size = Size;
     uint16_t snap_len = Size < 16 ? Size : 16;
     memcpy((void *)diag_rx_snapshot, rx_it_buf, snap_len);
-
-#if ESP32_LINK_BRIDGE_TEST
-    if (debug_uart) {
-        HAL_UART_Transmit(debug_uart, (uint8_t *)"[USART6<-] ", 11, 20);
-        HAL_UART_Transmit(debug_uart, rx_it_buf, Size, 100);
-        HAL_UART_Transmit(debug_uart, (uint8_t *)"\r\n", 2, 20);
-    }
-#endif
 
     handle_hello(rx_it_buf, Size);
     handle_motor_debug_command(rx_it_buf, Size);
@@ -619,47 +577,4 @@ void Communication_SendMotorStatus(void)
     if (len > 0 && len < (int)sizeof(buf)) {
         Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
     }
-}
-
-void Communication_DumpDiag(void)
-{
-    if (!debug_uart)
-        return;
-
-    char buf[160];
-    int len = snprintf(buf, sizeof(buf),
-        "[DIAG] USART6 RX cnt=%lu last_size=%u snapshot: "
-        "%02X %02X %02X %02X %02X %02X %02X %02X "
-        "%02X %02X %02X %02X %02X %02X %02X %02X\r\n",
-        diag_usart6_rx_count,
-        (unsigned int)diag_last_rx_size,
-        diag_rx_snapshot[0], diag_rx_snapshot[1],
-        diag_rx_snapshot[2], diag_rx_snapshot[3],
-        diag_rx_snapshot[4], diag_rx_snapshot[5],
-        diag_rx_snapshot[6], diag_rx_snapshot[7],
-        diag_rx_snapshot[8], diag_rx_snapshot[9],
-        diag_rx_snapshot[10], diag_rx_snapshot[11],
-        diag_rx_snapshot[12], diag_rx_snapshot[13],
-        diag_rx_snapshot[14], diag_rx_snapshot[15]);
-    if (len > 0)
-        HAL_UART_Transmit(debug_uart, (uint8_t *)buf, len, 100);
-}
-
-/* ---- 向 UART1 打印遥控数据（主循环调用，非 ISR 上下文） ---- */
-void Communication_PrintRCData(void)
-{
-    if (!debug_uart || !rc_data_updated)
-        return;
-
-    __disable_irq();
-    rc_data_updated = 0;
-    RC_DataTypeDef tmp = rc_data;
-    __enable_irq();
-
-    char buf[128];
-    int len = snprintf(buf, sizeof(buf),
-        "RC: ch0=%+5d ch1=%+5d ch2=%+5d ch3=%+5d s1=%d s2=%d\r\n",
-        tmp.ch0, tmp.ch1, tmp.ch2, tmp.ch3, tmp.s1, tmp.s2);
-    if (len > 0)
-        HAL_UART_Transmit(debug_uart, (uint8_t *)buf, len, 100);
 }

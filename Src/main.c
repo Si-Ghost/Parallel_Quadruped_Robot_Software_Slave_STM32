@@ -117,11 +117,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 // UART接受满回调函数
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
-  if (huart->Instance == USART1)
-  {
-    // 调试串口
-  }
-  else if (huart->Instance == UART4)
+  if (huart->Instance == UART4)
   {
     // IMU
   }
@@ -145,11 +141,7 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
-  if (huart->Instance == USART1)
-  {
-    Communication_RxCallback(huart, Size);
-  }
-  else if (huart->Instance == UART4)
+  if (huart->Instance == UART4)
   {
     // IMU
   }
@@ -214,22 +206,13 @@ int main(void)
 
   // 初始化ESP32通信（USART6 DMA接收）
   Communication_Init(&huart6);
-  // 初始化调试串口UART1（中断接收，用于双向转发测试）
-  Communication_DebugInit(&huart1);
   Leg_Control_InitSafe();
 
   // 等待ESP32握手（收到第一包有效数据），LED闪烁指示等待状态
-  uint32_t diag_tick = 0;
   while (!Communication_IsHandshakeDone())
   {
     HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
     HAL_Delay(200);
-    // 每秒输出一次诊断信息到 UART1
-    if (HAL_GetTick() - diag_tick >= 1000)
-    {
-      diag_tick = HAL_GetTick();
-      Communication_DumpDiag();
-    }
   }
   HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET); // 握手成功，LED常亮
 
@@ -265,9 +248,6 @@ int main(void)
       }
 
     }
-
-    // 有新遥控数据时通过 UART1 发送到串口调试助手
-    Communication_PrintRCData();
 
     /* USER CODE END WHILE */
 
