@@ -24,8 +24,9 @@ extern UART_HandleTypeDef huart8;
 #define LEG_SERVICE_PERIOD_MS       50U
 #define LEG_WEB_ANGLE_MIN_RAD      -1.50f
 #define LEG_WEB_ANGLE_MAX_RAD       1.50f
-#define LEG_WEB_SPEED_KP            0.6f
-#define LEG_WEB_SPEED_LIMIT_RAD_S   0.8f
+#define LEG_WEB_SPEED_KP            0.8f
+#define LEG_WEB_SPEED_MIN_RAD_S     0.8f
+#define LEG_WEB_SPEED_LIMIT_RAD_S   1.2f
 #define LEG_WEB_STOP_ERROR_RAD      0.02f
 #define LEG_WEB_KP                  0.0f
 #define LEG_WEB_KW                  0.05f
@@ -198,11 +199,19 @@ static int apply_debug_target(uint8_t motor_index, uint8_t force_log)
 
   cmd->mode = 1;
   cmd->T = 0.0f;
-  cmd->W = motor_target_active[motor_index] ?
-           clampf(error * LEG_WEB_SPEED_KP,
-                  -LEG_WEB_SPEED_LIMIT_RAD_S,
-                  LEG_WEB_SPEED_LIMIT_RAD_S) :
-           0.0f;
+  if (motor_target_active[motor_index])
+  {
+    float speed = clampf(error * LEG_WEB_SPEED_KP,
+                         -LEG_WEB_SPEED_LIMIT_RAD_S,
+                         LEG_WEB_SPEED_LIMIT_RAD_S);
+    if (absf_local(speed) < LEG_WEB_SPEED_MIN_RAD_S)
+      speed = (error >= 0.0f) ? LEG_WEB_SPEED_MIN_RAD_S : -LEG_WEB_SPEED_MIN_RAD_S;
+    cmd->W = speed;
+  }
+  else
+  {
+    cmd->W = 0.0f;
+  }
   cmd->Pos = desired;
   cmd->K_P = LEG_WEB_KP;
   cmd->K_W = LEG_WEB_KW;
