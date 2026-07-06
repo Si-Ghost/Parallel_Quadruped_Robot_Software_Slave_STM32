@@ -39,18 +39,6 @@ extern UART_HandleTypeDef huart8;
 #define LEG_DEBUG_LOG_PERIOD_MS     250U
 #define LEG_IO_ERROR_LOG_PERIOD_MS  1000U
 
-#define LEG_HS_OK                   0U
-#define LEG_HS_TIMEOUT              1U
-#define LEG_HS_UART_ERROR           2U
-#define LEG_HS_BAD_ID               3U
-
-#define LEG_TARGET_IDLE             0U
-#define LEG_TARGET_ACTIVE           1U
-#define LEG_TARGET_DONE             2U
-#define LEG_TARGET_TIMEOUT          3U
-#define LEG_TARGET_STALL            4U
-#define LEG_TARGET_STOPPED          5U
-
 static uint32_t last_service_tick = 0;
 static volatile uint8_t handshake_requested = 0;
 
@@ -103,12 +91,12 @@ static void reset_motor_runtime_state(Motor_RuntimeStateTypeDef *state)
     return;
 
   state->angle = 0.0f;
-  state->angle_valid = 0;
-  state->online = 0;
-  state->handshake_error = LEG_HS_TIMEOUT;
+  state->angle_valid = Motor_Angle_Invalid;
+  state->online = Motor_Offline;
+  state->handshake_status = Motor_Handshake_Timeout;
   state->target_offset = 0.0f;
-  state->target_active = 0;
-  state->target_result = LEG_TARGET_IDLE;
+  state->target_active = Motor_Target_Inactive;
+  state->target_result = Motor_Target_Idle;
   state->target_start_tick = 0;
   state->target_progress_tick = 0;
   state->target_last_abs_error = 0.0f;
@@ -199,7 +187,7 @@ static void log_debug_target(uint8_t motor_index, const char *tag, float desired
     Communication_SendString(buf);
 }
 
-static void stop_debug_target(uint8_t motor_index, uint8_t result)
+static void stop_debug_target(uint8_t motor_index, Motor_TargetResultTypeDef result)
 {
   if (motor_index >= 8)
     return;
@@ -209,7 +197,7 @@ static void stop_debug_target(uint8_t motor_index, uint8_t result)
   MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
   Motor_RuntimeStateTypeDef *state = motor_state_from_index(motor_index);
 
-  state->target_active = 0;
+  state->target_active = Motor_Target_Inactive;
   state->target_result = result;
   state->target_start_tick = 0;
   state->target_progress_tick = 0;
@@ -267,11 +255,11 @@ static int apply_debug_target(uint8_t motor_index, uint8_t force_log)
   {
     if (abs_error <= LEG_WEB_STOP_ERROR_RAD)
     {
-      stop_debug_target(motor_index, LEG_TARGET_DONE);
+      stop_debug_target(motor_index, Motor_Target_Done);
     }
     else if ((now - state->target_start_tick) >= LEG_WEB_TARGET_TIMEOUT_MS)
     {
-      stop_debug_target(motor_index, LEG_TARGET_TIMEOUT);
+      stop_debug_target(motor_index, Motor_Target_Timeout);
     }
     else if ((state->target_last_abs_error - abs_error) >= LEG_WEB_STALL_PROGRESS_RAD)
     {
@@ -281,7 +269,7 @@ static int apply_debug_target(uint8_t motor_index, uint8_t force_log)
     else if ((now - state->target_start_tick) >= LEG_WEB_STALL_GRACE_MS &&
              (now - state->target_progress_tick) >= LEG_WEB_NO_PROGRESS_MS)
     {
-      stop_debug_target(motor_index, LEG_TARGET_STALL);
+      stop_debug_target(motor_index, Motor_Target_Stall);
     }
   }
 
@@ -379,7 +367,7 @@ void Leg_Control_InitSafe(void)
       Legs[leg]->motor_data[motor].correct = 0;
       reset_motor_runtime_state(&Legs[leg]->motor_state[motor]);
     }
-    Legs[leg]->online = 0;
+    Legs[leg]->online = Motor_Offline;
   }
 }
 
@@ -392,7 +380,7 @@ void Leg_Control_Handshake(void)
 
   for (uint8_t leg = 0; leg < 4; leg++)
   {
-    Legs[leg]->online = 0;
+    Legs[leg]->online = Motor_Offline;
 
     for (uint8_t motor = 0; motor < 2; motor++)
     {
@@ -416,9 +404,9 @@ void Leg_Control_Handshake(void)
                                                 Legs[leg]->huartx);
         if (ret == HAL_OK && fbk->correct && fbk->motor_id == motor)
         {
-          state->online = 1;
-          state->angle_valid = 1;
-          state->handshake_error = LEG_HS_OK;
+          state->online = Motor_Online;
+          state->angle_valid = Motor_Angle_Valid;
+          state->handshake_status = Motor_Handshake_Ok;
           state->angle = fbk->Pos;
           Legs[leg]->p_init[motor] = fbk->Pos;
           cmd->Pos = fbk->Pos;
@@ -427,20 +415,20 @@ void Leg_Control_Handshake(void)
         }
         else if (ret == HAL_TIMEOUT)
         {
-          state->handshake_error = LEG_HS_TIMEOUT;
+          state->handshake_status = Motor_Handshake_Timeout;
         }
         else if (ret == HAL_OK)
         {
-          state->handshake_error = LEG_HS_BAD_ID;
+          state->handshake_status = Motor_Handshake_BadId;
         }
         else
         {
-          state->handshake_error = LEG_HS_UART_ERROR;
+          state->handshake_status = Motor_Handshake_UartError;
         }
       }
     }
 
-    Legs[leg]->online = (motor_is_online(leg, 0) || motor_is_online(leg, 1)) ? 1 : 0;
+    Legs[leg]->online = (motor_is_online(leg, 0) || motor_is_online(leg, 1)) ? Motor_Online : Motor_Offline;
     Legs[leg]->Leg_Status = Leg_Idle;
     HAL_GPIO_WritePin(Legs[leg]->GPIOx, Legs[leg]->GPIO_Pin, GPIO_PIN_RESET);
   }
@@ -471,11 +459,11 @@ static void poll_online_motor(uint8_t leg, uint8_t motor)
   if (ret == HAL_OK && fbk->correct && fbk->motor_id == motor)
   {
     state->angle = fbk->Pos;
-    state->angle_valid = 1;
+    state->angle_valid = Motor_Angle_Valid;
   }
   else
   {
-    state->angle_valid = 0;
+    state->angle_valid = Motor_Angle_Invalid;
     log_motor_io_error(idx, ret, fbk);
   }
 
@@ -520,8 +508,8 @@ int Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad)
     return 0;
 
   state->target_offset = clampf(angle_rad, LEG_WEB_ANGLE_MIN_RAD, LEG_WEB_ANGLE_MAX_RAD);
-  state->target_active = 1;
-  state->target_result = LEG_TARGET_ACTIVE;
+  state->target_active = Motor_Target_Active;
+  state->target_result = Motor_Target_Running;
   state->target_start_tick = HAL_GetTick();
   state->target_progress_tick = state->target_start_tick;
   state->target_last_abs_error =
@@ -532,7 +520,7 @@ int Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad)
 
 void Leg_Control_StopAllDebugTargets(uint8_t reason)
 {
-  uint8_t result = (reason == 0U) ? LEG_TARGET_STOPPED : reason;
+  Motor_TargetResultTypeDef result = (reason == 0U) ? Motor_Target_Stopped : (Motor_TargetResultTypeDef)reason;
 
   for (uint8_t idx = 0; idx < 8; idx++)
   {
@@ -571,7 +559,7 @@ void Leg_Control_GetHandshakeErrors(uint8_t motor_error[8])
   for (uint8_t i = 0; i < 8; i++)
   {
     Motor_RuntimeStateTypeDef *state = motor_state_from_index(i);
-    motor_error[i] = state->handshake_error;
+    motor_error[i] = state->handshake_status;
   }
   __enable_irq();
 }
@@ -625,13 +613,13 @@ void Leg_Rx_Handler(Leg_HandlerTypeDef *hleg, uint16_t Size)
       {
         Motor_RuntimeStateTypeDef *state = motor_state_from_index(idx);
         state->angle = hleg->motor_data[0].Pos;
-        state->angle_valid = (state->online && hleg->motor_data[0].correct) ? 1 : 0;
+        state->angle_valid = (state->online && hleg->motor_data[0].correct) ? Motor_Angle_Valid : Motor_Angle_Invalid;
       }
     }
     else if (idx < 8)
     {
       Motor_RuntimeStateTypeDef *state = motor_state_from_index(idx);
-      state->angle_valid = 0;
+      state->angle_valid = Motor_Angle_Invalid;
     }
 
     if (leg < 4 && motor_is_online(leg, 1))
@@ -660,13 +648,13 @@ void Leg_Rx_Handler(Leg_HandlerTypeDef *hleg, uint16_t Size)
       {
         Motor_RuntimeStateTypeDef *state = motor_state_from_index(idx);
         state->angle = hleg->motor_data[1].Pos;
-        state->angle_valid = (state->online && hleg->motor_data[1].correct) ? 1 : 0;
+        state->angle_valid = (state->online && hleg->motor_data[1].correct) ? Motor_Angle_Valid : Motor_Angle_Invalid;
       }
     }
     else if (idx < 8)
     {
       Motor_RuntimeStateTypeDef *state = motor_state_from_index(idx);
-      state->angle_valid = 0;
+      state->angle_valid = Motor_Angle_Invalid;
     }
 
     hleg->Leg_Status = Leg_Done;

@@ -22,20 +22,56 @@ typedef enum
   Leg_Done
 } Leg_StatusTypeDef;
 
+typedef enum
+{
+  Motor_Angle_Invalid = 0,
+  Motor_Angle_Valid = 1
+} Motor_AngleValidTypeDef;
+
+typedef enum
+{
+  Motor_Offline = 0,
+  Motor_Online = 1
+} Motor_OnlineStateTypeDef;
+
+typedef enum
+{
+  Motor_Handshake_Ok = 0,
+  Motor_Handshake_Timeout = 1,
+  Motor_Handshake_UartError = 2,
+  Motor_Handshake_BadId = 3
+} Motor_HandshakeStatusTypeDef;
+
+typedef enum
+{
+  Motor_Target_Inactive = 0,
+  Motor_Target_Active = 1
+} Motor_TargetActiveTypeDef;
+
+typedef enum
+{
+  Motor_Target_Idle = 0,
+  Motor_Target_Running = 1,
+  Motor_Target_Done = 2,
+  Motor_Target_Timeout = 3,
+  Motor_Target_Stall = 4,
+  Motor_Target_Stopped = 5
+} Motor_TargetResultTypeDef;
+
 typedef struct
 {
-  float angle;
-  uint8_t angle_valid;
-  uint8_t online;
-  uint8_t handshake_error;
-  float target_offset;
-  uint8_t target_active;
-  uint8_t target_result;
-  uint32_t target_start_tick;
-  uint32_t target_progress_tick;
-  float target_last_abs_error;
-  uint32_t debug_last_log_tick;
-  uint32_t io_error_last_log_tick;
+  float angle;                                      // Latest feedback angle, rotor side, rad.
+  Motor_AngleValidTypeDef angle_valid;              // Whether angle contains a fresh valid feedback sample.
+  Motor_OnlineStateTypeDef online;                  // Whether this motor passed the latest handshake.
+  Motor_HandshakeStatusTypeDef handshake_status;    // Result of the latest handshake attempt.
+  float target_offset;                              // Web target offset from handshake angle, rotor side, rad.
+  Motor_TargetActiveTypeDef target_active;          // Whether a debug target is currently being driven.
+  Motor_TargetResultTypeDef target_result;          // Last debug target outcome reported to ESP32/Web.
+  uint32_t target_start_tick;                       // HAL tick when the current target started.
+  uint32_t target_progress_tick;                    // HAL tick when target error last improved enough.
+  float target_last_abs_error;                      // Error used for stall progress detection.
+  uint32_t debug_last_log_tick;                     // Log throttle tick for target command debug output.
+  uint32_t io_error_last_log_tick;                  // Log throttle tick for motor I/O errors.
 } Motor_RuntimeStateTypeDef;
 
 typedef struct
@@ -48,7 +84,7 @@ typedef struct
   uint16_t GPIO_Pin;
   UART_HandleTypeDef* huartx;
   Leg_StatusTypeDef Leg_Status;
-  uint8_t online;
+  Motor_OnlineStateTypeDef online;
 } Leg_HandlerTypeDef;
 
 void Leg_Control_Start(void);
