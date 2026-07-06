@@ -24,9 +24,11 @@ extern UART_HandleTypeDef huart8;
 #define LEG_SERVICE_PERIOD_MS       50U
 #define LEG_WEB_ANGLE_MIN_RAD      -1.50f
 #define LEG_WEB_ANGLE_MAX_RAD       1.50f
-#define LEG_WEB_MAX_STEP_RAD        0.15f
-#define LEG_WEB_KP                  0.8f
-#define LEG_WEB_KW                  0.01f
+#define LEG_WEB_SPEED_KP            0.6f
+#define LEG_WEB_SPEED_LIMIT_RAD_S   0.8f
+#define LEG_WEB_STOP_ERROR_RAD      0.02f
+#define LEG_WEB_KP                  0.0f
+#define LEG_WEB_KW                  0.05f
 #define LEG_HANDSHAKE_KW            0.05f
 #define LEG_HANDSHAKE_RETRY         2U
 #define LEG_DEBUG_LOG_PERIOD_MS     250U
@@ -52,6 +54,11 @@ static float clampf(float value, float min_value, float max_value)
   if (value < min_value) return min_value;
   if (value > max_value) return max_value;
   return value;
+}
+
+static float absf_local(float value)
+{
+  return value < 0.0f ? -value : value;
 }
 
 static uint8_t leg_index_from_handle(Leg_HandlerTypeDef *hleg)
@@ -133,6 +140,8 @@ static void log_debug_target(uint8_t motor_index, const char *tag, float desired
   len = append_fixed4(buf, sizeof(buf), len, motor_target_offset[motor_index]);
   if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " cmd=");
   len = append_fixed4(buf, sizeof(buf), len, cmd->Pos);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " spd=");
+  len = append_fixed4(buf, sizeof(buf), len, cmd->W);
   if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " target=");
   len = append_fixed4(buf, sizeof(buf), len, desired);
   if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " fbk=");
@@ -142,8 +151,9 @@ static void log_debug_target(uint8_t motor_index, const char *tag, float desired
   if (len > 0)
   {
     int written = snprintf(&buf[len], sizeof(buf) - (size_t)len,
-                           " raw_pos=%ld raw_kp=%d raw_kw=%d active=%u\r\n",
+                           " raw_pos=%ld raw_spd=%d raw_kp=%d raw_kw=%d active=%u\r\n",
                            (long)cmd->motor_send_data.comd.pos_des,
+                           (int)cmd->motor_send_data.comd.spd_des,
                            (int)cmd->motor_send_data.comd.k_pos,
                            (int)cmd->motor_send_data.comd.k_spd,
                            motor_target_active[motor_index]);
@@ -166,24 +176,18 @@ static int apply_debug_target(uint8_t motor_index, uint8_t force_log)
   MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
 
   float desired = Legs[leg]->p_init[motor] + motor_target_offset[motor_index];
-  float delta = desired - cmd->Pos;
-  if (delta > LEG_WEB_MAX_STEP_RAD)
-  {
-    cmd->Pos += LEG_WEB_MAX_STEP_RAD;
-  }
-  else if (delta < -LEG_WEB_MAX_STEP_RAD)
-  {
-    cmd->Pos -= LEG_WEB_MAX_STEP_RAD;
-  }
-  else
-  {
-    cmd->Pos = desired;
+  float error = desired - motor_angles[motor_index];
+  if (absf_local(error) <= LEG_WEB_STOP_ERROR_RAD)
     motor_target_active[motor_index] = 0;
-  }
 
   cmd->mode = 1;
   cmd->T = 0.0f;
-  cmd->W = 0.0f;
+  cmd->W = motor_target_active[motor_index] ?
+           clampf(error * LEG_WEB_SPEED_KP,
+                  -LEG_WEB_SPEED_LIMIT_RAD_S,
+                  LEG_WEB_SPEED_LIMIT_RAD_S) :
+           0.0f;
+  cmd->Pos = desired;
   cmd->K_P = LEG_WEB_KP;
   cmd->K_W = LEG_WEB_KW;
   modify_data(cmd);
@@ -196,7 +200,7 @@ static int apply_debug_target(uint8_t motor_index, uint8_t force_log)
     log_debug_target(motor_index,
                      motor_target_active[motor_index] ? "step" : "done",
                      desired,
-                     desired - cmd->Pos);
+                     error);
   }
 
   return 1;
