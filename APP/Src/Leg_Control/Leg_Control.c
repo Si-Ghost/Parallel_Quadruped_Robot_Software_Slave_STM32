@@ -8,6 +8,7 @@
 
 #include "Leg_Control.h"
 #include "communication.h"
+#include <math.h>
 #include <stdio.h>
 
 extern Leg_HandlerTypeDef Left_Front_Leg;
@@ -38,6 +39,11 @@ extern UART_HandleTypeDef huart8;
 #define LEG_HANDSHAKE_RETRY         2U
 #define LEG_DEBUG_LOG_PERIOD_MS     250U
 #define LEG_IO_ERROR_LOG_PERIOD_MS  1000U
+#define LEG_LINK_L1_MM              138.0f
+#define LEG_LINK_L2_MM              279.0f
+#define LEG_REDUCTION_RATIO         6.33f
+#define LEG_PI                      3.14159265358979323846f
+#define LEG_KIN_EPSILON             0.000001f
 
 static uint32_t last_service_tick = 0;
 static volatile uint8_t handshake_requested = 0;
@@ -83,6 +89,17 @@ static Motor_RuntimeStateTypeDef *motor_state_from_index(uint8_t motor_index)
     return NULL;
 
   return motor_state_from_leg_motor(motor_index / 2U, motor_index % 2U);
+}
+
+static float normalized_motor_direction(float direction)
+{
+  return (direction < 0.0f) ? -1.0f : 1.0f;
+}
+
+static float joint_to_rotor_angle(const Leg_HandlerTypeDef *hleg, uint8_t motor, float joint_angle)
+{
+  float direction = normalized_motor_direction(hleg->motor_direction[motor]);
+  return hleg->rotor_zero_offset[motor] + direction * joint_angle * LEG_REDUCTION_RATIO;
 }
 
 static void reset_motor_runtime_state(Motor_RuntimeStateTypeDef *state)
@@ -354,6 +371,9 @@ void Leg_Control_InitSafe(void)
     for (uint8_t motor = 0; motor < 2; motor++)
     {
       MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
+      Legs[leg]->rotor_zero_offset[motor] = 0.0f;
+      Legs[leg]->motor_direction[motor] = 1.0f;
+
       cmd->id = motor;
       cmd->mode = 1;
       cmd->T = 0.0f;
@@ -574,6 +594,151 @@ void Leg_Control_GetTargetStates(uint8_t active[8], uint8_t result[8])
     result[i] = state->target_result;
   }
   __enable_irq();
+}
+
+int Leg_Control_SetZeroOffsets(uint8_t leg, const float rotor_zero_offset[2], const float motor_direction[2])
+{
+  if (leg >= 4 || rotor_zero_offset == NULL || motor_direction == NULL)
+    return 0;
+
+  __disable_irq();
+  for (uint8_t motor = 0; motor < 2; motor++)
+  {
+    Legs[leg]->rotor_zero_offset[motor] = rotor_zero_offset[motor];
+    Legs[leg]->motor_direction[motor] = normalized_motor_direction(motor_direction[motor]);
+  }
+  __enable_irq();
+  return 1;
+}
+
+int Leg_Control_SetCurrentPositionAsZero(uint8_t leg)
+{
+  if (leg >= 4)
+    return 0;
+
+  __disable_irq();
+  for (uint8_t motor = 0; motor < 2; motor++)
+  {
+    if (Legs[leg]->motor_state[motor].angle_valid != Motor_Angle_Valid)
+    {
+      __enable_irq();
+      return 0;
+    }
+  }
+
+  for (uint8_t motor = 0; motor < 2; motor++)
+  {
+    Legs[leg]->rotor_zero_offset[motor] = Legs[leg]->motor_state[motor].angle;
+  }
+  __enable_irq();
+  return 1;
+}
+
+int Leg_Control_GetJointAngles(uint8_t leg, Leg_JointAnglesTypeDef *angles, uint8_t valid[2])
+{
+  if (leg >= 4 || angles == NULL)
+    return 0;
+
+  float rotor_angle[2];
+  float rotor_zero_offset[2];
+  float motor_direction[2];
+  uint8_t angle_valid[2];
+
+  __disable_irq();
+  for (uint8_t motor = 0; motor < 2; motor++)
+  {
+    rotor_angle[motor] = Legs[leg]->motor_state[motor].angle;
+    rotor_zero_offset[motor] = Legs[leg]->rotor_zero_offset[motor];
+    motor_direction[motor] = Legs[leg]->motor_direction[motor];
+    angle_valid[motor] = Legs[leg]->motor_state[motor].angle_valid;
+  }
+  __enable_irq();
+
+  for (uint8_t motor = 0; motor < 2; motor++)
+  {
+    if (valid != NULL)
+      valid[motor] = angle_valid[motor];
+  }
+
+  angles->theta1 = normalized_motor_direction(motor_direction[0]) *
+                   (rotor_angle[0] - rotor_zero_offset[0]) / LEG_REDUCTION_RATIO;
+  angles->theta2 = normalized_motor_direction(motor_direction[1]) *
+                   (rotor_angle[1] - rotor_zero_offset[1]) / LEG_REDUCTION_RATIO;
+  return 1;
+}
+
+int Leg_Control_JointToRotorTargets(uint8_t leg, const Leg_JointAnglesTypeDef *angles, float rotor_targets[2])
+{
+  if (leg >= 4 || angles == NULL || rotor_targets == NULL)
+    return 0;
+
+  rotor_targets[0] = joint_to_rotor_angle(Legs[leg], 0, angles->theta1);
+  rotor_targets[1] = joint_to_rotor_angle(Legs[leg], 1, angles->theta2);
+  return 1;
+}
+
+int Leg_Kinematics_Forward(const Leg_JointAnglesTypeDef *angles, Leg_PointTypeDef *foot)
+{
+  if (angles == NULL || foot == NULL)
+    return 0;
+
+  float theta1 = angles->theta1;
+  float theta2 = angles->theta2;
+  float cos1 = cosf(theta1);
+  float cos2 = cosf(theta2);
+  float sin1 = sinf(theta1);
+  float sin2 = sinf(theta2);
+  float cos_sum = cosf(theta1 + theta2);
+  float d_sq = LEG_LINK_L1_MM * LEG_LINK_L1_MM * (2.0f + 2.0f * cos_sum);
+  if (d_sq <= LEG_KIN_EPSILON)
+    return 0;
+
+  float h_sq = LEG_LINK_L2_MM * LEG_LINK_L2_MM - 0.25f * d_sq;
+  if (h_sq < -LEG_KIN_EPSILON)
+    return 0;
+  if (h_sq < 0.0f)
+    h_sq = 0.0f;
+
+  float d = sqrtf(d_sq);
+  float h = sqrtf(h_sq);
+  float x_e = 0.5f * LEG_LINK_L1_MM * (cos2 - cos1);
+  float y_e = 0.5f * LEG_LINK_L1_MM * (sin1 + sin2);
+  float h_over_d = h / d;
+
+  foot->x = x_e + h_over_d * LEG_LINK_L1_MM * (sin1 - sin2);
+  foot->y = y_e + h_over_d * LEG_LINK_L1_MM * (cos1 + cos2);
+  return 1;
+}
+
+int Leg_Kinematics_Inverse(const Leg_PointTypeDef *foot, Leg_JointAnglesTypeDef *angles)
+{
+  if (foot == NULL || angles == NULL)
+    return 0;
+
+  float x = foot->x;
+  float y = foot->y;
+  float r_sq = x * x + y * y;
+  if (r_sq <= LEG_KIN_EPSILON)
+    return 0;
+
+  float r = sqrtf(r_sq);
+  float max_reach = LEG_LINK_L1_MM + LEG_LINK_L2_MM;
+  float min_reach = absf_local(LEG_LINK_L2_MM - LEG_LINK_L1_MM);
+  if (r > max_reach || r < min_reach)
+    return 0;
+
+  float cos_alpha = (LEG_LINK_L1_MM * LEG_LINK_L1_MM + r_sq - LEG_LINK_L2_MM * LEG_LINK_L2_MM) /
+                    (2.0f * LEG_LINK_L1_MM * r);
+  if (cos_alpha > 1.0f)
+    cos_alpha = 1.0f;
+  else if (cos_alpha < -1.0f)
+    cos_alpha = -1.0f;
+
+  float phi = atan2f(y, x);
+  float alpha = acosf(cos_alpha);
+  angles->theta2 = phi - alpha;
+  angles->theta1 = LEG_PI - alpha - phi;
+  return 1;
 }
 
 void Leg_Tx_Handler(Leg_HandlerTypeDef *hleg)

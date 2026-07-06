@@ -60,18 +60,30 @@ typedef enum
 
 typedef struct
 {
-  float angle;                                      // Latest feedback angle, rotor side, rad.
-  Motor_AngleValidTypeDef angle_valid;              // Whether angle contains a fresh valid feedback sample.
-  Motor_OnlineStateTypeDef online;                  // Whether this motor passed the latest handshake.
-  Motor_HandshakeStatusTypeDef handshake_status;    // Result of the latest handshake attempt.
-  float target_offset;                              // Web target offset from handshake angle, rotor side, rad.
-  Motor_TargetActiveTypeDef target_active;          // Whether a debug target is currently being driven.
-  Motor_TargetResultTypeDef target_result;          // Last debug target outcome reported to ESP32/Web.
-  uint32_t target_start_tick;                       // HAL tick when the current target started.
-  uint32_t target_progress_tick;                    // HAL tick when target error last improved enough.
-  float target_last_abs_error;                      // Error used for stall progress detection.
-  uint32_t debug_last_log_tick;                     // Log throttle tick for target command debug output.
-  uint32_t io_error_last_log_tick;                  // Log throttle tick for motor I/O errors.
+  float x;
+  float y;
+} Leg_PointTypeDef;
+
+typedef struct
+{
+  float theta1;                                      // 主动杆 AB 的机构角，单位 rad，对应 motor0。
+  float theta2;                                      // 主动杆 AD 的机构角，单位 rad，对应 motor1。
+} Leg_JointAnglesTypeDef;
+
+typedef struct
+{
+  float angle;                                      // 最新反馈角，电机转子侧，单位 rad。
+  Motor_AngleValidTypeDef angle_valid;              // 当前 angle 是否来自有效反馈。
+  Motor_OnlineStateTypeDef online;                  // 该电机是否通过最近一次握手。
+  Motor_HandshakeStatusTypeDef handshake_status;    // 最近一次握手结果。
+  float target_offset;                              // Web 调试目标，相对握手角的转子侧偏移，单位 rad。
+  Motor_TargetActiveTypeDef target_active;          // 当前是否正在执行 Web 调试目标。
+  Motor_TargetResultTypeDef target_result;          // 最近一次 Web 调试目标结果。
+  uint32_t target_start_tick;                       // 当前目标开始时的 HAL tick。
+  uint32_t target_progress_tick;                    // 目标误差最近一次明显改善时的 HAL tick。
+  float target_last_abs_error;                      // 用于堵转检测的上一次绝对误差。
+  uint32_t debug_last_log_tick;                     // 目标调试日志限频用 tick。
+  uint32_t io_error_last_log_tick;                  // 电机 I/O 错误日志限频用 tick。
 } Motor_RuntimeStateTypeDef;
 
 typedef struct
@@ -80,6 +92,8 @@ typedef struct
   MOTOR_recv motor_data[2];
   Motor_RuntimeStateTypeDef motor_state[2];
   float p_init[2];
+  float rotor_zero_offset[2];                       // 机构零位对应的电机转子侧角度，单位 rad。
+  float motor_direction[2];                         // 转子角正方向到机构角正方向的符号，取 1 或 -1。
   GPIO_TypeDef *GPIOx;
   uint16_t GPIO_Pin;
   UART_HandleTypeDef* huartx;
@@ -100,5 +114,11 @@ void Leg_Control_GetAngles(float angles[8], uint8_t valid[8]);
 void Leg_Control_GetOnline(uint8_t motor_online[8], uint8_t leg_online[4]);
 void Leg_Control_GetHandshakeErrors(uint8_t motor_error[8]);
 void Leg_Control_GetTargetStates(uint8_t active[8], uint8_t result[8]);
+int  Leg_Control_SetZeroOffsets(uint8_t leg, const float rotor_zero_offset[2], const float motor_direction[2]);
+int  Leg_Control_SetCurrentPositionAsZero(uint8_t leg);
+int  Leg_Control_GetJointAngles(uint8_t leg, Leg_JointAnglesTypeDef *angles, uint8_t valid[2]);
+int  Leg_Control_JointToRotorTargets(uint8_t leg, const Leg_JointAnglesTypeDef *angles, float rotor_targets[2]);
+int  Leg_Kinematics_Forward(const Leg_JointAnglesTypeDef *angles, Leg_PointTypeDef *foot);
+int  Leg_Kinematics_Inverse(const Leg_PointTypeDef *foot, Leg_JointAnglesTypeDef *angles);
 
 #endif //PARALLEL_QUADRUPED_ROBOT_STM32_LEG_CONTROL_H
