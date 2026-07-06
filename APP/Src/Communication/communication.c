@@ -125,6 +125,104 @@ static void handle_hello(const uint8_t *data, uint16_t len)
     }
 }
 
+static const char *skip_spaces(const char *p)
+{
+    while (*p == ' ' || *p == '\t')
+        p++;
+    return p;
+}
+
+static int parse_int_value(const char **text, int *value)
+{
+    const char *p = skip_spaces(*text);
+    int sign = 1;
+    int result = 0;
+    int digits = 0;
+
+    if (*p == '-') {
+        sign = -1;
+        p++;
+    } else if (*p == '+') {
+        p++;
+    }
+
+    while (*p >= '0' && *p <= '9') {
+        result = result * 10 + (*p - '0');
+        p++;
+        digits++;
+    }
+
+    if (digits == 0)
+        return 0;
+
+    *value = sign * result;
+    *text = p;
+    return 1;
+}
+
+static int parse_decimal_value(const char **text, float *value)
+{
+    const char *p = skip_spaces(*text);
+    int sign = 1;
+    int32_t whole = 0;
+    int32_t frac = 0;
+    int32_t scale = 1;
+    int digits = 0;
+
+    if (*p == '-') {
+        sign = -1;
+        p++;
+    } else if (*p == '+') {
+        p++;
+    }
+
+    while (*p >= '0' && *p <= '9') {
+        whole = whole * 10 + (*p - '0');
+        p++;
+        digits++;
+    }
+
+    if (*p == '.') {
+        p++;
+        while (*p >= '0' && *p <= '9') {
+            if (scale < 1000000) {
+                frac = frac * 10 + (*p - '0');
+                scale *= 10;
+            }
+            p++;
+            digits++;
+        }
+    }
+
+    if (digits == 0)
+        return 0;
+
+    *value = (float)sign * ((float)whole + ((float)frac / (float)scale));
+    *text = p;
+    return 1;
+}
+
+static int parse_motor_set_command(const char *cmd, int *motor, float *angle)
+{
+    const char prefix[] = "MOTOR_SET";
+    const char *p = cmd;
+
+    if (memcmp(p, prefix, sizeof(prefix) - 1) != 0)
+        return 0;
+
+    p += sizeof(prefix) - 1;
+    if (*p != ' ' && *p != '\t')
+        return 0;
+
+    if (!parse_int_value(&p, motor))
+        return 0;
+    if (!parse_decimal_value(&p, angle))
+        return 0;
+
+    p = skip_spaces(p);
+    return *p == '\0';
+}
+
 static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
 {
     if (len < sizeof(motor_set_cmd) - 1 &&
@@ -155,21 +253,34 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
                 }
             }
 
-            if (sscanf(cmd_buf, "MOTOR_SET %d %f", &motor, &angle) == 2) {
+            if (parse_motor_set_command(cmd_buf, &motor, &angle)) {
                 int accepted = 0;
+                char log_buf[96];
+                int log_len = snprintf(log_buf, sizeof(log_buf),
+                                       "MOTOR_SET_RX parsed motor=%d cmd=%s\r\n",
+                                       motor, cmd_buf);
+                if (log_len > 0 && log_len < (int)sizeof(log_buf)) {
+                    Communication_SendBytes((const uint8_t *)log_buf, (uint16_t)log_len);
+                }
+
                 if (motor >= 0 && motor < 8) {
                     accepted = Leg_Control_SetDebugAngle((uint8_t)motor, angle);
                 }
 
-                char log_buf[96];
-                int log_len = snprintf(log_buf, sizeof(log_buf),
-                                       "MOTOR_SET_RX accepted=%d motor=%d cmd=%s\r\n",
-                                       accepted, motor, cmd_buf);
-                if (log_len > 0 && log_len < (int)sizeof(log_buf)) {
+                if (!accepted) {
+                    log_len = snprintf(log_buf, sizeof(log_buf),
+                                       "MOTOR_SET_RX rejected motor=%d\r\n", motor);
+                }
+                if (!accepted && log_len > 0 && log_len < (int)sizeof(log_buf)) {
                     Communication_SendBytes((const uint8_t *)log_buf, (uint16_t)log_len);
                 }
             } else {
-                Communication_SendString("MOTOR_SET_RX parse_fail\r\n");
+                char log_buf[96];
+                int log_len = snprintf(log_buf, sizeof(log_buf),
+                                       "MOTOR_SET_RX parse_fail cmd=%s\r\n", cmd_buf);
+                if (log_len > 0 && log_len < (int)sizeof(log_buf)) {
+                    Communication_SendBytes((const uint8_t *)log_buf, (uint16_t)log_len);
+                }
             }
             return;
         }
