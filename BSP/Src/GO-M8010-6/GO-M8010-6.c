@@ -103,7 +103,7 @@ HAL_StatusTypeDef SERVO_Send_recv(MOTOR_send *pData, MOTOR_recv *rData, GPIO_Typ
 
 	//
     uint8_t *rp = (uint8_t *)&rData->motor_recv_data;
-    if((rp[0] == 0xFE || rp[0] == 0xFD) && rp[1] == 0xEE)
+    if(rp[0] == 0xFD && rp[1] == 0xEE)
     {
         rData->correct = 1;
         extract_data(rData);
