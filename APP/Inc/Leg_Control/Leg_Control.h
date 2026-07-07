@@ -66,8 +66,8 @@ typedef struct
 
 typedef struct
 {
-  float theta1;                                      // 主动杆 AB 的机构角，单位 rad，对应 motor0。
-  float theta2;                                      // 主动杆 AD 的机构角，单位 rad，对应 motor1。
+  float theta1;                                      // 主动杆 AB 的机构角，单位 rad，对应 motor1。
+  float theta2;                                      // 主动杆 AD 的机构角，单位 rad，对应 motor0。
 } Leg_JointAnglesTypeDef;
 
 typedef struct
@@ -116,7 +116,7 @@ void Leg_Control_GetHandshakeErrors(uint8_t motor_error[8]);
 void Leg_Control_GetTargetStates(uint8_t active[8], uint8_t result[8]);
 int  Leg_Control_SetZeroOffsets(uint8_t leg, const float rotor_zero_offset[2], const float motor_direction[2]);
 int  Leg_Control_SetCurrentPositionAsZero(uint8_t leg);
-int  Leg_Control_GetJointAngles(uint8_t leg, Leg_JointAnglesTypeDef *angles, uint8_t valid[2]);
+int  Leg_Control_GetJointAngles(uint8_t leg, Leg_JointAnglesTypeDef *angles, uint8_t theta_valid[2]);
 int  Leg_Control_JointToRotorTargets(uint8_t leg, const Leg_JointAnglesTypeDef *angles, float rotor_targets[2]);
 int  Leg_Kinematics_Forward(const Leg_JointAnglesTypeDef *angles, Leg_PointTypeDef *foot);
 int  Leg_Kinematics_Inverse(const Leg_PointTypeDef *foot, Leg_JointAnglesTypeDef *angles);

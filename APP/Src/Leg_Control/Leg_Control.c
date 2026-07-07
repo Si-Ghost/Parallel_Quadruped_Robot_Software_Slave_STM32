@@ -44,6 +44,8 @@ extern UART_HandleTypeDef huart8;
 #define LEG_REDUCTION_RATIO         6.33f
 #define LEG_PI                      3.14159265358979323846f
 #define LEG_KIN_EPSILON             0.000001f
+#define LEG_MOTOR_THETA1            1U
+#define LEG_MOTOR_THETA2            0U
 
 static uint32_t last_service_tick = 0;
 static volatile uint8_t handshake_requested = 0;
@@ -634,7 +636,7 @@ int Leg_Control_SetCurrentPositionAsZero(uint8_t leg)
   return 1;
 }
 
-int Leg_Control_GetJointAngles(uint8_t leg, Leg_JointAnglesTypeDef *angles, uint8_t valid[2])
+int Leg_Control_GetJointAngles(uint8_t leg, Leg_JointAnglesTypeDef *angles, uint8_t theta_valid[2])
 {
   if (leg >= 4 || angles == NULL)
     return 0;
@@ -654,16 +656,16 @@ int Leg_Control_GetJointAngles(uint8_t leg, Leg_JointAnglesTypeDef *angles, uint
   }
   __enable_irq();
 
-  for (uint8_t motor = 0; motor < 2; motor++)
+  if (theta_valid != NULL)
   {
-    if (valid != NULL)
-      valid[motor] = angle_valid[motor];
+    theta_valid[0] = angle_valid[LEG_MOTOR_THETA1];
+    theta_valid[1] = angle_valid[LEG_MOTOR_THETA2];
   }
 
-  angles->theta1 = normalized_motor_direction(motor_direction[0]) *
-                   (rotor_angle[0] - rotor_zero_offset[0]) / LEG_REDUCTION_RATIO;
-  angles->theta2 = normalized_motor_direction(motor_direction[1]) *
-                   (rotor_angle[1] - rotor_zero_offset[1]) / LEG_REDUCTION_RATIO;
+  angles->theta1 = normalized_motor_direction(motor_direction[LEG_MOTOR_THETA1]) *
+                   (rotor_angle[LEG_MOTOR_THETA1] - rotor_zero_offset[LEG_MOTOR_THETA1]) / LEG_REDUCTION_RATIO;
+  angles->theta2 = normalized_motor_direction(motor_direction[LEG_MOTOR_THETA2]) *
+                   (rotor_angle[LEG_MOTOR_THETA2] - rotor_zero_offset[LEG_MOTOR_THETA2]) / LEG_REDUCTION_RATIO;
   return 1;
 }
 
@@ -672,8 +674,8 @@ int Leg_Control_JointToRotorTargets(uint8_t leg, const Leg_JointAnglesTypeDef *a
   if (leg >= 4 || angles == NULL || rotor_targets == NULL)
     return 0;
 
-  rotor_targets[0] = joint_to_rotor_angle(Legs[leg], 0, angles->theta1);
-  rotor_targets[1] = joint_to_rotor_angle(Legs[leg], 1, angles->theta2);
+  rotor_targets[LEG_MOTOR_THETA1] = joint_to_rotor_angle(Legs[leg], LEG_MOTOR_THETA1, angles->theta1);
+  rotor_targets[LEG_MOTOR_THETA2] = joint_to_rotor_angle(Legs[leg], LEG_MOTOR_THETA2, angles->theta2);
   return 1;
 }
 
