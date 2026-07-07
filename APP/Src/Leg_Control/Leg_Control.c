@@ -39,8 +39,8 @@ extern UART_HandleTypeDef huart8;
 #define LEG_HANDSHAKE_RETRY         2U
 #define LEG_DEBUG_LOG_PERIOD_MS     250U
 #define LEG_IO_ERROR_LOG_PERIOD_MS  1000U
-#define LEG_LINK_L1_MM              138.0f
-#define LEG_LINK_L2_MM              279.0f
+#define LEG_LINK_L1_MM              130.0f
+#define LEG_LINK_L2_MM              260.0f
 #define LEG_REDUCTION_RATIO         6.33f
 #define LEG_PI                      3.14159265358979323846f
 #define LEG_KIN_EPSILON             0.000001f
