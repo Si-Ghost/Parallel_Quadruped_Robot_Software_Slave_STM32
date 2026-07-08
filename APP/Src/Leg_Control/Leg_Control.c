@@ -247,6 +247,10 @@ static void stop_debug_target(uint8_t motor_index, Motor_TargetResultTypeDef res
 
   uint8_t leg = motor_index / 2;
   uint8_t motor = motor_index % 2;
+  uint8_t paired_motor = motor ^ 1U;
+  uint8_t keep_leg_damping =
+      (result == Motor_Target_Done &&
+       Legs[leg]->motor_state[paired_motor].target_active == Motor_Target_Active) ? 1U : 0U;
   MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
   Motor_RuntimeStateTypeDef *state = motor_state_from_index(motor_index);
 
@@ -260,7 +264,7 @@ static void stop_debug_target(uint8_t motor_index, Motor_TargetResultTypeDef res
   cmd->T = 0.0f;
   cmd->W = 0.0f;
   cmd->K_P = 0.0f;
-  cmd->K_W = 0.0f;
+  cmd->K_W = keep_leg_damping ? LEG_WEB_KW : 0.0f;
   cmd->Pos = state->angle;
   modify_data(cmd);
 
@@ -303,6 +307,18 @@ static void log_leg_finish_if_idle(uint8_t leg, Motor_TargetResultTypeDef result
       result != Motor_Target_Timeout &&
       result != Motor_Target_Stall)
     return;
+
+  for (uint8_t motor = 0; motor < 2; motor++)
+  {
+    MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
+    cmd->mode = 1;
+    cmd->T = 0.0f;
+    cmd->W = 0.0f;
+    cmd->K_P = 0.0f;
+    cmd->K_W = 0.0f;
+    cmd->Pos = Legs[leg]->motor_state[motor].angle;
+    modify_data(cmd);
+  }
 
   Leg_JointAnglesTypeDef angles;
   uint8_t valid[2] = {0, 0};
