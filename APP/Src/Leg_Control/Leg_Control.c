@@ -35,6 +35,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_FOOT_NUDGE_MAX_MM       15.0f
 #define LEG_FOOT_NUDGE_ROTOR_RAD    0.65f
 #define LEG_TRACE_POINT_COUNT       4U
+#define LEG_ALL_MICRO_DY_MM         3.0f
 #define LEG_WEB_KP                  2.0f
 #define LEG_WEB_KW                  0.15f
 #define LEG_WEB_T_FF                0.0f
@@ -67,11 +68,21 @@ typedef struct
   Leg_PointTypeDef base_foot;
 } Leg_DebugTraceTypeDef;
 
+typedef struct
+{
+  uint8_t active;
+  uint8_t phase;
+  Leg_PointTypeDef base_foot[4];
+} Leg_AllMicroTypeDef;
+
 static Leg_DebugTraceTypeDef debug_trace = {0};
+static Leg_AllMicroTypeDef all_micro = {0};
 
 static void leg_abort_transfer(Leg_HandlerTypeDef *hleg);
 static void log_leg_finish_if_idle(uint8_t leg, Motor_TargetResultTypeDef result);
 static void service_debug_trace(void);
+static void service_all_micro(void);
+static void start_debug_offset(uint8_t motor_index, float offset);
 
 static const float default_rotor_zero_offset[4][2] = {
   {4.2988f, 3.4371f},  // LF: motor0(theta2), motor1(theta1)
@@ -355,6 +366,39 @@ static void log_trace_simple(const char *tag, uint8_t leg, uint8_t step, Motor_T
   char buf[80];
   int len = snprintf(buf, sizeof(buf), "LEG_TRACE %s leg=%u step=%u res=%u\r\n",
                      tag, leg, step, result);
+  if (len > 0 && len < (int)sizeof(buf))
+    Communication_SendString(buf);
+}
+
+static void log_all_micro_simple(const char *tag, uint8_t phase, Motor_TargetResultTypeDef result)
+{
+  char buf[80];
+  int len = snprintf(buf, sizeof(buf), "LEG_ALL_MICRO %s phase=%u res=%u\r\n",
+                     tag, phase, result);
+  if (len > 0 && len < (int)sizeof(buf))
+    Communication_SendString(buf);
+}
+
+static void log_all_micro_feet(const char *tag, uint8_t phase, Motor_TargetResultTypeDef result)
+{
+  Leg_PointTypeDef foot[4] = {0};
+  uint8_t ok[4] = {0};
+
+  for (uint8_t leg = 0; leg < 4; leg++)
+    ok[leg] = get_leg_current_foot(leg, &foot[leg]) ? 1U : 0U;
+
+  char buf[192];
+  int len = snprintf(buf, sizeof(buf), "LEG_ALL_MICRO %s phase=%u res=%u ok=%u%u%u%u y=",
+                     tag, phase, result, ok[0], ok[1], ok[2], ok[3]);
+  for (uint8_t leg = 0; leg < 4 && len > 0; leg++)
+  {
+    if (leg > 0)
+      len += snprintf(&buf[len], sizeof(buf) - (size_t)len, ",");
+    len = append_fixed4(buf, sizeof(buf), len, foot[leg].y);
+  }
+  if (len > 0)
+    len += snprintf(&buf[len], sizeof(buf) - (size_t)len, "\r\n");
+
   if (len > 0 && len < (int)sizeof(buf))
     Communication_SendString(buf);
 }
@@ -650,6 +694,134 @@ static void update_debug_targets(void)
   }
 }
 
+static int compute_foot_target_offsets(uint8_t leg, const Leg_PointTypeDef *target_foot, float offsets[2])
+{
+  if (leg >= 4 || target_foot == NULL || offsets == NULL)
+    return 0;
+
+  for (uint8_t motor = 0; motor < 2; motor++)
+  {
+    Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
+    if (state->online != Motor_Online || state->angle_valid != Motor_Angle_Valid)
+      return 0;
+
+    float home_zero_error = rotor_wrap_delta(Legs[leg]->p_init[motor],
+                                             Legs[leg]->rotor_zero_offset[motor]);
+    if (absf_local(home_zero_error) > LEG_ROTOR_ZERO_NEAR_RAD)
+      return 0;
+  }
+
+  Leg_JointAnglesTypeDef target_angles;
+  if (!Leg_Kinematics_Inverse(target_foot, &target_angles))
+    return 0;
+
+  float rotor_targets[2];
+  if (!Leg_Control_JointToRotorTargets(leg, &target_angles, rotor_targets))
+    return 0;
+
+  for (uint8_t motor = 0; motor < 2; motor++)
+  {
+    offsets[motor] = rotor_wrap_delta(rotor_targets[motor], Legs[leg]->p_init[motor]);
+    if (absf_local(offsets[motor]) > LEG_FOOT_NUDGE_ROTOR_RAD)
+      return 0;
+  }
+
+  return 1;
+}
+
+static int start_all_micro_phase(uint8_t phase)
+{
+  float offsets[4][2] = {0};
+
+  for (uint8_t leg = 0; leg < 4; leg++)
+  {
+    Leg_PointTypeDef target = all_micro.base_foot[leg];
+    if (phase == 0U)
+      target.y += LEG_ALL_MICRO_DY_MM;
+
+    if (!compute_foot_target_offsets(leg, &target, offsets[leg]))
+    {
+      log_all_micro_simple("reject_plan", phase, Motor_Target_Stopped);
+      return 0;
+    }
+  }
+
+  all_micro.phase = phase;
+  log_all_micro_feet(phase == 0U ? "start" : "return", phase, Motor_Target_Running);
+
+  for (uint8_t leg = 0; leg < 4; leg++)
+  {
+    for (uint8_t motor = 0; motor < 2; motor++)
+    {
+      uint8_t idx = motor_index_from_leg_motor(leg, motor);
+      start_debug_offset(idx, offsets[leg][motor]);
+      if (!apply_debug_target(idx, 0))
+      {
+        for (uint8_t stop_idx = 0; stop_idx < 8; stop_idx++)
+          stop_debug_target(stop_idx, Motor_Target_Stopped);
+        log_all_micro_simple("reject_apply", phase, Motor_Target_Stopped);
+        return 0;
+      }
+    }
+  }
+
+  return 1;
+}
+
+static void service_all_micro(void)
+{
+  if (!all_micro.active)
+    return;
+
+  uint8_t all_done = 1U;
+  Motor_TargetResultTypeDef bad_result = Motor_Target_Idle;
+  for (uint8_t idx = 0; idx < 8; idx++)
+  {
+    Motor_RuntimeStateTypeDef *state = motor_state_from_index(idx);
+    if (state == NULL)
+      continue;
+
+    if (state->target_active == Motor_Target_Active)
+      return;
+
+    if (state->target_result == Motor_Target_Stall ||
+        state->target_result == Motor_Target_Timeout ||
+        state->target_result == Motor_Target_Stopped)
+    {
+      bad_result = state->target_result;
+      break;
+    }
+
+    if (state->target_result != Motor_Target_Done)
+      all_done = 0U;
+  }
+
+  if (bad_result != Motor_Target_Idle)
+  {
+    log_all_micro_feet("abort", all_micro.phase, bad_result);
+    all_micro.active = 0U;
+    return;
+  }
+
+  if (!all_done)
+    return;
+
+  log_all_micro_feet("done", all_micro.phase, Motor_Target_Done);
+
+  if (all_micro.phase == 0U)
+  {
+    if (!start_all_micro_phase(1U))
+    {
+      all_micro.active = 0U;
+      log_all_micro_simple("abort_return", 1U, Motor_Target_Stopped);
+    }
+    return;
+  }
+
+  all_micro.active = 0U;
+  log_all_micro_feet("complete", all_micro.phase, Motor_Target_Done);
+}
+
 static void leg_abort_transfer(Leg_HandlerTypeDef *hleg)
 {
   if (hleg == NULL)
@@ -841,10 +1013,14 @@ void Leg_Control_Service(uint32_t now_ms)
   update_debug_targets();
   Leg_Control_Start();
   service_debug_trace();
+  service_all_micro();
 }
 
 int Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad)
 {
+  if (all_micro.active)
+    return 0;
+
   Motor_RuntimeStateTypeDef *state = motor_state_from_index(motor_index);
   if (state == NULL)
     return 0;
@@ -904,7 +1080,7 @@ static void log_leg_nudge_reject(uint8_t leg, const char *reason, uint8_t motor,
 
 int Leg_Control_SetDebugFootOffset(uint8_t leg, float dx_mm, float dy_mm)
 {
-  if (leg >= 4)
+  if (leg >= 4 || all_micro.active)
     return 0;
 
   dx_mm = clampf(dx_mm, -LEG_FOOT_NUDGE_MAX_MM, LEG_FOOT_NUDGE_MAX_MM);
@@ -1005,7 +1181,7 @@ int Leg_Control_SetDebugFootOffset(uint8_t leg, float dx_mm, float dy_mm)
 
 int Leg_Control_StartDebugTrace(uint8_t leg)
 {
-  if (leg >= 4 || debug_trace.active)
+  if (leg >= 4 || debug_trace.active || all_micro.active)
     return 0;
 
   for (uint8_t motor = 0; motor < 2; motor++)
@@ -1025,6 +1201,38 @@ int Leg_Control_StartDebugTrace(uint8_t leg)
   debug_trace.base_foot = current;
   log_trace_point("start", leg, 0U, &current, &current);
   return start_debug_trace_step();
+}
+
+int Leg_Control_StartAllMicroTest(void)
+{
+  if (debug_trace.active || all_micro.active)
+    return 0;
+
+  for (uint8_t idx = 0; idx < 8; idx++)
+  {
+    Motor_RuntimeStateTypeDef *state = motor_state_from_index(idx);
+    if (state == NULL || state->target_active == Motor_Target_Active)
+      return 0;
+  }
+
+  for (uint8_t leg = 0; leg < 4; leg++)
+  {
+    if (!get_leg_current_foot(leg, &all_micro.base_foot[leg]))
+    {
+      log_all_micro_simple("reject_fk", 0U, Motor_Target_Stopped);
+      return 0;
+    }
+  }
+
+  all_micro.active = 1U;
+  all_micro.phase = 0U;
+  if (!start_all_micro_phase(0U))
+  {
+    all_micro.active = 0U;
+    return 0;
+  }
+
+  return 1;
 }
 
 void Leg_Control_LogFootSnapshot(void)
@@ -1095,6 +1303,7 @@ void Leg_Control_StopAllDebugTargets(uint8_t reason)
 {
   Motor_TargetResultTypeDef result = (reason == 0U) ? Motor_Target_Stopped : (Motor_TargetResultTypeDef)reason;
   debug_trace.active = 0U;
+  all_micro.active = 0U;
 
   for (uint8_t idx = 0; idx < 8; idx++)
   {
