@@ -50,6 +50,20 @@ extern UART_HandleTypeDef huart8;
 static uint32_t last_service_tick = 0;
 static volatile uint8_t handshake_requested = 0;
 
+static const float default_rotor_zero_offset[4][2] = {
+  {-1.7875f,  3.7387f},  // LF: motor0(theta2), motor1(theta1)
+  {-2.8340f, -0.3158f},  // RF: motor0(theta2), motor1(theta1)
+  {-6.0408f, -4.7697f},  // LB: motor0(theta2), motor1(theta1)
+  { 1.5225f, -0.7772f},  // RB: motor0(theta2), motor1(theta1)
+};
+
+static const float default_motor_direction[4][2] = {
+  {1.0f, 1.0f},
+  {1.0f, 1.0f},
+  {1.0f, 1.0f},
+  {1.0f, 1.0f},
+};
+
 static float clampf(float value, float min_value, float max_value)
 {
   if (value < min_value) return min_value;
@@ -373,8 +387,8 @@ void Leg_Control_InitSafe(void)
     for (uint8_t motor = 0; motor < 2; motor++)
     {
       MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
-      Legs[leg]->rotor_zero_offset[motor] = 0.0f;
-      Legs[leg]->motor_direction[motor] = 1.0f;
+      Legs[leg]->rotor_zero_offset[motor] = default_rotor_zero_offset[leg][motor];
+      Legs[leg]->motor_direction[motor] = default_motor_direction[leg][motor];
 
       cmd->id = motor;
       cmd->mode = 1;
