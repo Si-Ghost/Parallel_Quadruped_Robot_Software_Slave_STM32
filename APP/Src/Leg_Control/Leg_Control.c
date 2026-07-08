@@ -8,6 +8,7 @@
 
 #include "Leg_Control.h"
 #include "communication.h"
+#include "pid.h"
 #include <math.h>
 #include <stdio.h>
 
@@ -48,6 +49,16 @@ extern UART_HandleTypeDef huart8;
 #define LEG_WEB_T_FF                0.0f
 #define LEG_HOLD_KP                 1.0f
 #define LEG_HOLD_KW                 0.15f
+#define LEG_CASCADE_ANGLE_KP        35.9f
+#define LEG_CASCADE_ANGLE_KI        0.0f
+#define LEG_CASCADE_ANGLE_KD        1.0f
+#define LEG_CASCADE_ANGLE_MAX_OUT   10000.0f
+#define LEG_CASCADE_ANGLE_MAX_IOUT  0.2f
+#define LEG_CASCADE_SPEED_KP        0.01f
+#define LEG_CASCADE_SPEED_KI        0.0006f
+#define LEG_CASCADE_SPEED_KD        0.0015f
+#define LEG_CASCADE_SPEED_MAX_OUT   3.50f
+#define LEG_CASCADE_SPEED_MAX_IOUT  0.2f
 #define LEG_HANDSHAKE_KW            0.05f
 #define LEG_HANDSHAKE_RETRY         2U
 #define LEG_DEBUG_LOG_PERIOD_MS     500U
@@ -103,6 +114,9 @@ static Leg_DebugTraceTypeDef debug_trace = {0};
 static Leg_AllMicroTypeDef all_micro = {0};
 static Leg_PrepPoseTypeDef prep_pose = {0};
 static Leg_SineTypeDef sine_test = {0};
+static PID_TypeDef cascade_angle_pid[8];
+static PID_TypeDef cascade_speed_pid[8];
+static uint8_t cascade_pid_inited = 0U;
 
 static void leg_abort_transfer(Leg_HandlerTypeDef *hleg);
 static void log_leg_finish_if_idle(uint8_t leg, Motor_TargetResultTypeDef result);
@@ -197,6 +211,7 @@ static void reset_motor_runtime_state(Motor_RuntimeStateTypeDef *state)
     return;
 
   state->angle = 0.0f;
+  state->speed = 0.0f;
   state->angle_valid = Motor_Angle_Invalid;
   state->online = Motor_Offline;
   state->handshake_status = Motor_Handshake_Timeout;
@@ -964,6 +979,20 @@ static void service_sine(void)
   if (!sine_test.active || sine_test.leg >= 4)
     return;
 
+  if (!cascade_pid_inited)
+  {
+    for (uint8_t i = 0; i < 8; i++)
+    {
+      PID_Init(&cascade_angle_pid[i], PID_Position, LEG_CASCADE_ANGLE_KP,
+               LEG_CASCADE_ANGLE_KI, LEG_CASCADE_ANGLE_KD,
+               LEG_CASCADE_ANGLE_MAX_OUT, LEG_CASCADE_ANGLE_MAX_IOUT);
+      PID_Init(&cascade_speed_pid[i], PID_Position, LEG_CASCADE_SPEED_KP,
+               LEG_CASCADE_SPEED_KI, LEG_CASCADE_SPEED_KD,
+               LEG_CASCADE_SPEED_MAX_OUT, LEG_CASCADE_SPEED_MAX_IOUT);
+    }
+    cascade_pid_inited = 1U;
+  }
+
   uint8_t leg = sine_test.leg;
   for (uint8_t motor = 0; motor < 2; motor++)
   {
@@ -993,22 +1022,43 @@ static void service_sine(void)
   }
 
   float rotor_targets[2];
+  float joint_targets[2];
+  float joint_actuals[2];
+  float joint_speeds[2];
+  float torques[2];
+  float speed_refs[2];
+
   for (uint8_t motor = 0; motor < 2; motor++)
   {
     float direction = normalized_motor_direction(Legs[leg]->motor_direction[motor]);
     float joint_angle = (motor == LEG_MOTOR_THETA1) ? target_angles.theta1 : target_angles.theta2;
     rotor_targets[motor] = Legs[leg]->rotor_zero_offset[motor] + direction * joint_angle * LEG_REDUCTION_RATIO;
+
+    Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
+    float error_from_zero = rotor_wrap_delta(state->angle, Legs[leg]->rotor_zero_offset[motor]);
+    joint_actuals[motor] = direction * error_from_zero / LEG_REDUCTION_RATIO;
+    joint_targets[motor] = joint_angle;
+    joint_speeds[motor] = direction * state->speed / LEG_REDUCTION_RATIO;
+  }
+
+  for (uint8_t motor = 0; motor < 2; motor++)
+  {
+    uint8_t idx = motor_index_from_leg_motor(leg, motor);
+    speed_refs[motor] = PID_Calculate(&cascade_angle_pid[idx],
+                                      joint_targets[motor], joint_actuals[motor]);
+    torques[motor] = PID_Calculate(&cascade_speed_pid[idx],
+                                   speed_refs[motor], joint_speeds[motor]);
   }
 
   for (uint8_t motor = 0; motor < 2; motor++)
   {
     MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
     cmd->mode = 1;
-    cmd->T = 0.0f;
+    cmd->T = torques[motor];
     cmd->W = 0.0f;
     cmd->Pos = rotor_targets[motor];
-    cmd->K_P = LEG_WEB_KP;
-    cmd->K_W = LEG_WEB_KW;
+    cmd->K_P = 0.0f;
+    cmd->K_W = 0.0f;
     modify_data(cmd);
   }
 
@@ -1018,20 +1068,23 @@ static void service_sine(void)
 
     for (uint8_t motor = 0; motor < 2; motor++)
     {
-      Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
-      float q_des = rotor_targets[motor];
-      float q_act = state->angle;
+      float q_des = joint_targets[motor];
+      float q_act = joint_actuals[motor];
       float error = q_des - q_act;
 
-      char buf[160];
+      char buf[192];
       int len = snprintf(buf, sizeof(buf), "LEG_SINE_LOG leg=%u m=%u t=", leg, motor);
       len = append_fixed4(buf, sizeof(buf), len, t);
-      if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " q_des=");
+      if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " jdes=");
       len = append_fixed4(buf, sizeof(buf), len, q_des);
-      if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " q_act=");
+      if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " jact=");
       len = append_fixed4(buf, sizeof(buf), len, q_act);
-      if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " err=");
+      if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " jerr=");
       len = append_fixed4(buf, sizeof(buf), len, error);
+      if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " spd=");
+      len = append_fixed4(buf, sizeof(buf), len, joint_speeds[motor]);
+      if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " tau=");
+      len = append_fixed4(buf, sizeof(buf), len, torques[motor]);
       if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " dy=");
       len = append_fixed4(buf, sizeof(buf), len, dy);
       if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, "\r\n");
@@ -1934,6 +1987,7 @@ void Leg_Rx_Handler(Leg_HandlerTypeDef *hleg, uint16_t Size)
       {
         Motor_RuntimeStateTypeDef *state = motor_state_from_index(idx);
         state->angle = hleg->motor_data[0].Pos;
+        state->speed = hleg->motor_data[0].W;
         state->angle_valid = (state->online && hleg->motor_data[0].correct) ? Motor_Angle_Valid : Motor_Angle_Invalid;
       }
     }
@@ -1969,6 +2023,7 @@ void Leg_Rx_Handler(Leg_HandlerTypeDef *hleg, uint16_t Size)
       {
         Motor_RuntimeStateTypeDef *state = motor_state_from_index(idx);
         state->angle = hleg->motor_data[1].Pos;
+        state->speed = hleg->motor_data[1].W;
         state->angle_valid = (state->online && hleg->motor_data[1].correct) ? Motor_Angle_Valid : Motor_Angle_Invalid;
       }
     }

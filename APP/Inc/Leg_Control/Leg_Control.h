@@ -73,6 +73,7 @@ typedef struct
 typedef struct
 {
   float angle;                                      // 最新反馈角，电机转子侧，单位 rad。
+  float speed;                                      // 最新反馈角速度，电机转子侧，单位 rad/s。
   Motor_AngleValidTypeDef angle_valid;              // 当前 angle 是否来自有效反馈。
   Motor_OnlineStateTypeDef online;                  // 该电机是否通过最近一次握手。
   Motor_HandshakeStatusTypeDef handshake_status;    // 最近一次握手结果。
