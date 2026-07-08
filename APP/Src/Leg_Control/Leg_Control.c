@@ -25,10 +25,10 @@ extern UART_HandleTypeDef huart8;
 #define LEG_SERVICE_PERIOD_MS       50U
 #define LEG_WEB_ANGLE_MIN_RAD      -1.50f
 #define LEG_WEB_ANGLE_MAX_RAD       1.50f
-#define LEG_WEB_SPEED_KP            0.8f
-#define LEG_WEB_SPEED_MIN_RAD_S     0.8f
-#define LEG_WEB_SPEED_LIMIT_RAD_S   1.2f
-#define LEG_WEB_STOP_ERROR_RAD      0.02f
+#define LEG_WEB_SPEED_KP            1.5f
+#define LEG_WEB_SPEED_MIN_RAD_S     0.25f
+#define LEG_WEB_SPEED_LIMIT_RAD_S   0.8f
+#define LEG_WEB_STOP_ERROR_RAD      0.08f
 #define LEG_WEB_TARGET_TIMEOUT_MS   30000U
 #define LEG_WEB_NO_PROGRESS_MS      4000U
 #define LEG_WEB_STALL_GRACE_MS      500U
@@ -39,7 +39,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_WEB_KW                  0.05f
 #define LEG_HANDSHAKE_KW            0.05f
 #define LEG_HANDSHAKE_RETRY         2U
-#define LEG_DEBUG_LOG_PERIOD_MS     250U
+#define LEG_DEBUG_LOG_PERIOD_MS     500U
 #define LEG_IO_ERROR_LOG_PERIOD_MS  1000U
 #define LEG_IO_ERROR_OFFLINE_COUNT  5U
 #define LEG_IO_RETRY_COUNT          1U
@@ -224,12 +224,13 @@ static void log_debug_target(uint8_t motor_index, const char *tag, float desired
   if (len > 0)
   {
     int written = snprintf(&buf[len], sizeof(buf) - (size_t)len,
-                           " raw_pos=%ld raw_spd=%d raw_kp=%d raw_kw=%d active=%u\r\n",
+                           " raw_pos=%ld raw_spd=%d raw_kp=%d raw_kw=%d active=%u result=%u\r\n",
                            (long)cmd->motor_send_data.comd.pos_des,
                            (int)cmd->motor_send_data.comd.spd_des,
                            (int)cmd->motor_send_data.comd.k_pos,
                            (int)cmd->motor_send_data.comd.k_spd,
-                           state->target_active);
+                           state->target_active,
+                           state->target_result);
     if (written < 0 || written >= (int)(sizeof(buf) - (size_t)len))
       return;
     len += written;
