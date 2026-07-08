@@ -43,11 +43,13 @@ extern UART_HandleTypeDef huart8;
 #define LEG_SINE_FREQ_MAX_HZ        2.0f
 #define LEG_SINE_FREQ_MIN_HZ        0.1f
 #define LEG_SINE_LOG_PERIOD_MS      200U
-#define LEG_TROT_LIFT_HEIGHT_MM     20.0f
+#define LEG_TROT_LIFT_HEIGHT_MM     40.0f
 #define LEG_TROT_START_POINT_MM     50.0f
 #define LEG_TROT_STEP_RATE_MS       400U
 #define LEG_TROT_STEP_CYCLE_MS      800U
 #define LEG_TROT_LOG_PERIOD_MS      500U
+#define LEG_TROT_KP                 6.0f
+#define LEG_TROT_KW                 0.35f
 #define LEG_WEB_KP                  2.0f
 #define LEG_WEB_KW                  0.15f
 #define LEG_WEB_T_FF                0.0f
@@ -1117,8 +1119,8 @@ static void service_trot(void)
       cmd->T = 0.0f;
       cmd->W = 0.0f;
       cmd->Pos = rotor_target;
-      cmd->K_P = LEG_WEB_KP;
-      cmd->K_W = LEG_WEB_KW;
+      cmd->K_P = LEG_TROT_KP;
+      cmd->K_W = LEG_TROT_KW;
       modify_data(cmd);
     }
   }
@@ -1685,8 +1687,8 @@ int Leg_Control_StartTrotTest(void)
                      (int)LEG_TROT_LIFT_HEIGHT_MM,
                      (int)(LEG_TROT_START_POINT_MM * 2.0f),
                      (int)LEG_TROT_STEP_RATE_MS,
-                     (int)(LEG_WEB_KP * 1000),
-                     (int)(LEG_WEB_KW * 1000));
+                     (int)(LEG_TROT_KP * 1000),
+                     (int)(LEG_TROT_KW * 1000));
   if (len > 0 && len < (int)sizeof(buf))
   {
     buf[len] = '\0';
