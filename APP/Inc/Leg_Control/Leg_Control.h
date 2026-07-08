@@ -115,6 +115,8 @@ void Leg_Control_GetAngles(float angles[8], uint8_t valid[8]);
 void Leg_Control_GetOnline(uint8_t motor_online[8], uint8_t leg_online[4]);
 void Leg_Control_GetHandshakeErrors(uint8_t motor_error[8]);
 void Leg_Control_GetTargetStates(uint8_t active[8], uint8_t result[8]);
+float Leg_Control_GetZeroThreshold(void);
+void Leg_Control_GetZeroCheck(float zero_error[8], uint8_t zero_ok[8], uint8_t *all_zero_ok);
 int  Leg_Control_SetZeroOffsets(uint8_t leg, const float rotor_zero_offset[2], const float motor_direction[2]);
 int  Leg_Control_SetCurrentPositionAsZero(uint8_t leg);
 int  Leg_Control_GetJointAngles(uint8_t leg, Leg_JointAnglesTypeDef *angles, uint8_t theta_valid[2]);

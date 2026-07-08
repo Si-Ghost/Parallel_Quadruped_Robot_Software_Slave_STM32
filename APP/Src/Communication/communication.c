@@ -550,6 +550,55 @@ void Communication_SendMotorAngles(void)
     }
 }
 
+static void Communication_SendMotorZero(void)
+{
+    float zero_error[8];
+    uint8_t zero_ok[8];
+    uint8_t all_zero_ok = 0;
+    Leg_Control_GetZeroCheck(zero_error, zero_ok, &all_zero_ok);
+
+    char buf[240];
+    int len = snprintf(buf, sizeof(buf), "MOTOR_ZERO ");
+    for (uint8_t i = 0; i < 8 && len > 0; i++) {
+        len = append_fixed4(buf, sizeof(buf), len, zero_error[i]);
+        if (len > 0) {
+            int written = snprintf(&buf[len], sizeof(buf) - (size_t)len,
+                                   "%c", (i == 7) ? ' ' : ',');
+            if (written < 0 || written >= (int)(sizeof(buf) - (size_t)len))
+                len = -1;
+            else
+                len += written;
+        }
+    }
+
+    if (len > 0) {
+        int written = snprintf(&buf[len], sizeof(buf) - (size_t)len,
+            "%u,%u,%u,%u,%u,%u,%u,%u %u ",
+            zero_ok[0], zero_ok[1], zero_ok[2], zero_ok[3],
+            zero_ok[4], zero_ok[5], zero_ok[6], zero_ok[7],
+            all_zero_ok);
+        if (written < 0 || written >= (int)(sizeof(buf) - (size_t)len))
+            len = -1;
+        else
+            len += written;
+    }
+
+    if (len > 0) {
+        len = append_fixed4(buf, sizeof(buf), len, Leg_Control_GetZeroThreshold());
+        if (len > 0) {
+            int written = snprintf(&buf[len], sizeof(buf) - (size_t)len, "\n");
+            if (written < 0 || written >= (int)(sizeof(buf) - (size_t)len))
+                len = -1;
+            else
+                len += written;
+        }
+    }
+
+    if (len > 0 && len < (int)sizeof(buf)) {
+        Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
+    }
+}
+
 /* 向 ESP32 网页端发送紧凑的电机握手与目标状态。 */
 void Communication_SendMotorStatus(void)
 {
@@ -579,4 +628,6 @@ void Communication_SendMotorStatus(void)
     if (len > 0 && len < (int)sizeof(buf)) {
         Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
     }
+
+    Communication_SendMotorZero();
 }

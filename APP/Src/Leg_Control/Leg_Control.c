@@ -45,7 +45,9 @@ extern UART_HandleTypeDef huart8;
 #define LEG_LINK_L2_MM              260.0f
 #define LEG_REDUCTION_RATIO         6.33f
 #define LEG_PI                      3.14159265358979323846f
+#define LEG_TWO_PI                  6.28318530717958647692f
 #define LEG_KIN_EPSILON             0.000001f
+#define LEG_ROTOR_ZERO_NEAR_RAD     0.50f
 #define LEG_MOTOR_THETA1            1U
 #define LEG_MOTOR_THETA2            0U
 
@@ -55,10 +57,10 @@ static volatile uint8_t handshake_requested = 0;
 static void leg_abort_transfer(Leg_HandlerTypeDef *hleg);
 
 static const float default_rotor_zero_offset[4][2] = {
-  {-1.7875f,  3.7387f},  // LF: motor0(theta2), motor1(theta1)
-  {-2.8340f, -0.3158f},  // RF: motor0(theta2), motor1(theta1)
-  {-6.0408f, -4.7697f},  // LB: motor0(theta2), motor1(theta1)
-  { 1.5225f, -0.7772f},  // RB: motor0(theta2), motor1(theta1)
+  {4.2988f, 3.4371f},  // LF: motor0(theta2), motor1(theta1)
+  {3.4235f, 5.9666f},  // RF: motor0(theta2), motor1(theta1)
+  {5.9979f, 1.0314f},  // LB: motor0(theta2), motor1(theta1)
+  {1.4003f, 5.2892f},  // RB: motor0(theta2), motor1(theta1)
 };
 
 static const float default_motor_direction[4][2] = {
@@ -78,6 +80,16 @@ static float clampf(float value, float min_value, float max_value)
 static float absf_local(float value)
 {
   return value < 0.0f ? -value : value;
+}
+
+static float rotor_wrap_delta(float angle, float reference)
+{
+  float delta = angle - reference;
+  while (delta > LEG_PI)
+    delta -= LEG_TWO_PI;
+  while (delta < -LEG_PI)
+    delta += LEG_TWO_PI;
+  return delta;
 }
 
 static uint8_t leg_index_from_handle(Leg_HandlerTypeDef *hleg)
@@ -679,6 +691,37 @@ void Leg_Control_GetTargetStates(uint8_t active[8], uint8_t result[8])
   __enable_irq();
 }
 
+float Leg_Control_GetZeroThreshold(void)
+{
+  return LEG_ROTOR_ZERO_NEAR_RAD;
+}
+
+void Leg_Control_GetZeroCheck(float zero_error[8], uint8_t zero_ok[8], uint8_t *all_zero_ok)
+{
+  uint8_t all_ok = 1U;
+
+  __disable_irq();
+  for (uint8_t i = 0; i < 8; i++)
+  {
+    uint8_t leg = i / 2U;
+    uint8_t motor = i % 2U;
+    Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
+    float error = rotor_wrap_delta(state->angle, Legs[leg]->rotor_zero_offset[motor]);
+    uint8_t ok = (state->online == Motor_Online &&
+                  state->angle_valid == Motor_Angle_Valid &&
+                  absf_local(error) <= LEG_ROTOR_ZERO_NEAR_RAD) ? 1U : 0U;
+
+    zero_error[i] = error;
+    zero_ok[i] = ok;
+    if (!ok)
+      all_ok = 0U;
+  }
+  __enable_irq();
+
+  if (all_zero_ok != NULL)
+    *all_zero_ok = all_ok;
+}
+
 int Leg_Control_SetZeroOffsets(uint8_t leg, const float rotor_zero_offset[2], const float motor_direction[2])
 {
   if (leg >= 4 || rotor_zero_offset == NULL || motor_direction == NULL)
@@ -744,9 +787,11 @@ int Leg_Control_GetJointAngles(uint8_t leg, Leg_JointAnglesTypeDef *angles, uint
   }
 
   angles->theta1 = normalized_motor_direction(motor_direction[LEG_MOTOR_THETA1]) *
-                   (rotor_angle[LEG_MOTOR_THETA1] - rotor_zero_offset[LEG_MOTOR_THETA1]) / LEG_REDUCTION_RATIO;
+                   rotor_wrap_delta(rotor_angle[LEG_MOTOR_THETA1], rotor_zero_offset[LEG_MOTOR_THETA1]) /
+                   LEG_REDUCTION_RATIO;
   angles->theta2 = normalized_motor_direction(motor_direction[LEG_MOTOR_THETA2]) *
-                   (rotor_angle[LEG_MOTOR_THETA2] - rotor_zero_offset[LEG_MOTOR_THETA2]) / LEG_REDUCTION_RATIO;
+                   rotor_wrap_delta(rotor_angle[LEG_MOTOR_THETA2], rotor_zero_offset[LEG_MOTOR_THETA2]) /
+                   LEG_REDUCTION_RATIO;
   return 1;
 }
 
