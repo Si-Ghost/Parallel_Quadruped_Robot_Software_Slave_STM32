@@ -80,6 +80,11 @@ typedef struct
   Motor_TargetActiveTypeDef target_active;          // 当前是否正在执行 Web 调试目标。
   Motor_TargetResultTypeDef target_result;          // 最近一次 Web 调试目标结果。
   float target_start_angle;
+  float target_kp;
+  float target_kw;
+  float target_hold_kp;
+  float target_hold_kw;
+  uint8_t target_hold_on_error;
   uint32_t target_start_tick;                       // 当前目标开始时的 HAL tick。
   uint32_t target_progress_tick;                    // 目标误差最近一次明显改善时的 HAL tick。
   float target_last_abs_error;                      // 用于堵转检测的上一次绝对误差。
@@ -116,6 +121,9 @@ int  Leg_Control_SetDebugFootOffset(uint8_t leg, float dx_mm, float dy_mm);
 int  Leg_Control_StartDebugTrace(uint8_t leg);
 int  Leg_Control_StartAllMicroTest(void);
 int  Leg_Control_StartPrepPoseTest(void);
+int  Leg_Control_StartStandStepTest(void);
+int  Leg_Control_StartTouchStepTest(void);
+int  Leg_Control_StartLoadedStepTest(void);
 void Leg_Control_LogFootSnapshot(void);
 int  Leg_Control_HoldCurrentPosition(void);
 void Leg_Control_StopAllDebugTargets(uint8_t reason);

@@ -43,6 +43,9 @@ static const char leg_trace_cmd[] = "LEG_TRACE";
 static const char leg_snapshot_cmd[] = "LEG_SNAPSHOT";
 static const char leg_all_micro_cmd[] = "LEG_ALL_MICRO";
 static const char leg_prep_pose_cmd[] = "LEG_PREP_POSE";
+static const char leg_stand_step_cmd[] = "LEG_STAND_STEP";
+static const char leg_touch_step_cmd[] = "LEG_TOUCH_STEP";
+static const char leg_loaded_step_cmd[] = "LEG_LOADED_STEP";
 
 #define RC_RAW_MIN       0
 #define RC_RAW_MAX       2047
@@ -394,7 +397,10 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         len < sizeof(leg_trace_cmd) - 1 &&
         len < sizeof(leg_snapshot_cmd) - 1 &&
         len < sizeof(leg_all_micro_cmd) - 1 &&
-        len < sizeof(leg_prep_pose_cmd) - 1)
+        len < sizeof(leg_prep_pose_cmd) - 1 &&
+        len < sizeof(leg_stand_step_cmd) - 1 &&
+        len < sizeof(leg_touch_step_cmd) - 1 &&
+        len < sizeof(leg_loaded_step_cmd) - 1)
         return;
 
     for (uint16_t i = 0; i + sizeof(motor_stop_all_cmd) - 1 <= len; i++) {
@@ -441,6 +447,33 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         if (memcmp(&data[i], leg_prep_pose_cmd, sizeof(leg_prep_pose_cmd) - 1) == 0) {
             if (!Leg_Control_StartPrepPoseTest()) {
                 Communication_SendString("LEG_PREP_POSE_RX rejected\r\n");
+            }
+            return;
+        }
+    }
+
+    for (uint16_t i = 0; i + sizeof(leg_stand_step_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], leg_stand_step_cmd, sizeof(leg_stand_step_cmd) - 1) == 0) {
+            if (!Leg_Control_StartStandStepTest()) {
+                Communication_SendString("LEG_STAND_STEP_RX rejected\r\n");
+            }
+            return;
+        }
+    }
+
+    for (uint16_t i = 0; i + sizeof(leg_touch_step_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], leg_touch_step_cmd, sizeof(leg_touch_step_cmd) - 1) == 0) {
+            if (!Leg_Control_StartTouchStepTest()) {
+                Communication_SendString("LEG_TOUCH_STEP_RX rejected\r\n");
+            }
+            return;
+        }
+    }
+
+    for (uint16_t i = 0; i + sizeof(leg_loaded_step_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], leg_loaded_step_cmd, sizeof(leg_loaded_step_cmd) - 1) == 0) {
+            if (!Leg_Control_StartLoadedStepTest()) {
+                Communication_SendString("LEG_LOADED_STEP_RX rejected\r\n");
             }
             return;
         }

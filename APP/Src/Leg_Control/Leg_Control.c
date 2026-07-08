@@ -38,11 +38,18 @@ extern UART_HandleTypeDef huart8;
 #define LEG_TRACE_POINT_COUNT       4U
 #define LEG_ALL_MICRO_DY_MM         3.0f
 #define LEG_PREP_POSE_DY_MM         5.0f
+#define LEG_STAND_STEP_DY_MM        5.0f
+#define LEG_TOUCH_STEP_DY_MM        2.0f
+#define LEG_LOADED_STEP_DY_MM       2.0f
 #define LEG_WEB_KP                  2.0f
 #define LEG_WEB_KW                  0.15f
 #define LEG_WEB_T_FF                0.0f
 #define LEG_HOLD_KP                 1.0f
 #define LEG_HOLD_KW                 0.15f
+#define LEG_LOADED_KP               4.0f
+#define LEG_LOADED_KW               0.25f
+#define LEG_LOADED_HOLD_KP          2.0f
+#define LEG_LOADED_HOLD_KW          0.20f
 #define LEG_HANDSHAKE_KW            0.05f
 #define LEG_HANDSHAKE_RETRY         2U
 #define LEG_DEBUG_LOG_PERIOD_MS     500U
@@ -83,17 +90,49 @@ typedef struct
   Leg_PointTypeDef base_foot[4];
 } Leg_PrepPoseTypeDef;
 
+typedef struct
+{
+  uint8_t active;
+  Leg_PointTypeDef base_foot[4];
+} Leg_StandStepTypeDef;
+
+typedef struct
+{
+  uint8_t active;
+  Leg_PointTypeDef base_foot[4];
+} Leg_TouchStepTypeDef;
+
+typedef struct
+{
+  uint8_t active;
+  Leg_PointTypeDef base_foot[4];
+} Leg_LoadedStepTypeDef;
+
 static Leg_DebugTraceTypeDef debug_trace = {0};
 static Leg_AllMicroTypeDef all_micro = {0};
 static Leg_PrepPoseTypeDef prep_pose = {0};
+static Leg_StandStepTypeDef stand_step = {0};
+static Leg_TouchStepTypeDef touch_step = {0};
+static Leg_LoadedStepTypeDef loaded_step = {0};
 
 static void leg_abort_transfer(Leg_HandlerTypeDef *hleg);
 static void log_leg_finish_if_idle(uint8_t leg, Motor_TargetResultTypeDef result);
 static void service_debug_trace(void);
 static void service_all_micro(void);
 static void service_prep_pose(void);
+static void service_stand_step(void);
+static void service_touch_step(void);
+static void service_loaded_step(void);
 static void start_debug_offset(uint8_t motor_index, float offset);
 static void start_debug_offset_with_stop_error(uint8_t motor_index, float offset, float stop_error);
+static void start_debug_offset_with_profile(uint8_t motor_index,
+                                            float offset,
+                                            float stop_error,
+                                            float kp,
+                                            float kw,
+                                            float hold_kp,
+                                            float hold_kw,
+                                            uint8_t hold_on_error);
 
 static const float default_rotor_zero_offset[4][2] = {
   {4.2988f, 3.4371f},  // LF: motor0(theta2), motor1(theta1)
@@ -186,6 +225,11 @@ static void reset_motor_runtime_state(Motor_RuntimeStateTypeDef *state)
   state->target_active = Motor_Target_Inactive;
   state->target_result = Motor_Target_Idle;
   state->target_start_angle = 0.0f;
+  state->target_kp = LEG_WEB_KP;
+  state->target_kw = LEG_WEB_KW;
+  state->target_hold_kp = LEG_HOLD_KP;
+  state->target_hold_kw = LEG_HOLD_KW;
+  state->target_hold_on_error = 0U;
   state->target_start_tick = 0;
   state->target_progress_tick = 0;
   state->target_last_abs_error = 0.0f;
@@ -289,9 +333,14 @@ static void stop_debug_target(uint8_t motor_index, Motor_TargetResultTypeDef res
   uint8_t keep_leg_damping =
       (result == Motor_Target_Done &&
        Legs[leg]->motor_state[paired_motor].target_active == Motor_Target_Active) ? 1U : 0U;
-  uint8_t hold_position = (result == Motor_Target_Done) ? 1U : 0U;
   MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
   Motor_RuntimeStateTypeDef *state = motor_state_from_index(motor_index);
+  uint8_t hold_position = (result == Motor_Target_Done || state->target_hold_on_error) ? 1U : 0U;
+  float hold_kp = (state->target_hold_kp > 0.0f) ? state->target_hold_kp : LEG_HOLD_KP;
+  float hold_kw = (state->target_hold_kw > 0.0f) ? state->target_hold_kw : LEG_HOLD_KW;
+  float hold_pos = (result == Motor_Target_Done) ?
+                   (Legs[leg]->p_init[motor] + state->target_offset) :
+                   state->angle;
 
   state->target_active = Motor_Target_Inactive;
   state->target_result = result;
@@ -300,13 +349,18 @@ static void stop_debug_target(uint8_t motor_index, Motor_TargetResultTypeDef res
   state->target_progress_tick = 0;
   state->target_last_abs_error = 0.0f;
   state->target_stop_error = LEG_WEB_STOP_ERROR_RAD;
+  state->target_kp = LEG_WEB_KP;
+  state->target_kw = LEG_WEB_KW;
+  state->target_hold_kp = LEG_HOLD_KP;
+  state->target_hold_kw = LEG_HOLD_KW;
+  state->target_hold_on_error = 0U;
 
   cmd->mode = 1;
   cmd->T = 0.0f;
   cmd->W = 0.0f;
-  cmd->K_P = hold_position ? LEG_HOLD_KP : 0.0f;
-  cmd->K_W = hold_position ? LEG_HOLD_KW : (keep_leg_damping ? LEG_WEB_KW : 0.0f);
-  cmd->Pos = hold_position ? (Legs[leg]->p_init[motor] + state->target_offset) : state->angle;
+  cmd->K_P = hold_position ? hold_kp : 0.0f;
+  cmd->K_W = hold_position ? hold_kw : (keep_leg_damping ? LEG_WEB_KW : 0.0f);
+  cmd->Pos = hold_position ? hold_pos : state->angle;
   modify_data(cmd);
 
   log_leg_finish_if_idle(leg, result);
@@ -426,6 +480,78 @@ static void log_prep_pose_feet(const char *tag, Motor_TargetResultTypeDef result
 
   char buf[192];
   int len = snprintf(buf, sizeof(buf), "LEG_PREP_POSE %s res=%u ok=%u%u%u%u y=",
+                     tag, result, ok[0], ok[1], ok[2], ok[3]);
+  for (uint8_t leg = 0; leg < 4 && len > 0; leg++)
+  {
+    if (leg > 0)
+      len += snprintf(&buf[len], sizeof(buf) - (size_t)len, ",");
+    len = append_fixed4(buf, sizeof(buf), len, foot[leg].y);
+  }
+  if (len > 0)
+    len += snprintf(&buf[len], sizeof(buf) - (size_t)len, "\r\n");
+
+  if (len > 0 && len < (int)sizeof(buf))
+    Communication_SendString(buf);
+}
+
+static void log_stand_step_feet(const char *tag, Motor_TargetResultTypeDef result)
+{
+  Leg_PointTypeDef foot[4] = {0};
+  uint8_t ok[4] = {0};
+
+  for (uint8_t leg = 0; leg < 4; leg++)
+    ok[leg] = get_leg_current_foot(leg, &foot[leg]) ? 1U : 0U;
+
+  char buf[192];
+  int len = snprintf(buf, sizeof(buf), "LEG_STAND_STEP %s res=%u ok=%u%u%u%u y=",
+                     tag, result, ok[0], ok[1], ok[2], ok[3]);
+  for (uint8_t leg = 0; leg < 4 && len > 0; leg++)
+  {
+    if (leg > 0)
+      len += snprintf(&buf[len], sizeof(buf) - (size_t)len, ",");
+    len = append_fixed4(buf, sizeof(buf), len, foot[leg].y);
+  }
+  if (len > 0)
+    len += snprintf(&buf[len], sizeof(buf) - (size_t)len, "\r\n");
+
+  if (len > 0 && len < (int)sizeof(buf))
+    Communication_SendString(buf);
+}
+
+static void log_touch_step_feet(const char *tag, Motor_TargetResultTypeDef result)
+{
+  Leg_PointTypeDef foot[4] = {0};
+  uint8_t ok[4] = {0};
+
+  for (uint8_t leg = 0; leg < 4; leg++)
+    ok[leg] = get_leg_current_foot(leg, &foot[leg]) ? 1U : 0U;
+
+  char buf[192];
+  int len = snprintf(buf, sizeof(buf), "LEG_TOUCH_STEP %s res=%u ok=%u%u%u%u y=",
+                     tag, result, ok[0], ok[1], ok[2], ok[3]);
+  for (uint8_t leg = 0; leg < 4 && len > 0; leg++)
+  {
+    if (leg > 0)
+      len += snprintf(&buf[len], sizeof(buf) - (size_t)len, ",");
+    len = append_fixed4(buf, sizeof(buf), len, foot[leg].y);
+  }
+  if (len > 0)
+    len += snprintf(&buf[len], sizeof(buf) - (size_t)len, "\r\n");
+
+  if (len > 0 && len < (int)sizeof(buf))
+    Communication_SendString(buf);
+}
+
+static void log_loaded_step_feet(const char *tag, Motor_TargetResultTypeDef result)
+{
+  Leg_PointTypeDef foot[4] = {0};
+  uint8_t ok[4] = {0};
+
+  for (uint8_t leg = 0; leg < 4; leg++)
+    ok[leg] = get_leg_current_foot(leg, &foot[leg]) ? 1U : 0U;
+
+  char buf[192];
+  int len = snprintf(buf, sizeof(buf), "LEG_LOADED_STEP %s res=%u ok=%u%u%u%u y=",
                      tag, result, ok[0], ok[1], ok[2], ok[3]);
   for (uint8_t leg = 0; leg < 4 && len > 0; leg++)
   {
@@ -705,8 +831,8 @@ static int apply_debug_target(uint8_t motor_index, uint8_t force_log)
     cmd->W = 0.0f;
   }
   cmd->Pos = state->target_active ? desired : state->angle;
-  cmd->K_P = state->target_active ? LEG_WEB_KP : 0.0f;
-  cmd->K_W = state->target_active ? LEG_WEB_KW : 0.0f;
+  cmd->K_P = state->target_active ? state->target_kp : 0.0f;
+  cmd->K_W = state->target_active ? state->target_kw : 0.0f;
   modify_data(cmd);
 
   if (force_log || !state->target_active ||
@@ -941,6 +1067,255 @@ static void service_prep_pose(void)
   log_prep_pose_feet("complete", Motor_Target_Done);
 }
 
+static int start_stand_step_targets(void)
+{
+  float offsets[4][2] = {0};
+
+  for (uint8_t leg = 0; leg < 4; leg++)
+  {
+    Leg_PointTypeDef target = stand_step.base_foot[leg];
+    target.y += LEG_STAND_STEP_DY_MM;
+
+    if (!compute_foot_target_offsets(leg, &target, offsets[leg]))
+    {
+      log_stand_step_feet("reject_plan", Motor_Target_Stopped);
+      return 0;
+    }
+  }
+
+  log_stand_step_feet("start", Motor_Target_Running);
+
+  for (uint8_t leg = 0; leg < 4; leg++)
+  {
+    for (uint8_t motor = 0; motor < 2; motor++)
+    {
+      uint8_t idx = motor_index_from_leg_motor(leg, motor);
+      start_debug_offset_with_stop_error(idx, offsets[leg][motor], LEG_WEB_STOP_ERROR_RAD);
+      if (!apply_debug_target(idx, 0))
+      {
+        for (uint8_t stop_idx = 0; stop_idx < 8; stop_idx++)
+          stop_debug_target(stop_idx, Motor_Target_Stopped);
+        log_stand_step_feet("reject_apply", Motor_Target_Stopped);
+        return 0;
+      }
+    }
+  }
+
+  return 1;
+}
+
+static void service_stand_step(void)
+{
+  if (!stand_step.active)
+    return;
+
+  uint8_t all_done = 1U;
+  Motor_TargetResultTypeDef bad_result = Motor_Target_Idle;
+  for (uint8_t idx = 0; idx < 8; idx++)
+  {
+    Motor_RuntimeStateTypeDef *state = motor_state_from_index(idx);
+    if (state == NULL)
+      continue;
+
+    if (state->target_active == Motor_Target_Active)
+      return;
+
+    if (state->target_result == Motor_Target_Stall ||
+        state->target_result == Motor_Target_Timeout ||
+        state->target_result == Motor_Target_Stopped)
+    {
+      bad_result = state->target_result;
+      break;
+    }
+
+    if (state->target_result != Motor_Target_Done)
+      all_done = 0U;
+  }
+
+  if (bad_result != Motor_Target_Idle)
+  {
+    log_stand_step_feet("abort", bad_result);
+    stand_step.active = 0U;
+    return;
+  }
+
+  if (!all_done)
+    return;
+
+  log_stand_step_feet("done", Motor_Target_Done);
+  stand_step.active = 0U;
+  (void)Leg_Control_HoldCurrentPosition();
+  log_stand_step_feet("complete", Motor_Target_Done);
+}
+
+static int start_touch_step_targets(void)
+{
+  float offsets[4][2] = {0};
+
+  for (uint8_t leg = 0; leg < 4; leg++)
+  {
+    Leg_PointTypeDef target = touch_step.base_foot[leg];
+    target.y += LEG_TOUCH_STEP_DY_MM;
+
+    if (!compute_foot_target_offsets(leg, &target, offsets[leg]))
+    {
+      log_touch_step_feet("reject_plan", Motor_Target_Stopped);
+      return 0;
+    }
+  }
+
+  log_touch_step_feet("start", Motor_Target_Running);
+
+  for (uint8_t leg = 0; leg < 4; leg++)
+  {
+    for (uint8_t motor = 0; motor < 2; motor++)
+    {
+      uint8_t idx = motor_index_from_leg_motor(leg, motor);
+      start_debug_offset_with_stop_error(idx, offsets[leg][motor], LEG_WEB_STOP_ERROR_RAD);
+      if (!apply_debug_target(idx, 0))
+      {
+        for (uint8_t stop_idx = 0; stop_idx < 8; stop_idx++)
+          stop_debug_target(stop_idx, Motor_Target_Stopped);
+        log_touch_step_feet("reject_apply", Motor_Target_Stopped);
+        return 0;
+      }
+    }
+  }
+
+  return 1;
+}
+
+static void service_touch_step(void)
+{
+  if (!touch_step.active)
+    return;
+
+  uint8_t all_done = 1U;
+  Motor_TargetResultTypeDef bad_result = Motor_Target_Idle;
+  for (uint8_t idx = 0; idx < 8; idx++)
+  {
+    Motor_RuntimeStateTypeDef *state = motor_state_from_index(idx);
+    if (state == NULL)
+      continue;
+
+    if (state->target_active == Motor_Target_Active)
+      return;
+
+    if (state->target_result == Motor_Target_Stall ||
+        state->target_result == Motor_Target_Timeout ||
+        state->target_result == Motor_Target_Stopped)
+    {
+      bad_result = state->target_result;
+      break;
+    }
+
+    if (state->target_result != Motor_Target_Done)
+      all_done = 0U;
+  }
+
+  if (bad_result != Motor_Target_Idle)
+  {
+    log_touch_step_feet("abort", bad_result);
+    touch_step.active = 0U;
+    return;
+  }
+
+  if (!all_done)
+    return;
+
+  log_touch_step_feet("done", Motor_Target_Done);
+  touch_step.active = 0U;
+  (void)Leg_Control_HoldCurrentPosition();
+  log_touch_step_feet("complete", Motor_Target_Done);
+}
+
+static int start_loaded_step_targets(void)
+{
+  float offsets[4][2] = {0};
+
+  for (uint8_t leg = 0; leg < 4; leg++)
+  {
+    Leg_PointTypeDef target = loaded_step.base_foot[leg];
+    target.y += LEG_LOADED_STEP_DY_MM;
+
+    if (!compute_foot_target_offsets(leg, &target, offsets[leg]))
+    {
+      log_loaded_step_feet("reject_plan", Motor_Target_Stopped);
+      return 0;
+    }
+  }
+
+  log_loaded_step_feet("start", Motor_Target_Running);
+
+  for (uint8_t leg = 0; leg < 4; leg++)
+  {
+    for (uint8_t motor = 0; motor < 2; motor++)
+    {
+      uint8_t idx = motor_index_from_leg_motor(leg, motor);
+      start_debug_offset_with_profile(idx,
+                                      offsets[leg][motor],
+                                      LEG_WEB_STOP_ERROR_RAD,
+                                      LEG_LOADED_KP,
+                                      LEG_LOADED_KW,
+                                      LEG_LOADED_HOLD_KP,
+                                      LEG_LOADED_HOLD_KW,
+                                      1U);
+      if (!apply_debug_target(idx, 0))
+      {
+        for (uint8_t stop_idx = 0; stop_idx < 8; stop_idx++)
+          stop_debug_target(stop_idx, Motor_Target_Stopped);
+        log_loaded_step_feet("reject_apply", Motor_Target_Stopped);
+        return 0;
+      }
+    }
+  }
+
+  return 1;
+}
+
+static void service_loaded_step(void)
+{
+  if (!loaded_step.active)
+    return;
+
+  uint8_t all_done = 1U;
+  Motor_TargetResultTypeDef bad_result = Motor_Target_Idle;
+  for (uint8_t idx = 0; idx < 8; idx++)
+  {
+    Motor_RuntimeStateTypeDef *state = motor_state_from_index(idx);
+    if (state == NULL)
+      continue;
+
+    if (state->target_active == Motor_Target_Active)
+      return;
+
+    if (state->target_result == Motor_Target_Stall ||
+        state->target_result == Motor_Target_Timeout ||
+        state->target_result == Motor_Target_Stopped)
+    {
+      bad_result = state->target_result;
+      break;
+    }
+
+    if (state->target_result != Motor_Target_Done)
+      all_done = 0U;
+  }
+
+  if (bad_result != Motor_Target_Idle)
+  {
+    log_loaded_step_feet("abort", bad_result);
+    loaded_step.active = 0U;
+    return;
+  }
+
+  if (!all_done)
+    return;
+
+  log_loaded_step_feet("done", Motor_Target_Done);
+  loaded_step.active = 0U;
+  log_loaded_step_feet("complete", Motor_Target_Done);
+}
+
 static void leg_abort_transfer(Leg_HandlerTypeDef *hleg)
 {
   if (hleg == NULL)
@@ -1134,11 +1509,14 @@ void Leg_Control_Service(uint32_t now_ms)
   service_debug_trace();
   service_all_micro();
   service_prep_pose();
+  service_stand_step();
+  service_touch_step();
+  service_loaded_step();
 }
 
 int Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad)
 {
-  if (all_micro.active || prep_pose.active)
+  if (all_micro.active || prep_pose.active || stand_step.active || touch_step.active || loaded_step.active)
     return 0;
 
   Motor_RuntimeStateTypeDef *state = motor_state_from_index(motor_index);
@@ -1177,6 +1555,33 @@ static void start_debug_offset_with_stop_error(uint8_t motor_index, float offset
       absf_local((Legs[motor_index / 2]->p_init[motor_index % 2] + state->target_offset) -
                  state->angle);
   state->target_stop_error = (stop_error > 0.0f) ? stop_error : LEG_WEB_STOP_ERROR_RAD;
+  state->target_kp = LEG_WEB_KP;
+  state->target_kw = LEG_WEB_KW;
+  state->target_hold_kp = LEG_HOLD_KP;
+  state->target_hold_kw = LEG_HOLD_KW;
+  state->target_hold_on_error = 0U;
+}
+
+static void start_debug_offset_with_profile(uint8_t motor_index,
+                                            float offset,
+                                            float stop_error,
+                                            float kp,
+                                            float kw,
+                                            float hold_kp,
+                                            float hold_kw,
+                                            uint8_t hold_on_error)
+{
+  start_debug_offset_with_stop_error(motor_index, offset, stop_error);
+
+  Motor_RuntimeStateTypeDef *state = motor_state_from_index(motor_index);
+  if (state == NULL)
+    return;
+
+  state->target_kp = (kp > 0.0f) ? kp : LEG_WEB_KP;
+  state->target_kw = (kw > 0.0f) ? kw : LEG_WEB_KW;
+  state->target_hold_kp = (hold_kp > 0.0f) ? hold_kp : LEG_HOLD_KP;
+  state->target_hold_kw = (hold_kw > 0.0f) ? hold_kw : LEG_HOLD_KW;
+  state->target_hold_on_error = hold_on_error ? 1U : 0U;
 }
 
 static void start_debug_offset(uint8_t motor_index, float offset)
@@ -1207,7 +1612,7 @@ static void log_leg_nudge_reject(uint8_t leg, const char *reason, uint8_t motor,
 
 int Leg_Control_SetDebugFootOffset(uint8_t leg, float dx_mm, float dy_mm)
 {
-  if (leg >= 4 || all_micro.active || prep_pose.active)
+  if (leg >= 4 || all_micro.active || prep_pose.active || stand_step.active || touch_step.active || loaded_step.active)
     return 0;
 
   dx_mm = clampf(dx_mm, -LEG_FOOT_NUDGE_MAX_MM, LEG_FOOT_NUDGE_MAX_MM);
@@ -1308,7 +1713,7 @@ int Leg_Control_SetDebugFootOffset(uint8_t leg, float dx_mm, float dy_mm)
 
 int Leg_Control_StartDebugTrace(uint8_t leg)
 {
-  if (leg >= 4 || debug_trace.active || all_micro.active || prep_pose.active)
+  if (leg >= 4 || debug_trace.active || all_micro.active || prep_pose.active || stand_step.active || touch_step.active || loaded_step.active)
     return 0;
 
   for (uint8_t motor = 0; motor < 2; motor++)
@@ -1332,7 +1737,7 @@ int Leg_Control_StartDebugTrace(uint8_t leg)
 
 int Leg_Control_StartAllMicroTest(void)
 {
-  if (debug_trace.active || all_micro.active || prep_pose.active)
+  if (debug_trace.active || all_micro.active || prep_pose.active || stand_step.active || touch_step.active || loaded_step.active)
     return 0;
 
   for (uint8_t idx = 0; idx < 8; idx++)
@@ -1364,7 +1769,7 @@ int Leg_Control_StartAllMicroTest(void)
 
 int Leg_Control_StartPrepPoseTest(void)
 {
-  if (debug_trace.active || all_micro.active || prep_pose.active)
+  if (debug_trace.active || all_micro.active || prep_pose.active || stand_step.active || touch_step.active || loaded_step.active)
     return 0;
 
   for (uint8_t idx = 0; idx < 8; idx++)
@@ -1387,6 +1792,99 @@ int Leg_Control_StartPrepPoseTest(void)
   if (!start_prep_pose_targets())
   {
     prep_pose.active = 0U;
+    return 0;
+  }
+
+  return 1;
+}
+
+int Leg_Control_StartStandStepTest(void)
+{
+  if (debug_trace.active || all_micro.active || prep_pose.active || stand_step.active || touch_step.active || loaded_step.active)
+    return 0;
+
+  for (uint8_t idx = 0; idx < 8; idx++)
+  {
+    Motor_RuntimeStateTypeDef *state = motor_state_from_index(idx);
+    if (state == NULL || state->target_active == Motor_Target_Active)
+      return 0;
+  }
+
+  for (uint8_t leg = 0; leg < 4; leg++)
+  {
+    if (!get_leg_current_foot(leg, &stand_step.base_foot[leg]))
+    {
+      log_stand_step_feet("reject_fk", Motor_Target_Stopped);
+      return 0;
+    }
+  }
+
+  stand_step.active = 1U;
+  if (!start_stand_step_targets())
+  {
+    stand_step.active = 0U;
+    return 0;
+  }
+
+  return 1;
+}
+
+int Leg_Control_StartTouchStepTest(void)
+{
+  if (debug_trace.active || all_micro.active || prep_pose.active || stand_step.active || touch_step.active || loaded_step.active)
+    return 0;
+
+  for (uint8_t idx = 0; idx < 8; idx++)
+  {
+    Motor_RuntimeStateTypeDef *state = motor_state_from_index(idx);
+    if (state == NULL || state->target_active == Motor_Target_Active)
+      return 0;
+  }
+
+  for (uint8_t leg = 0; leg < 4; leg++)
+  {
+    if (!get_leg_current_foot(leg, &touch_step.base_foot[leg]))
+    {
+      log_touch_step_feet("reject_fk", Motor_Target_Stopped);
+      return 0;
+    }
+  }
+
+  touch_step.active = 1U;
+  if (!start_touch_step_targets())
+  {
+    touch_step.active = 0U;
+    return 0;
+  }
+
+  return 1;
+}
+
+int Leg_Control_StartLoadedStepTest(void)
+{
+  if (debug_trace.active || all_micro.active || prep_pose.active || stand_step.active || touch_step.active || loaded_step.active)
+    return 0;
+
+  for (uint8_t idx = 0; idx < 8; idx++)
+  {
+    Motor_RuntimeStateTypeDef *state = motor_state_from_index(idx);
+    if (state == NULL || state->target_active == Motor_Target_Active)
+      return 0;
+  }
+
+  for (uint8_t leg = 0; leg < 4; leg++)
+  {
+    if (!get_leg_current_foot(leg, &loaded_step.base_foot[leg]))
+    {
+      log_loaded_step_feet("reject_fk", Motor_Target_Stopped);
+      return 0;
+    }
+  }
+
+  loaded_step.active = 1U;
+  if (!start_loaded_step_targets())
+  {
+    loaded_step.active = 0U;
     return 0;
   }
 
@@ -1462,6 +1960,9 @@ int Leg_Control_HoldCurrentPosition(void)
   debug_trace.active = 0U;
   all_micro.active = 0U;
   prep_pose.active = 0U;
+  stand_step.active = 0U;
+  touch_step.active = 0U;
+  loaded_step.active = 0U;
 
   for (uint8_t idx = 0; idx < 8; idx++)
   {
@@ -1487,6 +1988,11 @@ int Leg_Control_HoldCurrentPosition(void)
       state->target_progress_tick = 0;
       state->target_last_abs_error = 0.0f;
       state->target_stop_error = LEG_WEB_STOP_ERROR_RAD;
+      state->target_kp = LEG_WEB_KP;
+      state->target_kw = LEG_WEB_KW;
+      state->target_hold_kp = LEG_HOLD_KP;
+      state->target_hold_kw = LEG_HOLD_KW;
+      state->target_hold_on_error = 0U;
 
       cmd->mode = 1;
       cmd->T = 0.0f;
@@ -1508,6 +2014,9 @@ void Leg_Control_StopAllDebugTargets(uint8_t reason)
   debug_trace.active = 0U;
   all_micro.active = 0U;
   prep_pose.active = 0U;
+  stand_step.active = 0U;
+  touch_step.active = 0U;
+  loaded_step.active = 0U;
 
   for (uint8_t idx = 0; idx < 8; idx++)
   {
