@@ -39,6 +39,7 @@ static const char motor_rescan_cmd[] = "MOTOR_RESCAN";
 static const char motor_stop_all_cmd[] = "MOTOR_STOP_ALL";
 static const char leg_nudge_mm_cmd[] = "LEG_NUDGE_MM";
 static const char leg_trace_cmd[] = "LEG_TRACE";
+static const char leg_snapshot_cmd[] = "LEG_SNAPSHOT";
 
 #define RC_RAW_MIN       0
 #define RC_RAW_MAX       2047
@@ -386,7 +387,8 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         len < sizeof(motor_rescan_cmd) - 1 &&
         len < sizeof(motor_stop_all_cmd) - 1 &&
         len < sizeof(leg_nudge_mm_cmd) - 1 &&
-        len < sizeof(leg_trace_cmd) - 1)
+        len < sizeof(leg_trace_cmd) - 1 &&
+        len < sizeof(leg_snapshot_cmd) - 1)
         return;
 
     for (uint16_t i = 0; i + sizeof(motor_stop_all_cmd) - 1 <= len; i++) {
@@ -400,6 +402,13 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
     for (uint16_t i = 0; i + sizeof(motor_rescan_cmd) - 1 <= len; i++) {
         if (memcmp(&data[i], motor_rescan_cmd, sizeof(motor_rescan_cmd) - 1) == 0) {
             Leg_Control_RequestHandshake();
+            return;
+        }
+    }
+
+    for (uint16_t i = 0; i + sizeof(leg_snapshot_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], leg_snapshot_cmd, sizeof(leg_snapshot_cmd) - 1) == 0) {
+            Leg_Control_LogFootSnapshot();
             return;
         }
     }

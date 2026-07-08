@@ -1027,6 +1027,70 @@ int Leg_Control_StartDebugTrace(uint8_t leg)
   return start_debug_trace_step();
 }
 
+void Leg_Control_LogFootSnapshot(void)
+{
+  Leg_PointTypeDef foot[4] = {0};
+  uint8_t foot_ok[4] = {0};
+  uint8_t motor_online[8] = {0};
+  uint8_t leg_online[4] = {0};
+  uint8_t target_active[8] = {0};
+  uint8_t target_result[8] = {0};
+  uint8_t zero_ok[8] = {0};
+  float zero_error[8] = {0.0f};
+  uint8_t all_zero_ok = 0U;
+
+  for (uint8_t leg = 0; leg < 4; leg++)
+  {
+    foot_ok[leg] = get_leg_current_foot(leg, &foot[leg]) ? 1U : 0U;
+  }
+  Leg_Control_GetOnline(motor_online, leg_online);
+  Leg_Control_GetTargetStates(target_active, target_result);
+  Leg_Control_GetZeroCheck(zero_error, zero_ok, &all_zero_ok);
+  (void)zero_error;
+  (void)all_zero_ok;
+  (void)leg_online;
+
+  for (uint8_t leg = 0; leg < 4; leg++)
+  {
+    if (!motor_online[leg * 2U] || !motor_online[leg * 2U + 1U])
+      foot_ok[leg] = 0U;
+  }
+
+  char buf[240];
+  int len = snprintf(buf, sizeof(buf), "LEG_SNAPSHOT ok=%u%u%u%u x=",
+                     foot_ok[0], foot_ok[1], foot_ok[2], foot_ok[3]);
+  for (uint8_t leg = 0; leg < 4 && len > 0; leg++)
+  {
+    if (leg > 0)
+      len += snprintf(&buf[len], sizeof(buf) - (size_t)len, ",");
+    len = append_fixed4(buf, sizeof(buf), len, foot[leg].x);
+  }
+  if (len > 0)
+    len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " y=");
+  for (uint8_t leg = 0; leg < 4 && len > 0; leg++)
+  {
+    if (leg > 0)
+      len += snprintf(&buf[len], sizeof(buf) - (size_t)len, ",");
+    len = append_fixed4(buf, sizeof(buf), len, foot[leg].y);
+  }
+  if (len > 0)
+  {
+    len += snprintf(&buf[len], sizeof(buf) - (size_t)len,
+                    " o=%u%u%u%u%u%u%u%u z=%u%u%u%u%u%u%u%u a=%u%u%u%u%u%u%u%u r=%u%u%u%u%u%u%u%u\r\n",
+                    motor_online[0], motor_online[1], motor_online[2], motor_online[3],
+                    motor_online[4], motor_online[5], motor_online[6], motor_online[7],
+                    zero_ok[0], zero_ok[1], zero_ok[2], zero_ok[3],
+                    zero_ok[4], zero_ok[5], zero_ok[6], zero_ok[7],
+                    target_active[0], target_active[1], target_active[2], target_active[3],
+                    target_active[4], target_active[5], target_active[6], target_active[7],
+                    target_result[0], target_result[1], target_result[2], target_result[3],
+                    target_result[4], target_result[5], target_result[6], target_result[7]);
+  }
+
+  if (len > 0 && len < (int)sizeof(buf))
+    Communication_SendString(buf);
+}
+
 void Leg_Control_StopAllDebugTargets(uint8_t reason)
 {
   Motor_TargetResultTypeDef result = (reason == 0U) ? Motor_Target_Stopped : (Motor_TargetResultTypeDef)reason;
