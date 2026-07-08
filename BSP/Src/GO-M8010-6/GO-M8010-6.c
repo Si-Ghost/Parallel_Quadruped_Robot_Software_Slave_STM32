@@ -81,25 +81,40 @@ HAL_StatusTypeDef SERVO_Send_recv(MOTOR_send *pData, MOTOR_recv *rData, GPIO_Typ
     uint16_t rxlen = 0;
     rData->rx_len = 0;
     rData->correct = 0;
+    HAL_UART_AbortReceive(huart);
 
 	//调整数据然后发送并等待接收
     modify_data(pData);
 
 	//设置为发送，然后发送数据
 	HAL_GPIO_WritePin(Port, Pin, GPIO_PIN_SET);
-    HAL_UART_Transmit(huart, (uint8_t *)&(pData->motor_send_data), sizeof(pData->motor_send_data), 10);
+    HAL_StatusTypeDef tx_ret = HAL_UART_Transmit(huart, (uint8_t *)&(pData->motor_send_data), sizeof(pData->motor_send_data), 10);
+    if (tx_ret != HAL_OK)
+    {
+        HAL_GPIO_WritePin(Port, Pin, GPIO_PIN_RESET);
+        HAL_UART_Abort(huart);
+        return tx_ret;
+    }
 
 	//设置为接收模式，然后接收数据
 	HAL_GPIO_WritePin(Port, Pin, GPIO_PIN_RESET);
-	HAL_UARTEx_ReceiveToIdle(huart, (uint8_t *)&(rData->motor_recv_data), sizeof(rData->motor_recv_data), &rxlen, 10);
+	HAL_StatusTypeDef rx_ret = HAL_UARTEx_ReceiveToIdle(huart, (uint8_t *)&(rData->motor_recv_data), sizeof(rData->motor_recv_data), &rxlen, 10);
     rData->rx_len = rxlen;
 		
 	// 接收处理，如果数据长度为零则是超时，不对就是错误
     if(rxlen == 0)
+    {
+      HAL_UART_AbortReceive(huart);
+      if (rx_ret != HAL_OK)
+        return rx_ret;
       return HAL_TIMEOUT;
+    }
 
     if(rxlen != sizeof(rData->motor_recv_data))
+    {
+            HAL_UART_AbortReceive(huart);
 			return HAL_ERROR;
+    }
 
 	//
     uint8_t *rp = (uint8_t *)&rData->motor_recv_data;
@@ -109,6 +124,6 @@ HAL_StatusTypeDef SERVO_Send_recv(MOTOR_send *pData, MOTOR_recv *rData, GPIO_Typ
         extract_data(rData);
         return HAL_OK;
     }
-    
+    HAL_UART_AbortReceive(huart);
     return HAL_ERROR;
 }

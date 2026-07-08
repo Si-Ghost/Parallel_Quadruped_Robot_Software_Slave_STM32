@@ -84,6 +84,7 @@ typedef struct
   float target_last_abs_error;                      // 用于堵转检测的上一次绝对误差。
   uint32_t debug_last_log_tick;                     // 目标调试日志限频用 tick。
   uint32_t io_error_last_log_tick;                  // 电机 I/O 错误日志限频用 tick。
+  uint8_t io_error_count;                           // 连续 I/O 失败计数，用于断联保护。
 } Motor_RuntimeStateTypeDef;
 
 typedef struct

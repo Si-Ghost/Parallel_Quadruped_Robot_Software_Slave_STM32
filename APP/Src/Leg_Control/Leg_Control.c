@@ -39,6 +39,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_HANDSHAKE_RETRY         2U
 #define LEG_DEBUG_LOG_PERIOD_MS     250U
 #define LEG_IO_ERROR_LOG_PERIOD_MS  1000U
+#define LEG_IO_ERROR_OFFLINE_COUNT  5U
 #define LEG_LINK_L1_MM              130.0f
 #define LEG_LINK_L2_MM              260.0f
 #define LEG_REDUCTION_RATIO         6.33f
@@ -49,6 +50,8 @@ extern UART_HandleTypeDef huart8;
 
 static uint32_t last_service_tick = 0;
 static volatile uint8_t handshake_requested = 0;
+
+static void leg_abort_transfer(Leg_HandlerTypeDef *hleg);
 
 static const float default_rotor_zero_offset[4][2] = {
   {-1.7875f,  3.7387f},  // LF: motor0(theta2), motor1(theta1)
@@ -135,6 +138,7 @@ static void reset_motor_runtime_state(Motor_RuntimeStateTypeDef *state)
   state->target_last_abs_error = 0.0f;
   state->debug_last_log_tick = 0;
   state->io_error_last_log_tick = 0;
+  state->io_error_count = 0;
 }
 
 static uint8_t motor_is_online(uint8_t leg, uint8_t motor)
@@ -259,12 +263,56 @@ static void log_motor_io_error(uint8_t motor_index, HAL_StatusTypeDef ret, MOTOR
 
   char buf[96];
   int len = snprintf(buf, sizeof(buf),
-                     "MOTOR_IO fail idx=%u ret=%d rxlen=%u ok=%d err=%u\r\n",
+                     "MOTOR_IO fail idx=%u ret=%d rxlen=%u ok=%d err=%u cnt=%u\r\n",
                      motor_index,
                      (int)ret,
                      (unsigned int)fbk->rx_len,
                      fbk->correct,
-                     fbk->MError);
+                     fbk->MError,
+                     state->io_error_count);
+  if (len > 0 && len < (int)sizeof(buf))
+    Communication_SendString(buf);
+}
+
+static void refresh_leg_online_state(uint8_t leg)
+{
+  if (leg >= 4)
+    return;
+
+  Legs[leg]->has_online_motor =
+      (motor_is_online(leg, 0) || motor_is_online(leg, 1)) ? Motor_Online : Motor_Offline;
+}
+
+static void handle_motor_io_failure(uint8_t leg, uint8_t motor, HAL_StatusTypeDef ret, MOTOR_recv *fbk)
+{
+  if (leg >= 4 || motor >= 2)
+    return;
+
+  uint8_t idx = motor_index_from_leg_motor(leg, motor);
+  Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
+
+  if (state->io_error_count < 255U)
+    state->io_error_count++;
+
+  state->angle_valid = Motor_Angle_Invalid;
+  log_motor_io_error(idx, ret, fbk);
+
+  if (state->io_error_count < LEG_IO_ERROR_OFFLINE_COUNT)
+    return;
+
+  stop_debug_target(idx, Motor_Target_Stopped);
+  state->online = Motor_Offline;
+  state->handshake_status = (ret == HAL_TIMEOUT) ? Motor_Handshake_Timeout : Motor_Handshake_UartError;
+  refresh_leg_online_state(leg);
+  leg_abort_transfer(Legs[leg]);
+
+  char buf[96];
+  int len = snprintf(buf, sizeof(buf),
+                     "MOTOR_IO offline idx=%u ret=%d rxlen=%u cnt=%u rescan required\r\n",
+                     idx,
+                     (int)ret,
+                     (unsigned int)fbk->rx_len,
+                     state->io_error_count);
   if (len > 0 && len < (int)sizeof(buf))
     Communication_SendString(buf);
 }
@@ -480,7 +528,6 @@ static void poll_online_motor(uint8_t leg, uint8_t motor)
   if (leg >= 4 || motor >= 2 || !motor_is_online(leg, motor))
     return;
 
-  uint8_t idx = motor_index_from_leg_motor(leg, motor);
   Leg_HandlerTypeDef *hleg = Legs[leg];
   MOTOR_send *cmd = &hleg->motor_cmd[motor];
   MOTOR_recv *fbk = &hleg->motor_data[motor];
@@ -496,11 +543,11 @@ static void poll_online_motor(uint8_t leg, uint8_t motor)
   {
     state->angle = fbk->Pos;
     state->angle_valid = Motor_Angle_Valid;
+    state->io_error_count = 0;
   }
   else
   {
-    state->angle_valid = Motor_Angle_Invalid;
-    log_motor_io_error(idx, ret, fbk);
+    handle_motor_io_failure(leg, motor, ret, fbk);
   }
 
   hleg->Leg_Status = Leg_Done;
