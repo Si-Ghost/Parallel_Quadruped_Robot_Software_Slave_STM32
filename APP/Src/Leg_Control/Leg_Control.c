@@ -40,6 +40,8 @@ extern UART_HandleTypeDef huart8;
 #define LEG_WEB_KP                  0.0f
 #define LEG_WEB_KW                  0.15f
 #define LEG_WEB_T_FF                0.20f
+#define LEG_HOLD_KP                 1.0f
+#define LEG_HOLD_KW                 0.15f
 #define LEG_HANDSHAKE_KW            0.05f
 #define LEG_HANDSHAKE_RETRY         2U
 #define LEG_DEBUG_LOG_PERIOD_MS     500U
@@ -226,10 +228,11 @@ static void log_debug_target(uint8_t motor_index, const char *tag, float desired
   if (len > 0)
   {
     int written = snprintf(&buf[len], sizeof(buf) - (size_t)len,
-                           " rt=%d rpos=%ld rspd=%d kw=%d act=%u res=%u\r\n",
+                           " rt=%d rpos=%ld rspd=%d kp=%d kw=%d act=%u res=%u\r\n",
                            (int)cmd->motor_send_data.comd.tor_des,
                            (long)cmd->motor_send_data.comd.pos_des,
                            (int)cmd->motor_send_data.comd.spd_des,
+                           (int)cmd->motor_send_data.comd.k_pos,
                            (int)cmd->motor_send_data.comd.k_spd,
                            state->target_active,
                            state->target_result);
@@ -253,6 +256,7 @@ static void stop_debug_target(uint8_t motor_index, Motor_TargetResultTypeDef res
   uint8_t keep_leg_damping =
       (result == Motor_Target_Done &&
        Legs[leg]->motor_state[paired_motor].target_active == Motor_Target_Active) ? 1U : 0U;
+  uint8_t hold_position = (result == Motor_Target_Done) ? 1U : 0U;
   MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
   Motor_RuntimeStateTypeDef *state = motor_state_from_index(motor_index);
 
@@ -265,8 +269,8 @@ static void stop_debug_target(uint8_t motor_index, Motor_TargetResultTypeDef res
   cmd->mode = 1;
   cmd->T = 0.0f;
   cmd->W = 0.0f;
-  cmd->K_P = 0.0f;
-  cmd->K_W = keep_leg_damping ? LEG_WEB_KW : 0.0f;
+  cmd->K_P = hold_position ? LEG_HOLD_KP : 0.0f;
+  cmd->K_W = hold_position ? LEG_HOLD_KW : (keep_leg_damping ? LEG_WEB_KW : 0.0f);
   cmd->Pos = state->angle;
   modify_data(cmd);
 
@@ -316,8 +320,8 @@ static void log_leg_finish_if_idle(uint8_t leg, Motor_TargetResultTypeDef result
     cmd->mode = 1;
     cmd->T = 0.0f;
     cmd->W = 0.0f;
-    cmd->K_P = 0.0f;
-    cmd->K_W = 0.0f;
+    cmd->K_P = (result == Motor_Target_Done) ? LEG_HOLD_KP : 0.0f;
+    cmd->K_W = (result == Motor_Target_Done) ? LEG_HOLD_KW : 0.0f;
     cmd->Pos = Legs[leg]->motor_state[motor].angle;
     modify_data(cmd);
   }
@@ -446,6 +450,16 @@ static int apply_debug_target(uint8_t motor_index, uint8_t force_log)
              (now - state->target_progress_tick) >= LEG_WEB_NO_PROGRESS_MS)
     {
       stop_debug_target(motor_index, Motor_Target_Stall);
+    }
+
+    if (state->target_active == Motor_Target_Inactive)
+    {
+      if (force_log || (now - state->debug_last_log_tick) >= LEG_DEBUG_LOG_PERIOD_MS)
+      {
+        state->debug_last_log_tick = now;
+        log_debug_target(motor_index, "done", desired, error);
+      }
+      return 1;
     }
   }
 
