@@ -9,7 +9,6 @@ extern volatile uint32_t last_valid_packet_tick;
 
 #define RX_BUF_SIZE 128
 #define TX_IT_BUF_SIZE 256
-#define TX_QUEUE_SIZE 4096
 #define RX_SNAPSHOT_SIZE 16
 
 typedef struct
@@ -17,10 +16,6 @@ typedef struct
     UART_HandleTypeDef *uart;                  /* 连接 ESP32 的 USART6 句柄。 */
     uint8_t rx_buf[RX_BUF_SIZE];               /* 接收缓冲区，承载遥控帧和文本指令。 */
     uint8_t tx_buf[TX_IT_BUF_SIZE];            /* ESP32 回复共用的中断发送缓冲区。 */
-    uint8_t tx_queue[TX_QUEUE_SIZE];
-    volatile uint16_t tx_head;
-    volatile uint16_t tx_tail;
-    volatile uint16_t tx_count;
     volatile uint8_t tx_busy;                  /* HAL_UART_Transmit_IT 发送期间为非 0。 */
     volatile uint8_t handshake_done;           /* 收到 ESP32 hello 或有效遥控帧后置位。 */
     uint32_t last_hello_tick;                  /* 握手完成前，ACK 重试的上次时间戳。 */
@@ -55,33 +50,6 @@ static void restart_esp32_rx(void)
 {
     if (comm_ctx.uart) {
         HAL_UARTEx_ReceiveToIdle_IT(comm_ctx.uart, comm_ctx.rx_buf, RX_BUF_SIZE);
-    }
-}
-
-static void start_next_tx(void)
-{
-    if (!comm_ctx.uart)
-        return;
-
-    __disable_irq();
-    if (comm_ctx.tx_busy || comm_ctx.tx_count == 0U) {
-        __enable_irq();
-        return;
-    }
-
-    uint16_t len = 0;
-    while (len < TX_IT_BUF_SIZE && comm_ctx.tx_count > 0U) {
-        comm_ctx.tx_buf[len++] = comm_ctx.tx_queue[comm_ctx.tx_tail];
-        comm_ctx.tx_tail = (uint16_t)((comm_ctx.tx_tail + 1U) % TX_QUEUE_SIZE);
-        comm_ctx.tx_count--;
-    }
-    comm_ctx.tx_busy = 1U;
-    __enable_irq();
-
-    if (HAL_UART_Transmit_IT(comm_ctx.uart, comm_ctx.tx_buf, len) != HAL_OK) {
-        __disable_irq();
-        comm_ctx.tx_busy = 0U;
-        __enable_irq();
     }
 }
 
@@ -639,32 +607,27 @@ void Communication_Task(void)
 void Communication_NotifyTxComplete(void)
 {
     comm_ctx.tx_busy = 0;
-    start_next_tx();
 }
 
+/* 中断发送共用 comm_ctx.tx_buf，忙碌时直接丢弃本次发送。 */
 void Communication_SendByte(uint8_t byte)
 {
-    Communication_SendBytes(&byte, 1U);
+    if (!comm_ctx.uart || comm_ctx.tx_busy)
+        return;
+    comm_ctx.tx_buf[0] = byte;
+    if (HAL_UART_Transmit_IT(comm_ctx.uart, comm_ctx.tx_buf, 1) == HAL_OK) {
+        comm_ctx.tx_busy = 1;
+    }
 }
 
 void Communication_SendBytes(const uint8_t *data, uint16_t len)
 {
-    if (!comm_ctx.uart || !data || len == 0U || len > TX_QUEUE_SIZE)
+    if (!comm_ctx.uart || comm_ctx.tx_busy || len > TX_IT_BUF_SIZE)
         return;
-
-    __disable_irq();
-    if ((uint16_t)(TX_QUEUE_SIZE - comm_ctx.tx_count) < len) {
-        __enable_irq();
-        return;
+    memcpy(comm_ctx.tx_buf, data, len);
+    if (HAL_UART_Transmit_IT(comm_ctx.uart, comm_ctx.tx_buf, len) == HAL_OK) {
+        comm_ctx.tx_busy = 1;
     }
-
-    for (uint16_t i = 0; i < len; i++) {
-        comm_ctx.tx_queue[comm_ctx.tx_head] = data[i];
-        comm_ctx.tx_head = (uint16_t)((comm_ctx.tx_head + 1U) % TX_QUEUE_SIZE);
-    }
-    __enable_irq();
-
-    start_next_tx();
 }
 
 void Communication_SendString(const char *str)
