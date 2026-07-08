@@ -27,7 +27,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_WEB_ANGLE_MAX_RAD       1.50f
 #define LEG_TARGET_RAMP_MS          1200U
 #define LEG_WEB_STOP_ERROR_RAD      0.08f
-#define LEG_ALL_MICRO_STOP_ERROR_RAD 0.03f
+#define LEG_ALL_MICRO_STOP_ERROR_RAD 0.05f
 #define LEG_WEB_NEAR_ERROR_RAD      0.12f
 #define LEG_WEB_TARGET_TIMEOUT_MS   30000U
 #define LEG_WEB_NO_PROGRESS_MS      4000U
