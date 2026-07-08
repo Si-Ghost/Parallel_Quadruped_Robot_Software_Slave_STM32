@@ -43,7 +43,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_SINE_FREQ_MAX_HZ        2.0f
 #define LEG_SINE_FREQ_MIN_HZ        0.1f
 #define LEG_SINE_LOG_PERIOD_MS      200U
-#define LEG_TROT_LIFT_HEIGHT_MM     40.0f
+#define LEG_TROT_LIFT_HEIGHT_MM     60.0f
 #define LEG_TROT_START_POINT_MM     50.0f
 #define LEG_TROT_STEP_RATE_MS       400U
 #define LEG_TROT_STEP_CYCLE_MS      800U
@@ -1094,12 +1094,12 @@ static void service_trot(void)
     if (is_swing)
     {
       float len = 2.0f * LEG_TROT_START_POINT_MM;
-      foot_x = -LEG_TROT_START_POINT_MM + len * (t - sinf(LEG_TWO_PI * t) / LEG_TWO_PI);
+      foot_x = LEG_TROT_START_POINT_MM - len * (t - sinf(LEG_TWO_PI * t) / LEG_TWO_PI);
       foot_y = trot.leg_high[leg] - LEG_TROT_LIFT_HEIGHT_MM * (0.5f - 0.5f * cosf(LEG_TWO_PI * t));
     }
     else
     {
-      foot_x = LEG_TROT_START_POINT_MM - 2.0f * LEG_TROT_START_POINT_MM * t;
+      foot_x = -LEG_TROT_START_POINT_MM + 2.0f * LEG_TROT_START_POINT_MM * t;
       foot_y = trot.leg_high[leg];
     }
 
