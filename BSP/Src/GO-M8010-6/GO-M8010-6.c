@@ -4,6 +4,7 @@
 #include <string.h>
 
 #define MOTOR_UART_TIMEOUT_MS 20U
+#define MOTOR_DMA_RX_TIMEOUT_MS 20U
 
 #define SATURATE(_IN, _MIN, _MAX) {\
  if (_IN < _MIN)\
@@ -12,12 +13,26 @@
  _IN = _MAX;\
  }
 
+static uint8_t motor_dma_rx_buffer[sizeof(MotorData_t)] __attribute__((section(".dma_buffer"), aligned(32)));
+
 static void motor_uart_reset_rx(UART_HandleTypeDef *huart)
 {
     // 清掉上一次事务残留的接收字节和错误标志，避免下一帧从旧字节开始读取。
     HAL_UART_AbortReceive(huart);
     __HAL_UART_CLEAR_FLAG(huart, UART_CLEAR_OREF | UART_CLEAR_NEF | UART_CLEAR_PEF | UART_CLEAR_FEF);
     SET_BIT(huart->Instance->RQR, UART_RXDATA_FLUSH_REQUEST);
+}
+
+static uint16_t motor_uart_dma_rx_len(UART_HandleTypeDef *huart, uint16_t expected_len)
+{
+    if (huart->hdmarx == NULL)
+      return 0;
+
+    uint16_t remain = (uint16_t)__HAL_DMA_GET_COUNTER(huart->hdmarx);
+    if (remain > expected_len)
+      return 0;
+
+    return expected_len - remain;
 }
 
 /**
@@ -94,10 +109,22 @@ HAL_StatusTypeDef SERVO_Send_recv(MOTOR_send *pData, MOTOR_recv *rData, GPIO_Typ
     rData->rx_len = 0;
     rData->correct = 0;
     memset(&rData->motor_recv_data, 0, sizeof(rData->motor_recv_data));
+    memset(motor_dma_rx_buffer, 0, rx_expected_len);
     motor_uart_reset_rx(huart);
 
 	//调整数据然后发送并等待接收
     modify_data(pData);
+
+    HAL_StatusTypeDef rx_ret = HAL_UART_Receive_DMA(huart, motor_dma_rx_buffer, rx_expected_len);
+    if (rx_ret != HAL_OK)
+    {
+      motor_uart_reset_rx(huart);
+      return rx_ret;
+    }
+    if (huart->hdmarx != NULL)
+    {
+      __HAL_DMA_DISABLE_IT(huart->hdmarx, DMA_IT_HT);
+    }
 
 	//设置为发送，然后发送数据
 	HAL_GPIO_WritePin(Port, Pin, GPIO_PIN_SET);
@@ -110,20 +137,26 @@ HAL_StatusTypeDef SERVO_Send_recv(MOTOR_send *pData, MOTOR_recv *rData, GPIO_Typ
         return tx_ret;
     }
 
-	//设置为接收模式，然后接收数据
 	HAL_GPIO_WritePin(Port, Pin, GPIO_PIN_RESET);
-	HAL_StatusTypeDef rx_ret = HAL_UART_Receive(huart,
-                                               (uint8_t *)&(rData->motor_recv_data),
-                                               rx_expected_len,
-                                               MOTOR_UART_TIMEOUT_MS);
-    if (huart->RxXferSize == rx_expected_len && huart->RxXferCount <= rx_expected_len)
+
+    uint32_t tickstart = HAL_GetTick();
+    while (motor_uart_dma_rx_len(huart, rx_expected_len) < rx_expected_len)
     {
-      rData->rx_len = rx_expected_len - huart->RxXferCount;
+      if ((HAL_GetTick() - tickstart) >= MOTOR_DMA_RX_TIMEOUT_MS)
+        break;
     }
-    if(rx_ret != HAL_OK)
+
+    rData->rx_len = motor_uart_dma_rx_len(huart, rx_expected_len);
+    HAL_UART_DMAStop(huart);
+    if (rData->rx_len > 0U)
+    {
+      memcpy(&rData->motor_recv_data, motor_dma_rx_buffer, rData->rx_len);
+    }
+
+    if(rData->rx_len != rx_expected_len)
     {
       motor_uart_reset_rx(huart);
-      return rx_ret;
+      return HAL_TIMEOUT;
     }
 	// 接收处理，如果数据长度为零则是超时，不对就是错误
 
