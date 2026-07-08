@@ -1084,6 +1084,8 @@ static void service_trot(void)
   if (t > 1.0f) t = 1.0f;
 
   uint8_t pair_a_swing = half_cycle;
+  float foot_x_saved[4];
+  float foot_y_saved[4];
 
   for (uint8_t leg = 0; leg < 4; leg++)
   {
@@ -1102,6 +1104,9 @@ static void service_trot(void)
       foot_x = -LEG_TROT_START_POINT_MM + 2.0f * LEG_TROT_START_POINT_MM * t;
       foot_y = trot.leg_high[leg];
     }
+
+    foot_x_saved[leg] = foot_x;
+    foot_y_saved[leg] = foot_y;
 
     Leg_PointTypeDef target = { .x = foot_x, .y = foot_y };
     Leg_JointAnglesTypeDef target_angles;
@@ -1128,7 +1133,7 @@ static void service_trot(void)
   if ((now - trot.last_log_tick) >= LEG_TROT_LOG_PERIOD_MS)
   {
     trot.last_log_tick = now;
-    char buf[200];
+    char buf[320];
     int len = snprintf(buf, sizeof(buf), "LEG_TROT_LOG hc=%u t=", half_cycle);
     if (len > 0 && len < (int)sizeof(buf))
     {
@@ -1136,11 +1141,15 @@ static void service_trot(void)
       size_t rem = sizeof(buf) - (size_t)len;
       int n = snprintf(bp, rem, "%ld.%03ld", (long)((int)t), (long)((int)(t * 1000) % 1000));
       if (n > 0 && n < (int)rem) { bp += n; rem -= n; } else rem = 0;
-      for (uint8_t leg = 0; leg < 4 && rem > 4; leg++)
+      for (uint8_t lg = 0; lg < 4 && rem > 10; lg++)
       {
-        uint8_t in_pair_a = (leg == 0U || leg == 3U) ? 1U : 0U;
+        uint8_t in_pair_a = (lg == 0U || lg == 3U) ? 1U : 0U;
         uint8_t is_swing = in_pair_a ? pair_a_swing : (1U - pair_a_swing);
-        n = snprintf(bp, rem, " L%u:%c", leg, is_swing ? 'S' : 'G');
+        float fx = foot_x_saved[lg];
+        float fy = foot_y_saved[lg];
+        n = snprintf(bp, rem, " L%u:%c(%ld,%ld)",
+                     lg, is_swing ? 'S' : 'G',
+                     (long)(int)fx, (long)(int)fy);
         if (n > 0 && n < (int)rem) { bp += n; rem -= n; }
       }
       if (rem > 2) { *bp++ = '\r'; *bp++ = '\n'; rem -= 2; }
