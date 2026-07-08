@@ -27,6 +27,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_WEB_ANGLE_MAX_RAD       1.50f
 #define LEG_TARGET_RAMP_MS          1200U
 #define LEG_WEB_STOP_ERROR_RAD      0.08f
+#define LEG_ALL_MICRO_STOP_ERROR_RAD 0.03f
 #define LEG_WEB_NEAR_ERROR_RAD      0.12f
 #define LEG_WEB_TARGET_TIMEOUT_MS   30000U
 #define LEG_WEB_NO_PROGRESS_MS      4000U
@@ -83,6 +84,7 @@ static void log_leg_finish_if_idle(uint8_t leg, Motor_TargetResultTypeDef result
 static void service_debug_trace(void);
 static void service_all_micro(void);
 static void start_debug_offset(uint8_t motor_index, float offset);
+static void start_debug_offset_with_stop_error(uint8_t motor_index, float offset, float stop_error);
 
 static const float default_rotor_zero_offset[4][2] = {
   {4.2988f, 3.4371f},  // LF: motor0(theta2), motor1(theta1)
@@ -178,6 +180,7 @@ static void reset_motor_runtime_state(Motor_RuntimeStateTypeDef *state)
   state->target_start_tick = 0;
   state->target_progress_tick = 0;
   state->target_last_abs_error = 0.0f;
+  state->target_stop_error = LEG_WEB_STOP_ERROR_RAD;
   state->debug_last_log_tick = 0;
   state->io_error_last_log_tick = 0;
   state->io_error_count = 0;
@@ -287,6 +290,7 @@ static void stop_debug_target(uint8_t motor_index, Motor_TargetResultTypeDef res
   state->target_start_tick = 0;
   state->target_progress_tick = 0;
   state->target_last_abs_error = 0.0f;
+  state->target_stop_error = LEG_WEB_STOP_ERROR_RAD;
 
   cmd->mode = 1;
   cmd->T = 0.0f;
@@ -622,10 +626,11 @@ static int apply_debug_target(uint8_t motor_index, uint8_t force_log)
                   (final_desired - state->target_start_angle) * ramp;
   float error = final_desired - state->angle;
   float abs_error = absf_local(error);
+  float stop_error = (state->target_stop_error > 0.0f) ? state->target_stop_error : LEG_WEB_STOP_ERROR_RAD;
 
   if (state->target_active)
   {
-    if (ramp >= 1.0f && abs_error <= LEG_WEB_STOP_ERROR_RAD)
+    if (ramp >= 1.0f && abs_error <= stop_error)
     {
       stop_debug_target(motor_index, Motor_Target_Done);
     }
@@ -754,7 +759,7 @@ static int start_all_micro_phase(uint8_t phase)
     for (uint8_t motor = 0; motor < 2; motor++)
     {
       uint8_t idx = motor_index_from_leg_motor(leg, motor);
-      start_debug_offset(idx, offsets[leg][motor]);
+      start_debug_offset_with_stop_error(idx, offsets[leg][motor], LEG_ALL_MICRO_STOP_ERROR_RAD);
       if (!apply_debug_target(idx, 0))
       {
         for (uint8_t stop_idx = 0; stop_idx < 8; stop_idx++)
@@ -1037,10 +1042,11 @@ int Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad)
   state->target_last_abs_error =
       absf_local((Legs[motor_index / 2]->p_init[motor_index % 2] + state->target_offset) -
                  state->angle);
+  state->target_stop_error = LEG_WEB_STOP_ERROR_RAD;
   return apply_debug_target(motor_index, 1);
 }
 
-static void start_debug_offset(uint8_t motor_index, float offset)
+static void start_debug_offset_with_stop_error(uint8_t motor_index, float offset, float stop_error)
 {
   Motor_RuntimeStateTypeDef *state = motor_state_from_index(motor_index);
   if (state == NULL)
@@ -1055,6 +1061,12 @@ static void start_debug_offset(uint8_t motor_index, float offset)
   state->target_last_abs_error =
       absf_local((Legs[motor_index / 2]->p_init[motor_index % 2] + state->target_offset) -
                  state->angle);
+  state->target_stop_error = (stop_error > 0.0f) ? stop_error : LEG_WEB_STOP_ERROR_RAD;
+}
+
+static void start_debug_offset(uint8_t motor_index, float offset)
+{
+  start_debug_offset_with_stop_error(motor_index, offset, LEG_WEB_STOP_ERROR_RAD);
 }
 
 static void log_leg_nudge_reject(uint8_t leg, const char *reason, uint8_t motor, float value)
