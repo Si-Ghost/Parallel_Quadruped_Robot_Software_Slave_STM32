@@ -42,6 +42,7 @@ static const char leg_nudge_mm_cmd[] = "LEG_NUDGE_MM";
 static const char leg_trace_cmd[] = "LEG_TRACE";
 static const char leg_snapshot_cmd[] = "LEG_SNAPSHOT";
 static const char leg_all_micro_cmd[] = "LEG_ALL_MICRO";
+static const char leg_prep_pose_cmd[] = "LEG_PREP_POSE";
 
 #define RC_RAW_MIN       0
 #define RC_RAW_MAX       2047
@@ -392,7 +393,8 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         len < sizeof(leg_nudge_mm_cmd) - 1 &&
         len < sizeof(leg_trace_cmd) - 1 &&
         len < sizeof(leg_snapshot_cmd) - 1 &&
-        len < sizeof(leg_all_micro_cmd) - 1)
+        len < sizeof(leg_all_micro_cmd) - 1 &&
+        len < sizeof(leg_prep_pose_cmd) - 1)
         return;
 
     for (uint16_t i = 0; i + sizeof(motor_stop_all_cmd) - 1 <= len; i++) {
@@ -430,6 +432,15 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         if (memcmp(&data[i], leg_all_micro_cmd, sizeof(leg_all_micro_cmd) - 1) == 0) {
             if (!Leg_Control_StartAllMicroTest()) {
                 Communication_SendString("LEG_ALL_MICRO_RX rejected\r\n");
+            }
+            return;
+        }
+    }
+
+    for (uint16_t i = 0; i + sizeof(leg_prep_pose_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], leg_prep_pose_cmd, sizeof(leg_prep_pose_cmd) - 1) == 0) {
+            if (!Leg_Control_StartPrepPoseTest()) {
+                Communication_SendString("LEG_PREP_POSE_RX rejected\r\n");
             }
             return;
         }

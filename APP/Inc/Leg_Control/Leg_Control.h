@@ -115,6 +115,7 @@ int  Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad);
 int  Leg_Control_SetDebugFootOffset(uint8_t leg, float dx_mm, float dy_mm);
 int  Leg_Control_StartDebugTrace(uint8_t leg);
 int  Leg_Control_StartAllMicroTest(void);
+int  Leg_Control_StartPrepPoseTest(void);
 void Leg_Control_LogFootSnapshot(void);
 int  Leg_Control_HoldCurrentPosition(void);
 void Leg_Control_StopAllDebugTargets(uint8_t reason);
