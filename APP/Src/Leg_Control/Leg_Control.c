@@ -25,10 +25,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_SERVICE_PERIOD_MS       50U
 #define LEG_WEB_ANGLE_MIN_RAD      -1.50f
 #define LEG_WEB_ANGLE_MAX_RAD       1.50f
-#define LEG_WEB_SPEED_KP            1.5f
-#define LEG_WEB_SPEED_MIN_FAR_RAD_S 0.45f
-#define LEG_WEB_SPEED_MIN_NEAR_RAD_S 0.25f
-#define LEG_WEB_SPEED_LIMIT_RAD_S   0.8f
+#define LEG_TARGET_RAMP_MS          1200U
 #define LEG_WEB_STOP_ERROR_RAD      0.08f
 #define LEG_WEB_NEAR_ERROR_RAD      0.12f
 #define LEG_WEB_TARGET_TIMEOUT_MS   30000U
@@ -37,9 +34,9 @@ extern UART_HandleTypeDef huart8;
 #define LEG_WEB_STALL_PROGRESS_RAD  0.005f
 #define LEG_FOOT_NUDGE_MAX_MM       15.0f
 #define LEG_FOOT_NUDGE_ROTOR_RAD    0.65f
-#define LEG_WEB_KP                  0.0f
+#define LEG_WEB_KP                  1.0f
 #define LEG_WEB_KW                  0.15f
-#define LEG_WEB_T_FF                0.20f
+#define LEG_WEB_T_FF                0.0f
 #define LEG_HOLD_KP                 1.0f
 #define LEG_HOLD_KW                 0.15f
 #define LEG_HANDSHAKE_KW            0.05f
@@ -154,6 +151,7 @@ static void reset_motor_runtime_state(Motor_RuntimeStateTypeDef *state)
   state->target_offset = 0.0f;
   state->target_active = Motor_Target_Inactive;
   state->target_result = Motor_Target_Idle;
+  state->target_start_angle = 0.0f;
   state->target_start_tick = 0;
   state->target_progress_tick = 0;
   state->target_last_abs_error = 0.0f;
@@ -262,6 +260,7 @@ static void stop_debug_target(uint8_t motor_index, Motor_TargetResultTypeDef res
 
   state->target_active = Motor_Target_Inactive;
   state->target_result = result;
+  state->target_start_angle = state->angle;
   state->target_start_tick = 0;
   state->target_progress_tick = 0;
   state->target_last_abs_error = 0.0f;
@@ -271,7 +270,7 @@ static void stop_debug_target(uint8_t motor_index, Motor_TargetResultTypeDef res
   cmd->W = 0.0f;
   cmd->K_P = hold_position ? LEG_HOLD_KP : 0.0f;
   cmd->K_W = hold_position ? LEG_HOLD_KW : (keep_leg_damping ? LEG_WEB_KW : 0.0f);
-  cmd->Pos = state->angle;
+  cmd->Pos = hold_position ? (Legs[leg]->p_init[motor] + state->target_offset) : state->angle;
   modify_data(cmd);
 
   log_leg_finish_if_idle(leg, result);
@@ -322,7 +321,9 @@ static void log_leg_finish_if_idle(uint8_t leg, Motor_TargetResultTypeDef result
     cmd->W = 0.0f;
     cmd->K_P = (result == Motor_Target_Done) ? LEG_HOLD_KP : 0.0f;
     cmd->K_W = (result == Motor_Target_Done) ? LEG_HOLD_KW : 0.0f;
-    cmd->Pos = Legs[leg]->motor_state[motor].angle;
+    cmd->Pos = (result == Motor_Target_Done)
+                   ? (Legs[leg]->p_init[motor] + Legs[leg]->motor_state[motor].target_offset)
+                   : Legs[leg]->motor_state[motor].angle;
     modify_data(cmd);
   }
 
@@ -426,14 +427,19 @@ static int apply_debug_target(uint8_t motor_index, uint8_t force_log)
   uint8_t motor = motor_index % 2;
   MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
 
-  float desired = Legs[leg]->p_init[motor] + state->target_offset;
-  float error = desired - state->angle;
-  float abs_error = absf_local(error);
+  float final_desired = Legs[leg]->p_init[motor] + state->target_offset;
   uint32_t now = HAL_GetTick();
+  uint32_t elapsed = now - state->target_start_tick;
+  float ramp = (float)elapsed / (float)LEG_TARGET_RAMP_MS;
+  ramp = clampf(ramp, 0.0f, 1.0f);
+  float desired = state->target_start_angle +
+                  (final_desired - state->target_start_angle) * ramp;
+  float error = final_desired - state->angle;
+  float abs_error = absf_local(error);
 
   if (state->target_active)
   {
-    if (abs_error <= LEG_WEB_STOP_ERROR_RAD)
+    if (ramp >= 1.0f && abs_error <= LEG_WEB_STOP_ERROR_RAD)
     {
       stop_debug_target(motor_index, Motor_Target_Done);
     }
@@ -467,18 +473,8 @@ static int apply_debug_target(uint8_t motor_index, uint8_t force_log)
   cmd->T = 0.0f;
   if (state->target_active)
   {
-    float speed = clampf(error * LEG_WEB_SPEED_KP,
-                         -LEG_WEB_SPEED_LIMIT_RAD_S,
-                         LEG_WEB_SPEED_LIMIT_RAD_S);
-    float min_speed = (abs_error <= LEG_WEB_NEAR_ERROR_RAD)
-                          ? LEG_WEB_SPEED_MIN_NEAR_RAD_S
-                          : LEG_WEB_SPEED_MIN_FAR_RAD_S;
-    if (absf_local(speed) < min_speed)
-      speed = (error >= 0.0f) ? min_speed : -min_speed;
-    cmd->W = speed;
-    cmd->T = (abs_error > LEG_WEB_NEAR_ERROR_RAD)
-                 ? ((error >= 0.0f) ? LEG_WEB_T_FF : -LEG_WEB_T_FF)
-                 : 0.0f;
+    cmd->W = 0.0f;
+    cmd->T = 0.0f;
   }
   else
   {
@@ -716,6 +712,7 @@ int Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad)
   state->target_offset = clampf(angle_rad, LEG_WEB_ANGLE_MIN_RAD, LEG_WEB_ANGLE_MAX_RAD);
   state->target_active = Motor_Target_Active;
   state->target_result = Motor_Target_Running;
+  state->target_start_angle = state->angle;
   state->target_start_tick = HAL_GetTick();
   state->target_progress_tick = state->target_start_tick;
   state->target_last_abs_error =
@@ -733,6 +730,7 @@ static void start_debug_offset(uint8_t motor_index, float offset)
   state->target_offset = offset;
   state->target_active = Motor_Target_Active;
   state->target_result = Motor_Target_Running;
+  state->target_start_angle = state->angle;
   state->target_start_tick = HAL_GetTick();
   state->target_progress_tick = state->target_start_tick;
   state->target_last_abs_error =

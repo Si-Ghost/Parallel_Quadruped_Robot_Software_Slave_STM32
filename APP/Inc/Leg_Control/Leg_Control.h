@@ -79,6 +79,7 @@ typedef struct
   float target_offset;                              // Web 调试目标，相对握手角的转子侧偏移，单位 rad。
   Motor_TargetActiveTypeDef target_active;          // 当前是否正在执行 Web 调试目标。
   Motor_TargetResultTypeDef target_result;          // 最近一次 Web 调试目标结果。
+  float target_start_angle;
   uint32_t target_start_tick;                       // 当前目标开始时的 HAL tick。
   uint32_t target_progress_tick;                    // 目标误差最近一次明显改善时的 HAL tick。
   float target_last_abs_error;                      // 用于堵转检测的上一次绝对误差。
