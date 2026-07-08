@@ -43,7 +43,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_SINE_FREQ_MAX_HZ        2.0f
 #define LEG_SINE_FREQ_MIN_HZ        0.1f
 #define LEG_SINE_LOG_PERIOD_MS      200U
-#define LEG_TROT_LIFT_HEIGHT_MM     60.0f
+#define LEG_TROT_LIFT_HEIGHT_MM     80.0f
 #define LEG_TROT_START_POINT_MM     50.0f
 #define LEG_TROT_STEP_RATE_MS       400U
 #define LEG_TROT_STEP_CYCLE_MS      800U
