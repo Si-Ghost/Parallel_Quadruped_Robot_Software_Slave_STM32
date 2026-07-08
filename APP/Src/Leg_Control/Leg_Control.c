@@ -39,6 +39,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_FOOT_NUDGE_ROTOR_RAD    0.65f
 #define LEG_WEB_KP                  0.0f
 #define LEG_WEB_KW                  0.15f
+#define LEG_WEB_T_FF                0.20f
 #define LEG_HANDSHAKE_KW            0.05f
 #define LEG_HANDSHAKE_RETRY         2U
 #define LEG_DEBUG_LOG_PERIOD_MS     500U
@@ -225,7 +226,8 @@ static void log_debug_target(uint8_t motor_index, const char *tag, float desired
   if (len > 0)
   {
     int written = snprintf(&buf[len], sizeof(buf) - (size_t)len,
-                           " rpos=%ld rspd=%d kw=%d act=%u res=%u\r\n",
+                           " rt=%d rpos=%ld rspd=%d kw=%d act=%u res=%u\r\n",
+                           (int)cmd->motor_send_data.comd.tor_des,
                            (long)cmd->motor_send_data.comd.pos_des,
                            (int)cmd->motor_send_data.comd.spd_des,
                            (int)cmd->motor_send_data.comd.k_spd,
@@ -460,6 +462,9 @@ static int apply_debug_target(uint8_t motor_index, uint8_t force_log)
     if (absf_local(speed) < min_speed)
       speed = (error >= 0.0f) ? min_speed : -min_speed;
     cmd->W = speed;
+    cmd->T = (abs_error > LEG_WEB_NEAR_ERROR_RAD)
+                 ? ((error >= 0.0f) ? LEG_WEB_T_FF : -LEG_WEB_T_FF)
+                 : 0.0f;
   }
   else
   {
