@@ -1091,18 +1091,17 @@ static void service_trot(void)
   {
     uint8_t in_pair_a = (leg == 0U || leg == 3U) ? 1U : 0U;
     uint8_t is_swing = in_pair_a ? pair_a_swing : (1U - pair_a_swing);
-    float x_sign = (leg == 1U || leg == 3U) ? -1.0f : 1.0f;
 
     float foot_x, foot_y;
     if (is_swing)
     {
       float len = 2.0f * LEG_TROT_START_POINT_MM;
-      foot_x = x_sign * (LEG_TROT_START_POINT_MM - len * (t - sinf(LEG_TWO_PI * t) / LEG_TWO_PI));
+      foot_x = -LEG_TROT_START_POINT_MM + len * (t - sinf(LEG_TWO_PI * t) / LEG_TWO_PI);
       foot_y = trot.leg_high[leg] - LEG_TROT_LIFT_HEIGHT_MM * (0.5f - 0.5f * cosf(LEG_TWO_PI * t));
     }
     else
     {
-      foot_x = x_sign * (-LEG_TROT_START_POINT_MM + 2.0f * LEG_TROT_START_POINT_MM * t);
+      foot_x = LEG_TROT_START_POINT_MM - 2.0f * LEG_TROT_START_POINT_MM * t;
       foot_y = trot.leg_high[leg];
     }
 
