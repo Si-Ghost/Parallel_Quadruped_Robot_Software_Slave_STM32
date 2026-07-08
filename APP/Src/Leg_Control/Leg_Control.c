@@ -38,7 +38,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_FOOT_NUDGE_MAX_MM       15.0f
 #define LEG_FOOT_NUDGE_ROTOR_RAD    0.65f
 #define LEG_WEB_KP                  0.0f
-#define LEG_WEB_KW                  0.05f
+#define LEG_WEB_KW                  0.15f
 #define LEG_HANDSHAKE_KW            0.05f
 #define LEG_HANDSHAKE_RETRY         2U
 #define LEG_DEBUG_LOG_PERIOD_MS     500U
@@ -225,9 +225,10 @@ static void log_debug_target(uint8_t motor_index, const char *tag, float desired
   if (len > 0)
   {
     int written = snprintf(&buf[len], sizeof(buf) - (size_t)len,
-                           " rpos=%ld rspd=%d act=%u res=%u\r\n",
+                           " rpos=%ld rspd=%d kw=%d act=%u res=%u\r\n",
                            (long)cmd->motor_send_data.comd.pos_des,
                            (int)cmd->motor_send_data.comd.spd_des,
+                           (int)cmd->motor_send_data.comd.k_spd,
                            state->target_active,
                            state->target_result);
     if (written < 0 || written >= (int)(sizeof(buf) - (size_t)len))
