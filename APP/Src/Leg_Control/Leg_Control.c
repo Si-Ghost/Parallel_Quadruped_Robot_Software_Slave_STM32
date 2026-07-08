@@ -329,7 +329,7 @@ static void log_trace_point(const char *tag, uint8_t leg, uint8_t step,
   if (tag == NULL || target == NULL || current == NULL)
     return;
 
-  char buf[160];
+  char buf[192];
   int len = snprintf(buf, sizeof(buf), "LEG_TRACE %s leg=%u step=%u tgt=", tag, leg, step);
   len = append_fixed4(buf, sizeof(buf), len, target->x);
   if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, ",");
@@ -338,6 +338,10 @@ static void log_trace_point(const char *tag, uint8_t leg, uint8_t step,
   len = append_fixed4(buf, sizeof(buf), len, current->x);
   if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, ",");
   len = append_fixed4(buf, sizeof(buf), len, current->y);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " err=");
+  len = append_fixed4(buf, sizeof(buf), len, target->x - current->x);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, ",");
+  len = append_fixed4(buf, sizeof(buf), len, target->y - current->y);
   if (len > 0)
   {
     int written = snprintf(&buf[len], sizeof(buf) - (size_t)len, "\r\n");
