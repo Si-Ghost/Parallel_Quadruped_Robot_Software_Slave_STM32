@@ -550,21 +550,27 @@ void Communication_SendMotorAngles(void)
     }
 }
 
-static void Communication_SendMotorZero(void)
+static int append_motor_zero(char *buf, size_t size, int len)
 {
     float zero_error[8];
     uint8_t zero_ok[8];
     uint8_t all_zero_ok = 0;
     Leg_Control_GetZeroCheck(zero_error, zero_ok, &all_zero_ok);
 
-    char buf[240];
-    int len = snprintf(buf, sizeof(buf), "MOTOR_ZERO ");
+    if (len < 0 || (size_t)len >= size)
+        return -1;
+
+    int written = snprintf(&buf[len], size - (size_t)len, "MOTOR_ZERO ");
+    if (written < 0 || written >= (int)(size - (size_t)len))
+        return -1;
+    len += written;
+
     for (uint8_t i = 0; i < 8 && len > 0; i++) {
-        len = append_fixed4(buf, sizeof(buf), len, zero_error[i]);
+        len = append_fixed4(buf, size, len, zero_error[i]);
         if (len > 0) {
-            int written = snprintf(&buf[len], sizeof(buf) - (size_t)len,
+            written = snprintf(&buf[len], size - (size_t)len,
                                    "%c", (i == 7) ? ' ' : ',');
-            if (written < 0 || written >= (int)(sizeof(buf) - (size_t)len))
+            if (written < 0 || written >= (int)(size - (size_t)len))
                 len = -1;
             else
                 len += written;
@@ -572,31 +578,29 @@ static void Communication_SendMotorZero(void)
     }
 
     if (len > 0) {
-        int written = snprintf(&buf[len], sizeof(buf) - (size_t)len,
+        written = snprintf(&buf[len], size - (size_t)len,
             "%u,%u,%u,%u,%u,%u,%u,%u %u ",
             zero_ok[0], zero_ok[1], zero_ok[2], zero_ok[3],
             zero_ok[4], zero_ok[5], zero_ok[6], zero_ok[7],
             all_zero_ok);
-        if (written < 0 || written >= (int)(sizeof(buf) - (size_t)len))
+        if (written < 0 || written >= (int)(size - (size_t)len))
             len = -1;
         else
             len += written;
     }
 
     if (len > 0) {
-        len = append_fixed4(buf, sizeof(buf), len, Leg_Control_GetZeroThreshold());
+        len = append_fixed4(buf, size, len, Leg_Control_GetZeroThreshold());
         if (len > 0) {
-            int written = snprintf(&buf[len], sizeof(buf) - (size_t)len, "\n");
-            if (written < 0 || written >= (int)(sizeof(buf) - (size_t)len))
+            written = snprintf(&buf[len], size - (size_t)len, "\n");
+            if (written < 0 || written >= (int)(size - (size_t)len))
                 len = -1;
             else
                 len += written;
         }
     }
 
-    if (len > 0 && len < (int)sizeof(buf)) {
-        Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
-    }
+    return len;
 }
 
 /* 向 ESP32 网页端发送紧凑的电机握手与目标状态。 */
@@ -611,7 +615,7 @@ void Communication_SendMotorStatus(void)
     Leg_Control_GetHandshakeErrors(motor_error);
     Leg_Control_GetTargetStates(target_active, target_result);
 
-    char buf[240];
+    char buf[TX_IT_BUF_SIZE];
     int len = snprintf(buf, sizeof(buf),
         "MOTOR_STATUS %u,%u,%u,%u,%u,%u,%u,%u %u,%u,%u,%u "
         "%u,%u,%u,%u,%u,%u,%u,%u %u,%u,%u,%u,%u,%u,%u,%u %u,%u,%u,%u,%u,%u,%u,%u\n",
@@ -626,8 +630,10 @@ void Communication_SendMotorStatus(void)
         target_result[4], target_result[5], target_result[6], target_result[7]);
 
     if (len > 0 && len < (int)sizeof(buf)) {
-        Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
+        len = append_motor_zero(buf, sizeof(buf), len);
     }
 
-    Communication_SendMotorZero();
+    if (len > 0 && len < (int)sizeof(buf)) {
+        Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
+    }
 }
