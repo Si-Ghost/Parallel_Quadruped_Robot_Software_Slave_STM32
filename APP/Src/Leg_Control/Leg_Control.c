@@ -37,9 +37,6 @@ extern UART_HandleTypeDef huart8;
 #define LEG_FOOT_NUDGE_ROTOR_RAD    0.65f
 #define LEG_TRACE_POINT_COUNT       4U
 #define LEG_ALL_MICRO_DY_MM         3.0f
-#define LEG_ALL_MICRO_SETTLE_MS     600U
-#define LEG_ALL_MICRO_SETTLE_RETRY  1U
-#define LEG_ALL_MICRO_SETTLE_Y_MM   0.8f
 #define LEG_WEB_KP                  2.0f
 #define LEG_WEB_KW                  0.15f
 #define LEG_WEB_T_FF                0.0f
@@ -76,8 +73,6 @@ typedef struct
 {
   uint8_t active;
   uint8_t phase;
-  uint8_t settle_count;
-  uint32_t settle_tick;
   Leg_PointTypeDef base_foot[4];
 } Leg_AllMicroTypeDef;
 
@@ -789,48 +784,10 @@ static int start_all_micro_phase(uint8_t phase)
   return 1;
 }
 
-static int all_micro_return_error_exceeded(void)
-{
-  for (uint8_t leg = 0; leg < 4; leg++)
-  {
-    Leg_PointTypeDef current;
-    if (!get_leg_current_foot(leg, &current))
-      return 1;
-
-    if (absf_local(current.y - all_micro.base_foot[leg].y) > LEG_ALL_MICRO_SETTLE_Y_MM)
-      return 1;
-  }
-
-  return 0;
-}
-
 static void service_all_micro(void)
 {
   if (!all_micro.active)
     return;
-
-  if (all_micro.phase == 2U)
-  {
-    if ((HAL_GetTick() - all_micro.settle_tick) < LEG_ALL_MICRO_SETTLE_MS)
-      return;
-
-    if (all_micro_return_error_exceeded() &&
-        all_micro.settle_count < LEG_ALL_MICRO_SETTLE_RETRY)
-    {
-      all_micro.settle_count++;
-      log_all_micro_feet("settle_retry", all_micro.phase, Motor_Target_Running);
-      if (!start_all_micro_phase(1U))
-      {
-        all_micro.active = 0U;
-        log_all_micro_simple("abort_settle", 2U, Motor_Target_Stopped);
-      }
-      return;
-    }
-
-    all_micro.active = 0U;
-    log_all_micro_feet("complete", all_micro.phase, Motor_Target_Done);
-    return;
-  }
 
   uint8_t all_done = 1U;
   Motor_TargetResultTypeDef bad_result = Motor_Target_Idle;
@@ -877,8 +834,8 @@ static void service_all_micro(void)
     return;
   }
 
-  all_micro.phase = 2U;
-  all_micro.settle_tick = HAL_GetTick();
+  all_micro.active = 0U;
+  log_all_micro_feet("complete", all_micro.phase, Motor_Target_Done);
 }
 
 static void leg_abort_transfer(Leg_HandlerTypeDef *hleg)
@@ -1297,8 +1254,6 @@ int Leg_Control_StartAllMicroTest(void)
 
   all_micro.active = 1U;
   all_micro.phase = 0U;
-  all_micro.settle_count = 0U;
-  all_micro.settle_tick = 0U;
   if (!start_all_micro_phase(0U))
   {
     all_micro.active = 0U;
