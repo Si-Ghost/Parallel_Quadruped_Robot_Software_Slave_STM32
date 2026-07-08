@@ -34,7 +34,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_WEB_STALL_PROGRESS_RAD  0.005f
 #define LEG_FOOT_NUDGE_MAX_MM       15.0f
 #define LEG_FOOT_NUDGE_ROTOR_RAD    0.65f
-#define LEG_WEB_KP                  1.0f
+#define LEG_WEB_KP                  2.0f
 #define LEG_WEB_KW                  0.15f
 #define LEG_WEB_T_FF                0.0f
 #define LEG_HOLD_KP                 1.0f
