@@ -261,15 +261,18 @@ static void log_motor_io_error(uint8_t motor_index, HAL_StatusTypeDef ret, MOTOR
 
   state->io_error_last_log_tick = now;
 
-  char buf[96];
+  char buf[128];
   int len = snprintf(buf, sizeof(buf),
-                     "MOTOR_IO fail idx=%u ret=%d rxlen=%u ok=%d err=%u cnt=%u\r\n",
+                     "MOTOR_IO fail idx=%u ret=%d rxlen=%u ok=%d err=%u cnt=%u h=%02X%02X id=%u\r\n",
                      motor_index,
                      (int)ret,
                      (unsigned int)fbk->rx_len,
                      fbk->correct,
                      fbk->MError,
-                     state->io_error_count);
+                     state->io_error_count,
+                     fbk->motor_recv_data.head[0],
+                     fbk->motor_recv_data.head[1],
+                     fbk->motor_recv_data.mode.id);
   if (len > 0 && len < (int)sizeof(buf))
     Communication_SendString(buf);
 }
@@ -306,13 +309,16 @@ static void handle_motor_io_failure(uint8_t leg, uint8_t motor, HAL_StatusTypeDe
   refresh_leg_online_state(leg);
   leg_abort_transfer(Legs[leg]);
 
-  char buf[96];
+  char buf[128];
   int len = snprintf(buf, sizeof(buf),
-                     "MOTOR_IO offline idx=%u ret=%d rxlen=%u cnt=%u rescan required\r\n",
+                     "MOTOR_IO offline idx=%u ret=%d rxlen=%u cnt=%u h=%02X%02X id=%u rescan required\r\n",
                      idx,
                      (int)ret,
                      (unsigned int)fbk->rx_len,
-                     state->io_error_count);
+                     state->io_error_count,
+                     fbk->motor_recv_data.head[0],
+                     fbk->motor_recv_data.head[1],
+                     fbk->motor_recv_data.mode.id);
   if (len > 0 && len < (int)sizeof(buf))
     Communication_SendString(buf);
 }

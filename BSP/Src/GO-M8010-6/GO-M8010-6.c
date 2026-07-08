@@ -1,6 +1,9 @@
 #include "../../Inc/GO-M8010-6/GO-M8010-6.h"
 #include "crc_ccitt.h"
 #include "stdio.h"
+#include <string.h>
+
+#define MOTOR_UART_TIMEOUT_MS 10U
 
 #define SATURATE(_IN, _MIN, _MAX) {\
  if (_IN < _MIN)\
@@ -78,9 +81,9 @@ int extract_data(MOTOR_recv *motor_r)
  */
 HAL_StatusTypeDef SERVO_Send_recv(MOTOR_send *pData, MOTOR_recv *rData, GPIO_TypeDef *Port, uint16_t Pin, UART_HandleTypeDef *huart)
 {
-    uint16_t rxlen = 0;
     rData->rx_len = 0;
     rData->correct = 0;
+    memset(&rData->motor_recv_data, 0, sizeof(rData->motor_recv_data));
     HAL_UART_AbortReceive(huart);
 
 	//调整数据然后发送并等待接收
@@ -98,31 +101,26 @@ HAL_StatusTypeDef SERVO_Send_recv(MOTOR_send *pData, MOTOR_recv *rData, GPIO_Typ
 
 	//设置为接收模式，然后接收数据
 	HAL_GPIO_WritePin(Port, Pin, GPIO_PIN_RESET);
-	HAL_StatusTypeDef rx_ret = HAL_UARTEx_ReceiveToIdle(huart, (uint8_t *)&(rData->motor_recv_data), sizeof(rData->motor_recv_data), &rxlen, 10);
-    rData->rx_len = rxlen;
-		
-	// 接收处理，如果数据长度为零则是超时，不对就是错误
-    if(rxlen == 0)
+	HAL_StatusTypeDef rx_ret = HAL_UART_Receive(huart,
+                                               (uint8_t *)&(rData->motor_recv_data),
+                                               sizeof(rData->motor_recv_data),
+                                               MOTOR_UART_TIMEOUT_MS);
+    if(rx_ret != HAL_OK)
     {
       HAL_UART_AbortReceive(huart);
-      if (rx_ret != HAL_OK)
-        return rx_ret;
-      return HAL_TIMEOUT;
+      return rx_ret;
     }
+    rData->rx_len = sizeof(rData->motor_recv_data);
+	// 接收处理，如果数据长度为零则是超时，不对就是错误
 
-    if(rxlen != sizeof(rData->motor_recv_data))
-    {
-            HAL_UART_AbortReceive(huart);
-			return HAL_ERROR;
-    }
 
 	//
     uint8_t *rp = (uint8_t *)&rData->motor_recv_data;
     if(rp[0] == 0xFD && rp[1] == 0xEE)
     {
-        rData->correct = 1;
-        extract_data(rData);
-        return HAL_OK;
+        if (extract_data(rData))
+            return HAL_OK;
+        return HAL_ERROR;
     }
     HAL_UART_AbortReceive(huart);
     return HAL_ERROR;
