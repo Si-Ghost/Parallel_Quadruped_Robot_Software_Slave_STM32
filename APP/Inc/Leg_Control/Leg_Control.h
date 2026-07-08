@@ -110,6 +110,7 @@ void Leg_Control_Handshake(void);
 void Leg_Control_RequestHandshake(void);
 void Leg_Control_Service(uint32_t now_ms);
 int  Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad);
+int  Leg_Control_SetDebugFootOffset(uint8_t leg, float dx_mm, float dy_mm);
 void Leg_Control_StopAllDebugTargets(uint8_t reason);
 void Leg_Control_GetAngles(float angles[8], uint8_t valid[8]);
 void Leg_Control_GetOnline(uint8_t motor_online[8], uint8_t leg_online[4]);

@@ -33,6 +33,8 @@ extern UART_HandleTypeDef huart8;
 #define LEG_WEB_NO_PROGRESS_MS      4000U
 #define LEG_WEB_STALL_GRACE_MS      500U
 #define LEG_WEB_STALL_PROGRESS_RAD  0.005f
+#define LEG_FOOT_NUDGE_MAX_MM       15.0f
+#define LEG_FOOT_NUDGE_ROTOR_RAD    0.65f
 #define LEG_WEB_KP                  0.0f
 #define LEG_WEB_KW                  0.05f
 #define LEG_HANDSHAKE_KW            0.05f
@@ -631,6 +633,97 @@ int Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad)
       absf_local((Legs[motor_index / 2]->p_init[motor_index % 2] + state->target_offset) -
                  state->angle);
   return apply_debug_target(motor_index, 1);
+}
+
+static void start_debug_offset(uint8_t motor_index, float offset)
+{
+  Motor_RuntimeStateTypeDef *state = motor_state_from_index(motor_index);
+  if (state == NULL)
+    return;
+
+  state->target_offset = offset;
+  state->target_active = Motor_Target_Active;
+  state->target_result = Motor_Target_Running;
+  state->target_start_tick = HAL_GetTick();
+  state->target_progress_tick = state->target_start_tick;
+  state->target_last_abs_error =
+      absf_local((Legs[motor_index / 2]->p_init[motor_index % 2] + state->target_offset) -
+                 state->angle);
+}
+
+int Leg_Control_SetDebugFootOffset(uint8_t leg, float dx_mm, float dy_mm)
+{
+  if (leg >= 4)
+    return 0;
+
+  dx_mm = clampf(dx_mm, -LEG_FOOT_NUDGE_MAX_MM, LEG_FOOT_NUDGE_MAX_MM);
+  dy_mm = clampf(dy_mm, -LEG_FOOT_NUDGE_MAX_MM, LEG_FOOT_NUDGE_MAX_MM);
+
+  for (uint8_t motor = 0; motor < 2; motor++)
+  {
+    Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
+    float zero_error = rotor_wrap_delta(state->angle, Legs[leg]->rotor_zero_offset[motor]);
+    if (state->online != Motor_Online ||
+        state->angle_valid != Motor_Angle_Valid ||
+        absf_local(zero_error) > LEG_ROTOR_ZERO_NEAR_RAD)
+    {
+      return 0;
+    }
+  }
+
+  Leg_JointAnglesTypeDef current_angles;
+  uint8_t theta_valid[2] = {0, 0};
+  if (!Leg_Control_GetJointAngles(leg, &current_angles, theta_valid) ||
+      !theta_valid[0] || !theta_valid[1])
+    return 0;
+
+  Leg_PointTypeDef current_foot;
+  if (!Leg_Kinematics_Forward(&current_angles, &current_foot))
+    return 0;
+
+  Leg_PointTypeDef target_foot = {
+      .x = current_foot.x + dx_mm,
+      .y = current_foot.y + dy_mm,
+  };
+  Leg_JointAnglesTypeDef target_angles;
+  if (!Leg_Kinematics_Inverse(&target_foot, &target_angles))
+    return 0;
+
+  float rotor_targets[2];
+  if (!Leg_Control_JointToRotorTargets(leg, &target_angles, rotor_targets))
+    return 0;
+
+  float offsets[2];
+  for (uint8_t motor = 0; motor < 2; motor++)
+  {
+    offsets[motor] = rotor_wrap_delta(rotor_targets[motor], Legs[leg]->p_init[motor]);
+    if (absf_local(offsets[motor]) > LEG_FOOT_NUDGE_ROTOR_RAD)
+      return 0;
+  }
+
+  start_debug_offset(motor_index_from_leg_motor(leg, 0), offsets[0]);
+  start_debug_offset(motor_index_from_leg_motor(leg, 1), offsets[1]);
+  int ok0 = apply_debug_target(motor_index_from_leg_motor(leg, 0), 1);
+  int ok1 = apply_debug_target(motor_index_from_leg_motor(leg, 1), 1);
+
+  char buf[192];
+  int len = snprintf(buf, sizeof(buf), "LEG_NUDGE ok leg=%u foot=", leg);
+  len = append_fixed4(buf, sizeof(buf), len, current_foot.x);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, ",");
+  len = append_fixed4(buf, sizeof(buf), len, current_foot.y);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " target=");
+  len = append_fixed4(buf, sizeof(buf), len, target_foot.x);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, ",");
+  len = append_fixed4(buf, sizeof(buf), len, target_foot.y);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " rotor_off=");
+  len = append_fixed4(buf, sizeof(buf), len, offsets[0]);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, ",");
+  len = append_fixed4(buf, sizeof(buf), len, offsets[1]);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, "\r\n");
+  if (len > 0 && len < (int)sizeof(buf))
+    Communication_SendString(buf);
+
+  return ok0 && ok1;
 }
 
 void Leg_Control_StopAllDebugTargets(uint8_t reason)

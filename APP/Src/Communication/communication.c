@@ -37,6 +37,7 @@ static const char motor_set_mrad_cmd[] = "MOTOR_SET_MRAD";
 static const char motor_set_cmd[] = "MOTOR_SET";
 static const char motor_rescan_cmd[] = "MOTOR_RESCAN";
 static const char motor_stop_all_cmd[] = "MOTOR_STOP_ALL";
+static const char leg_nudge_mm_cmd[] = "LEG_NUDGE_MM";
 
 #define RC_RAW_MIN       0
 #define RC_RAW_MAX       2047
@@ -271,12 +272,73 @@ static void handle_motor_set_text(const char *cmd_buf)
     }
 }
 
+static int parse_leg_nudge_mm_command(const char *cmd, int *leg, float *dx_mm, float *dy_mm)
+{
+    const char *p = cmd;
+    int dx_int = 0;
+    int dy_int = 0;
+
+    if (memcmp(p, leg_nudge_mm_cmd, sizeof(leg_nudge_mm_cmd) - 1) != 0)
+        return 0;
+
+    p += sizeof(leg_nudge_mm_cmd) - 1;
+    if (*p != ' ' && *p != '\t')
+        return 0;
+
+    if (!parse_int_value(&p, leg))
+        return 0;
+    if (!parse_int_value(&p, &dx_int))
+        return 0;
+    if (!parse_int_value(&p, &dy_int))
+        return 0;
+
+    p = skip_spaces(p);
+    if (*p != '\0')
+        return 0;
+
+    *dx_mm = (float)dx_int;
+    *dy_mm = (float)dy_int;
+    return 1;
+}
+
+static void handle_leg_nudge_text(const char *cmd_buf)
+{
+    int leg = -1;
+    float dx_mm = 0.0f;
+    float dy_mm = 0.0f;
+    int accepted = 0;
+    char log_buf[96];
+
+    if (!parse_leg_nudge_mm_command(cmd_buf, &leg, &dx_mm, &dy_mm)) {
+        int log_len = snprintf(log_buf, sizeof(log_buf),
+                               "LEG_NUDGE_RX parse_fail cmd=%s\r\n", cmd_buf);
+        if (log_len > 0 && log_len < (int)sizeof(log_buf)) {
+            Communication_SendBytes((const uint8_t *)log_buf, (uint16_t)log_len);
+        }
+        return;
+    }
+
+    if (leg >= 0 && leg < 4) {
+        accepted = Leg_Control_SetDebugFootOffset((uint8_t)leg, dx_mm, dy_mm);
+    }
+
+    if (!accepted) {
+        int log_len = snprintf(log_buf, sizeof(log_buf),
+                               "LEG_NUDGE_RX rejected leg=%d dx=%ld dy=%ld\r\n",
+                               leg, (long)dx_mm, (long)dy_mm);
+        if (log_len > 0 && log_len < (int)sizeof(log_buf)) {
+            Communication_SendBytes((const uint8_t *)log_buf, (uint16_t)log_len);
+        }
+    }
+}
+
 static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
 {
     if (len < sizeof(motor_set_cmd) - 1 &&
         len < sizeof(motor_set_mrad_cmd) - 1 &&
         len < sizeof(motor_rescan_cmd) - 1 &&
-        len < sizeof(motor_stop_all_cmd) - 1)
+        len < sizeof(motor_stop_all_cmd) - 1 &&
+        len < sizeof(leg_nudge_mm_cmd) - 1)
         return;
 
     for (uint16_t i = 0; i + sizeof(motor_stop_all_cmd) - 1 <= len; i++) {
@@ -290,6 +352,26 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
     for (uint16_t i = 0; i + sizeof(motor_rescan_cmd) - 1 <= len; i++) {
         if (memcmp(&data[i], motor_rescan_cmd, sizeof(motor_rescan_cmd) - 1) == 0) {
             Leg_Control_RequestHandshake();
+            return;
+        }
+    }
+
+    for (uint16_t i = 0; i + sizeof(leg_nudge_mm_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], leg_nudge_mm_cmd, sizeof(leg_nudge_mm_cmd) - 1) == 0) {
+            char cmd_buf[48];
+            uint16_t copy_len = len - i;
+            if (copy_len >= sizeof(cmd_buf))
+                copy_len = sizeof(cmd_buf) - 1;
+            memcpy(cmd_buf, &data[i], copy_len);
+            cmd_buf[copy_len] = '\0';
+            for (uint16_t j = 0; j < copy_len; j++) {
+                if (cmd_buf[j] == '\r' || cmd_buf[j] == '\n') {
+                    cmd_buf[j] = '\0';
+                    break;
+                }
+            }
+
+            handle_leg_nudge_text(cmd_buf);
             return;
         }
     }
