@@ -34,6 +34,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_WEB_STALL_PROGRESS_RAD  0.005f
 #define LEG_FOOT_NUDGE_MAX_MM       15.0f
 #define LEG_FOOT_NUDGE_ROTOR_RAD    0.65f
+#define LEG_TRACE_POINT_COUNT       4U
 #define LEG_WEB_KP                  2.0f
 #define LEG_WEB_KW                  0.15f
 #define LEG_WEB_T_FF                0.0f
@@ -58,8 +59,19 @@ extern UART_HandleTypeDef huart8;
 static uint32_t last_service_tick = 0;
 static volatile uint8_t handshake_requested = 0;
 
+typedef struct
+{
+  uint8_t active;
+  uint8_t leg;
+  uint8_t step;
+  Leg_PointTypeDef base_foot;
+} Leg_DebugTraceTypeDef;
+
+static Leg_DebugTraceTypeDef debug_trace = {0};
+
 static void leg_abort_transfer(Leg_HandlerTypeDef *hleg);
 static void log_leg_finish_if_idle(uint8_t leg, Motor_TargetResultTypeDef result);
+static void service_debug_trace(void);
 
 static const float default_rotor_zero_offset[4][2] = {
   {4.2988f, 3.4371f},  // LF: motor0(theta2), motor1(theta1)
@@ -297,6 +309,136 @@ static void log_leg_foot_line(const char *tag, uint8_t leg, const Leg_PointTypeD
 
   if (len > 0 && len < (int)sizeof(buf))
     Communication_SendString(buf);
+}
+
+static int get_leg_current_foot(uint8_t leg, Leg_PointTypeDef *foot)
+{
+  if (leg >= 4 || foot == NULL)
+    return 0;
+
+  Leg_JointAnglesTypeDef angles;
+  uint8_t valid[2] = {0, 0};
+  return Leg_Control_GetJointAngles(leg, &angles, valid) &&
+         valid[0] && valid[1] &&
+         Leg_Kinematics_Forward(&angles, foot);
+}
+
+static void log_trace_point(const char *tag, uint8_t leg, uint8_t step,
+                            const Leg_PointTypeDef *target, const Leg_PointTypeDef *current)
+{
+  if (tag == NULL || target == NULL || current == NULL)
+    return;
+
+  char buf[160];
+  int len = snprintf(buf, sizeof(buf), "LEG_TRACE %s leg=%u step=%u tgt=", tag, leg, step);
+  len = append_fixed4(buf, sizeof(buf), len, target->x);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, ",");
+  len = append_fixed4(buf, sizeof(buf), len, target->y);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " cur=");
+  len = append_fixed4(buf, sizeof(buf), len, current->x);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, ",");
+  len = append_fixed4(buf, sizeof(buf), len, current->y);
+  if (len > 0)
+  {
+    int written = snprintf(&buf[len], sizeof(buf) - (size_t)len, "\r\n");
+    if (written < 0 || written >= (int)(sizeof(buf) - (size_t)len))
+      return;
+    len += written;
+  }
+
+  if (len > 0 && len < (int)sizeof(buf))
+    Communication_SendString(buf);
+}
+
+static void log_trace_simple(const char *tag, uint8_t leg, uint8_t step, Motor_TargetResultTypeDef result)
+{
+  char buf[80];
+  int len = snprintf(buf, sizeof(buf), "LEG_TRACE %s leg=%u step=%u res=%u\r\n",
+                     tag, leg, step, result);
+  if (len > 0 && len < (int)sizeof(buf))
+    Communication_SendString(buf);
+}
+
+static const Leg_PointTypeDef trace_offsets[LEG_TRACE_POINT_COUNT] = {
+    {0.0f, 5.0f},
+    {5.0f, 5.0f},
+    {-5.0f, 5.0f},
+    {0.0f, 0.0f},
+};
+
+static int start_debug_trace_step(void)
+{
+  if (!debug_trace.active || debug_trace.leg >= 4 || debug_trace.step >= LEG_TRACE_POINT_COUNT)
+    return 0;
+
+  Leg_PointTypeDef current;
+  if (!get_leg_current_foot(debug_trace.leg, &current))
+  {
+    log_trace_simple("abort_fk", debug_trace.leg, debug_trace.step, Motor_Target_Stall);
+    debug_trace.active = 0;
+    return 0;
+  }
+
+  Leg_PointTypeDef target = {
+      .x = debug_trace.base_foot.x + trace_offsets[debug_trace.step].x,
+      .y = debug_trace.base_foot.y + trace_offsets[debug_trace.step].y,
+  };
+  log_trace_point("point", debug_trace.leg, debug_trace.step, &target, &current);
+
+  if (!Leg_Control_SetDebugFootOffset(debug_trace.leg,
+                                      target.x - current.x,
+                                      target.y - current.y))
+  {
+    log_trace_simple("abort_start", debug_trace.leg, debug_trace.step, Motor_Target_Stopped);
+    debug_trace.active = 0;
+    return 0;
+  }
+
+  return 1;
+}
+
+static void service_debug_trace(void)
+{
+  if (!debug_trace.active || debug_trace.leg >= 4)
+    return;
+
+  Motor_RuntimeStateTypeDef *m0 = &Legs[debug_trace.leg]->motor_state[0];
+  Motor_RuntimeStateTypeDef *m1 = &Legs[debug_trace.leg]->motor_state[1];
+  if (m0->target_active == Motor_Target_Active || m1->target_active == Motor_Target_Active)
+    return;
+
+  if (m0->target_result == Motor_Target_Stall || m1->target_result == Motor_Target_Stall ||
+      m0->target_result == Motor_Target_Timeout || m1->target_result == Motor_Target_Timeout ||
+      m0->target_result == Motor_Target_Stopped || m1->target_result == Motor_Target_Stopped)
+  {
+    log_trace_simple("abort", debug_trace.leg, debug_trace.step,
+                     m0->target_result > m1->target_result ? m0->target_result : m1->target_result);
+    debug_trace.active = 0;
+    return;
+  }
+
+  if (m0->target_result != Motor_Target_Done || m1->target_result != Motor_Target_Done)
+    return;
+
+  Leg_PointTypeDef current;
+  if (get_leg_current_foot(debug_trace.leg, &current))
+  {
+    Leg_PointTypeDef target = {
+        .x = debug_trace.base_foot.x + trace_offsets[debug_trace.step].x,
+        .y = debug_trace.base_foot.y + trace_offsets[debug_trace.step].y,
+    };
+    log_trace_point("done", debug_trace.leg, debug_trace.step, &target, &current);
+  }
+
+  debug_trace.step++;
+  if (debug_trace.step >= LEG_TRACE_POINT_COUNT)
+  {
+    log_trace_simple("complete", debug_trace.leg, debug_trace.step, Motor_Target_Done);
+    debug_trace.active = 0;
+    return;
+  }
+
+  start_debug_trace_step();
 }
 
 static void log_leg_finish_if_idle(uint8_t leg, Motor_TargetResultTypeDef result)
@@ -698,6 +840,7 @@ void Leg_Control_Service(uint32_t now_ms)
   last_service_tick = now_ms;
   update_debug_targets();
   Leg_Control_Start();
+  service_debug_trace();
 }
 
 int Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad)
@@ -860,9 +1003,34 @@ int Leg_Control_SetDebugFootOffset(uint8_t leg, float dx_mm, float dy_mm)
   return ok0 && ok1;
 }
 
+int Leg_Control_StartDebugTrace(uint8_t leg)
+{
+  if (leg >= 4 || debug_trace.active)
+    return 0;
+
+  for (uint8_t motor = 0; motor < 2; motor++)
+  {
+    Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
+    if (state->target_active == Motor_Target_Active)
+      return 0;
+  }
+
+  Leg_PointTypeDef current;
+  if (!get_leg_current_foot(leg, &current))
+    return 0;
+
+  debug_trace.active = 1U;
+  debug_trace.leg = leg;
+  debug_trace.step = 0U;
+  debug_trace.base_foot = current;
+  log_trace_point("start", leg, 0U, &current, &current);
+  return start_debug_trace_step();
+}
+
 void Leg_Control_StopAllDebugTargets(uint8_t reason)
 {
   Motor_TargetResultTypeDef result = (reason == 0U) ? Motor_Target_Stopped : (Motor_TargetResultTypeDef)reason;
+  debug_trace.active = 0U;
 
   for (uint8_t idx = 0; idx < 8; idx++)
   {
