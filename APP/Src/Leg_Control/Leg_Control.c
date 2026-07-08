@@ -47,7 +47,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_PI                      3.14159265358979323846f
 #define LEG_TWO_PI                  6.28318530717958647692f
 #define LEG_KIN_EPSILON             0.000001f
-#define LEG_ROTOR_ZERO_NEAR_RAD     0.50f
+#define LEG_ROTOR_ZERO_NEAR_RAD     1.50f
 #define LEG_MOTOR_THETA1            1U
 #define LEG_MOTOR_THETA2            0U
 
