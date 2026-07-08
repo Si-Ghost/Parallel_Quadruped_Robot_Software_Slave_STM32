@@ -43,6 +43,11 @@ extern UART_HandleTypeDef huart8;
 #define LEG_SINE_FREQ_MAX_HZ        2.0f
 #define LEG_SINE_FREQ_MIN_HZ        0.1f
 #define LEG_SINE_LOG_PERIOD_MS      200U
+#define LEG_TROT_LIFT_HEIGHT_MM     20.0f
+#define LEG_TROT_START_POINT_MM     50.0f
+#define LEG_TROT_STEP_RATE_MS       400U
+#define LEG_TROT_STEP_CYCLE_MS      800U
+#define LEG_TROT_LOG_PERIOD_MS      500U
 #define LEG_WEB_KP                  2.0f
 #define LEG_WEB_KW                  0.15f
 #define LEG_WEB_T_FF                0.0f
@@ -104,12 +109,23 @@ static Leg_AllMicroTypeDef all_micro = {0};
 static Leg_PrepPoseTypeDef prep_pose = {0};
 static Leg_SineTypeDef sine_test = {0};
 
+typedef struct
+{
+  uint8_t active;
+  uint32_t start_tick;
+  uint32_t last_log_tick;
+  float leg_high[4];
+} Leg_TrotTypeDef;
+
+static Leg_TrotTypeDef trot = {0};
+
 static void leg_abort_transfer(Leg_HandlerTypeDef *hleg);
 static void log_leg_finish_if_idle(uint8_t leg, Motor_TargetResultTypeDef result);
 static void service_debug_trace(void);
 static void service_all_micro(void);
 static void service_prep_pose(void);
 static void service_sine(void);
+static void service_trot(void);
 static void start_debug_offset(uint8_t motor_index, float offset);
 static void start_debug_offset_with_stop_error(uint8_t motor_index, float offset, float stop_error);
 
@@ -1042,6 +1058,96 @@ static void service_sine(void)
   }
 }
 
+static void service_trot(void)
+{
+  if (!trot.active)
+    return;
+
+  for (uint8_t i = 0; i < 8; i++)
+  {
+    Motor_RuntimeStateTypeDef *state = motor_state_from_index(i);
+    if (state->online != Motor_Online || state->angle_valid != Motor_Angle_Valid)
+    {
+      Communication_SendString("LEG_TROT abort offline\r\n");
+      trot.active = 0U;
+      return;
+    }
+  }
+
+  uint32_t now = HAL_GetTick();
+  uint32_t cycle_time = (now - trot.start_tick) % LEG_TROT_STEP_CYCLE_MS;
+  uint8_t half_cycle = (cycle_time >= LEG_TROT_STEP_RATE_MS) ? 1U : 0U;
+  uint32_t phase_ms = half_cycle ? (cycle_time - LEG_TROT_STEP_RATE_MS) : cycle_time;
+  float t = (float)phase_ms / (float)LEG_TROT_STEP_RATE_MS;
+  if (t > 1.0f) t = 1.0f;
+
+  uint8_t pair_a_swing = half_cycle;
+
+  for (uint8_t leg = 0; leg < 4; leg++)
+  {
+    uint8_t in_pair_a = (leg == 0U || leg == 3U) ? 1U : 0U;
+    uint8_t is_swing = in_pair_a ? pair_a_swing : (1U - pair_a_swing);
+
+    float foot_x, foot_y;
+    if (is_swing)
+    {
+      float len = 2.0f * LEG_TROT_START_POINT_MM;
+      foot_x = -LEG_TROT_START_POINT_MM + len * (t - sinf(LEG_TWO_PI * t) / LEG_TWO_PI);
+      foot_y = trot.leg_high[leg] - LEG_TROT_LIFT_HEIGHT_MM * (0.5f - 0.5f * cosf(LEG_TWO_PI * t));
+    }
+    else
+    {
+      foot_x = LEG_TROT_START_POINT_MM - 2.0f * LEG_TROT_START_POINT_MM * t;
+      foot_y = trot.leg_high[leg];
+    }
+
+    Leg_PointTypeDef target = { .x = foot_x, .y = foot_y };
+    Leg_JointAnglesTypeDef target_angles;
+    if (!Leg_Kinematics_Inverse(&target, &target_angles))
+      continue;
+
+    for (uint8_t motor = 0; motor < 2; motor++)
+    {
+      float direction = normalized_motor_direction(Legs[leg]->motor_direction[motor]);
+      float joint_angle = (motor == LEG_MOTOR_THETA1) ? target_angles.theta1 : target_angles.theta2;
+      float rotor_target = Legs[leg]->rotor_zero_offset[motor] + direction * joint_angle * LEG_REDUCTION_RATIO;
+
+      MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
+      cmd->mode = 1;
+      cmd->T = 0.0f;
+      cmd->W = 0.0f;
+      cmd->Pos = rotor_target;
+      cmd->K_P = LEG_WEB_KP;
+      cmd->K_W = LEG_WEB_KW;
+      modify_data(cmd);
+    }
+  }
+
+  if ((now - trot.last_log_tick) >= LEG_TROT_LOG_PERIOD_MS)
+  {
+    trot.last_log_tick = now;
+    char buf[200];
+    int len = snprintf(buf, sizeof(buf), "LEG_TROT_LOG hc=%u t=", half_cycle);
+    if (len > 0 && len < (int)sizeof(buf))
+    {
+      char *bp = buf + len;
+      size_t rem = sizeof(buf) - (size_t)len;
+      int n = snprintf(bp, rem, "%ld.%03ld", (long)((int)t), (long)((int)(t * 1000) % 1000));
+      if (n > 0 && n < (int)rem) { bp += n; rem -= n; } else rem = 0;
+      for (uint8_t leg = 0; leg < 4 && rem > 4; leg++)
+      {
+        uint8_t in_pair_a = (leg == 0U || leg == 3U) ? 1U : 0U;
+        uint8_t is_swing = in_pair_a ? pair_a_swing : (1U - pair_a_swing);
+        n = snprintf(bp, rem, " L%u:%c", leg, is_swing ? 'S' : 'G');
+        if (n > 0 && n < (int)rem) { bp += n; rem -= n; }
+      }
+      if (rem > 2) { *bp++ = '\r'; *bp++ = '\n'; rem -= 2; }
+      *bp = '\0';
+      Communication_SendString(buf);
+    }
+  }
+}
+
 static void leg_abort_transfer(Leg_HandlerTypeDef *hleg)
 {
   if (hleg == NULL)
@@ -1232,6 +1338,7 @@ void Leg_Control_Service(uint32_t now_ms)
   last_service_tick = now_ms;
   update_debug_targets();
   service_sine();
+  service_trot();
   Leg_Control_Start();
   service_debug_trace();
   service_all_micro();
@@ -1240,7 +1347,7 @@ void Leg_Control_Service(uint32_t now_ms)
 
 int Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad)
 {
-  if (all_micro.active || prep_pose.active || sine_test.active)
+  if (all_micro.active || prep_pose.active || sine_test.active || trot.active)
     return 0;
 
   Motor_RuntimeStateTypeDef *state = motor_state_from_index(motor_index);
@@ -1410,7 +1517,7 @@ int Leg_Control_SetDebugFootOffset(uint8_t leg, float dx_mm, float dy_mm)
 
 int Leg_Control_StartDebugTrace(uint8_t leg)
 {
-  if (leg >= 4 || debug_trace.active || all_micro.active || prep_pose.active || sine_test.active)
+  if (leg >= 4 || debug_trace.active || all_micro.active || prep_pose.active || sine_test.active || trot.active)
     return 0;
 
   for (uint8_t motor = 0; motor < 2; motor++)
@@ -1434,7 +1541,7 @@ int Leg_Control_StartDebugTrace(uint8_t leg)
 
 int Leg_Control_StartAllMicroTest(void)
 {
-  if (debug_trace.active || all_micro.active || prep_pose.active || sine_test.active)
+  if (debug_trace.active || all_micro.active || prep_pose.active || sine_test.active || trot.active)
     return 0;
 
   for (uint8_t idx = 0; idx < 8; idx++)
@@ -1466,7 +1573,7 @@ int Leg_Control_StartAllMicroTest(void)
 
 int Leg_Control_StartPrepPoseTest(void)
 {
-  if (debug_trace.active || all_micro.active || prep_pose.active || sine_test.active)
+  if (debug_trace.active || all_micro.active || prep_pose.active || sine_test.active || trot.active)
     return 0;
 
   for (uint8_t idx = 0; idx < 8; idx++)
@@ -1497,7 +1604,7 @@ int Leg_Control_StartPrepPoseTest(void)
 
 int Leg_Control_StartSineTest(uint8_t leg, float amplitude_mm, float freq_hz)
 {
-  if (leg >= 4 || debug_trace.active || all_micro.active || prep_pose.active || sine_test.active)
+  if (leg >= 4 || debug_trace.active || all_micro.active || prep_pose.active || sine_test.active || trot.active)
     return 0;
 
   amplitude_mm = clampf(amplitude_mm, LEG_SINE_AMP_MIN_MM, LEG_SINE_AMP_MAX_MM);
@@ -1544,6 +1651,47 @@ int Leg_Control_StartSineTest(uint8_t leg, float amplitude_mm, float freq_hz)
   if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, "\r\n");
   if (len > 0 && len < (int)sizeof(buf))
     Communication_SendString(buf);
+
+  return 1;
+}
+
+int Leg_Control_StartTrotTest(void)
+{
+  if (debug_trace.active || all_micro.active || prep_pose.active || sine_test.active || trot.active)
+    return 0;
+
+  for (uint8_t idx = 0; idx < 8; idx++)
+  {
+    Motor_RuntimeStateTypeDef *state = motor_state_from_index(idx);
+    if (state == NULL || state->target_active == Motor_Target_Active)
+      return 0;
+  }
+
+  for (uint8_t leg = 0; leg < 4; leg++)
+  {
+    Leg_PointTypeDef foot;
+    if (!get_leg_current_foot(leg, &foot))
+      return 0;
+    trot.leg_high[leg] = foot.y;
+  }
+
+  trot.active = 1U;
+  trot.start_tick = HAL_GetTick();
+  trot.last_log_tick = 0;
+
+  char buf[128];
+  int len = snprintf(buf, sizeof(buf),
+                     "LEG_TROT start lift=%d step=%d rate=%dms kp=%d kw=%d\r\n",
+                     (int)LEG_TROT_LIFT_HEIGHT_MM,
+                     (int)(LEG_TROT_START_POINT_MM * 2.0f),
+                     (int)LEG_TROT_STEP_RATE_MS,
+                     (int)(LEG_WEB_KP * 1000),
+                     (int)(LEG_WEB_KW * 1000));
+  if (len > 0 && len < (int)sizeof(buf))
+  {
+    buf[len] = '\0';
+    Communication_SendString(buf);
+  }
 
   return 1;
 }
@@ -1618,6 +1766,7 @@ int Leg_Control_HoldCurrentPosition(void)
   all_micro.active = 0U;
   prep_pose.active = 0U;
   sine_test.active = 0U;
+  trot.active = 0U;
 
   for (uint8_t idx = 0; idx < 8; idx++)
   {
@@ -1665,6 +1814,7 @@ void Leg_Control_StopAllDebugTargets(uint8_t reason)
   all_micro.active = 0U;
   prep_pose.active = 0U;
   sine_test.active = 0U;
+  trot.active = 0U;
 
   for (uint8_t idx = 0; idx < 8; idx++)
   {

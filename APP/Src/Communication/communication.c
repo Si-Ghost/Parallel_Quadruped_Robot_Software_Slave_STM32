@@ -44,6 +44,7 @@ static const char leg_snapshot_cmd[] = "LEG_SNAPSHOT";
 static const char leg_all_micro_cmd[] = "LEG_ALL_MICRO";
 static const char leg_prep_pose_cmd[] = "LEG_PREP_POSE";
 static const char leg_sine_cmd[] = "LEG_SINE";
+static const char leg_trot_cmd[] = "LEG_TROT";
 
 #define RC_RAW_MIN       0
 #define RC_RAW_MAX       2047
@@ -448,7 +449,8 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         len < sizeof(leg_snapshot_cmd) - 1 &&
         len < sizeof(leg_all_micro_cmd) - 1 &&
         len < sizeof(leg_prep_pose_cmd) - 1 &&
-        len < sizeof(leg_sine_cmd) - 1)
+        len < sizeof(leg_sine_cmd) - 1 &&
+        len < sizeof(leg_trot_cmd) - 1)
         return;
 
     for (uint16_t i = 0; i + sizeof(motor_stop_all_cmd) - 1 <= len; i++) {
@@ -516,6 +518,15 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
             }
 
             handle_leg_sine_text(cmd_buf);
+            return;
+        }
+    }
+
+    for (uint16_t i = 0; i + sizeof(leg_trot_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], leg_trot_cmd, sizeof(leg_trot_cmd) - 1) == 0) {
+            if (!Leg_Control_StartTrotTest()) {
+                Communication_SendString("LEG_TROT_RX rejected\r\n");
+            }
             return;
         }
     }

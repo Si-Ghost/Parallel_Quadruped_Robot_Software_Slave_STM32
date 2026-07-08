@@ -118,6 +118,7 @@ int  Leg_Control_StartDebugTrace(uint8_t leg);
 int  Leg_Control_StartAllMicroTest(void);
 int  Leg_Control_StartPrepPoseTest(void);
 int  Leg_Control_StartSineTest(uint8_t leg, float amplitude_mm, float freq_hz);
+int  Leg_Control_StartTrotTest(void);
 void Leg_Control_LogFootSnapshot(void);
 int  Leg_Control_HoldCurrentPosition(void);
 void Leg_Control_StopAllDebugTargets(uint8_t reason);
