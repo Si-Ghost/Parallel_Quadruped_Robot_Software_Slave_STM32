@@ -8,7 +8,6 @@
 
 #include "Leg_Control.h"
 #include "communication.h"
-#include "pid.h"
 #include <math.h>
 #include <stdio.h>
 
@@ -49,16 +48,6 @@ extern UART_HandleTypeDef huart8;
 #define LEG_WEB_T_FF                0.0f
 #define LEG_HOLD_KP                 1.0f
 #define LEG_HOLD_KW                 0.15f
-#define LEG_CASCADE_ANGLE_KP        35.9f
-#define LEG_CASCADE_ANGLE_KI        0.0f
-#define LEG_CASCADE_ANGLE_KD        1.0f
-#define LEG_CASCADE_ANGLE_MAX_OUT   10000.0f
-#define LEG_CASCADE_ANGLE_MAX_IOUT  0.2f
-#define LEG_CASCADE_SPEED_KP        0.50f
-#define LEG_CASCADE_SPEED_KI        0.03f
-#define LEG_CASCADE_SPEED_KD        0.00f
-#define LEG_CASCADE_SPEED_MAX_OUT   3.50f
-#define LEG_CASCADE_SPEED_MAX_IOUT  1.00f
 #define LEG_HANDSHAKE_KW            0.05f
 #define LEG_HANDSHAKE_RETRY         2U
 #define LEG_DEBUG_LOG_PERIOD_MS     500U
@@ -114,9 +103,6 @@ static Leg_DebugTraceTypeDef debug_trace = {0};
 static Leg_AllMicroTypeDef all_micro = {0};
 static Leg_PrepPoseTypeDef prep_pose = {0};
 static Leg_SineTypeDef sine_test = {0};
-static PID_TypeDef cascade_angle_pid[8];
-static PID_TypeDef cascade_speed_pid[8];
-static uint8_t cascade_pid_inited = 0U;
 
 static void leg_abort_transfer(Leg_HandlerTypeDef *hleg);
 static void log_leg_finish_if_idle(uint8_t leg, Motor_TargetResultTypeDef result);
@@ -979,20 +965,6 @@ static void service_sine(void)
   if (!sine_test.active || sine_test.leg >= 4)
     return;
 
-  if (!cascade_pid_inited)
-  {
-    for (uint8_t i = 0; i < 8; i++)
-    {
-      PID_Init(&cascade_angle_pid[i], PID_Position, LEG_CASCADE_ANGLE_KP,
-               LEG_CASCADE_ANGLE_KI, LEG_CASCADE_ANGLE_KD,
-               LEG_CASCADE_ANGLE_MAX_OUT, LEG_CASCADE_ANGLE_MAX_IOUT);
-      PID_Init(&cascade_speed_pid[i], PID_Position, LEG_CASCADE_SPEED_KP,
-               LEG_CASCADE_SPEED_KI, LEG_CASCADE_SPEED_KD,
-               LEG_CASCADE_SPEED_MAX_OUT, LEG_CASCADE_SPEED_MAX_IOUT);
-    }
-    cascade_pid_inited = 1U;
-  }
-
   uint8_t leg = sine_test.leg;
   for (uint8_t motor = 0; motor < 2; motor++)
   {
@@ -1022,43 +994,22 @@ static void service_sine(void)
   }
 
   float rotor_targets[2];
-  float joint_targets[2];
-  float joint_actuals[2];
-  float joint_speeds[2];
-  float torques[2];
-  float speed_refs[2];
-
   for (uint8_t motor = 0; motor < 2; motor++)
   {
     float direction = normalized_motor_direction(Legs[leg]->motor_direction[motor]);
     float joint_angle = (motor == LEG_MOTOR_THETA1) ? target_angles.theta1 : target_angles.theta2;
     rotor_targets[motor] = Legs[leg]->rotor_zero_offset[motor] + direction * joint_angle * LEG_REDUCTION_RATIO;
-
-    Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
-    float error_from_zero = rotor_wrap_delta(state->angle, Legs[leg]->rotor_zero_offset[motor]);
-    joint_actuals[motor] = direction * error_from_zero / LEG_REDUCTION_RATIO;
-    joint_targets[motor] = joint_angle;
-    joint_speeds[motor] = direction * state->speed / LEG_REDUCTION_RATIO;
-  }
-
-  for (uint8_t motor = 0; motor < 2; motor++)
-  {
-    uint8_t idx = motor_index_from_leg_motor(leg, motor);
-    speed_refs[motor] = PID_Calculate(&cascade_angle_pid[idx],
-                                      joint_targets[motor], joint_actuals[motor]);
-    torques[motor] = PID_Calculate(&cascade_speed_pid[idx],
-                                   speed_refs[motor], joint_speeds[motor]);
   }
 
   for (uint8_t motor = 0; motor < 2; motor++)
   {
     MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
     cmd->mode = 1;
-    cmd->T = torques[motor];
+    cmd->T = 0.0f;
     cmd->W = 0.0f;
     cmd->Pos = rotor_targets[motor];
-    cmd->K_P = 0.0f;
-    cmd->K_W = 0.0f;
+    cmd->K_P = LEG_WEB_KP;
+    cmd->K_W = LEG_WEB_KW;
     modify_data(cmd);
   }
 
@@ -1068,23 +1019,20 @@ static void service_sine(void)
 
     for (uint8_t motor = 0; motor < 2; motor++)
     {
-      float q_des = joint_targets[motor];
-      float q_act = joint_actuals[motor];
+      Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
+      float q_des = rotor_targets[motor];
+      float q_act = state->angle;
       float error = q_des - q_act;
 
-      char buf[192];
+      char buf[160];
       int len = snprintf(buf, sizeof(buf), "LEG_SINE_LOG leg=%u m=%u t=", leg, motor);
       len = append_fixed4(buf, sizeof(buf), len, t);
-      if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " jdes=");
+      if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " q_des=");
       len = append_fixed4(buf, sizeof(buf), len, q_des);
-      if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " jact=");
+      if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " q_act=");
       len = append_fixed4(buf, sizeof(buf), len, q_act);
-      if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " jerr=");
+      if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " err=");
       len = append_fixed4(buf, sizeof(buf), len, error);
-      if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " spd=");
-      len = append_fixed4(buf, sizeof(buf), len, joint_speeds[motor]);
-      if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " tau=");
-      len = append_fixed4(buf, sizeof(buf), len, torques[motor]);
       if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " dy=");
       len = append_fixed4(buf, sizeof(buf), len, dy);
       if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, "\r\n");
@@ -1589,13 +1537,10 @@ int Leg_Control_StartSineTest(uint8_t leg, float amplitude_mm, float freq_hz)
   len = append_fixed4(buf, sizeof(buf), len, amplitude_mm);
   if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " hz=");
   len = append_fixed4(buf, sizeof(buf), len, freq_hz);
-  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len,
-                               " angKp=%d.%d spdKp=",
-                               (int)LEG_CASCADE_ANGLE_KP,
-                               (int)((LEG_CASCADE_ANGLE_KP - (int)LEG_CASCADE_ANGLE_KP) * 10));
-  len = append_fixed4(buf, sizeof(buf), len, LEG_CASCADE_SPEED_KP);
-  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " spdKi=");
-  len = append_fixed4(buf, sizeof(buf), len, LEG_CASCADE_SPEED_KI);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " kp=");
+  len = append_fixed4(buf, sizeof(buf), len, LEG_WEB_KP);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " kw=");
+  len = append_fixed4(buf, sizeof(buf), len, LEG_WEB_KW);
   if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, "\r\n");
   if (len > 0 && len < (int)sizeof(buf))
     Communication_SendString(buf);
