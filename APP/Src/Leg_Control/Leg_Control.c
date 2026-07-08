@@ -84,8 +84,7 @@ static void log_leg_finish_if_idle(uint8_t leg, Motor_TargetResultTypeDef result
 static void service_debug_trace(void);
 static void service_all_micro(void);
 static void start_debug_offset(uint8_t motor_index, float offset);
-static void start_debug_offset_with_params(uint8_t motor_index, float offset,
-                                           float stop_error, float hold_kp, float hold_kw);
+static void start_debug_offset_with_stop_error(uint8_t motor_index, float offset, float stop_error);
 
 static const float default_rotor_zero_offset[4][2] = {
   {4.2988f, 3.4371f},  // LF: motor0(theta2), motor1(theta1)
@@ -182,8 +181,6 @@ static void reset_motor_runtime_state(Motor_RuntimeStateTypeDef *state)
   state->target_progress_tick = 0;
   state->target_last_abs_error = 0.0f;
   state->target_stop_error = LEG_WEB_STOP_ERROR_RAD;
-  state->target_hold_kp = LEG_HOLD_KP;
-  state->target_hold_kw = LEG_HOLD_KW;
   state->debug_last_log_tick = 0;
   state->io_error_last_log_tick = 0;
   state->io_error_count = 0;
@@ -286,8 +283,6 @@ static void stop_debug_target(uint8_t motor_index, Motor_TargetResultTypeDef res
   uint8_t hold_position = (result == Motor_Target_Done) ? 1U : 0U;
   MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
   Motor_RuntimeStateTypeDef *state = motor_state_from_index(motor_index);
-  float hold_kp = (state->target_hold_kp > 0.0f) ? state->target_hold_kp : LEG_HOLD_KP;
-  float hold_kw = (state->target_hold_kw > 0.0f) ? state->target_hold_kw : LEG_HOLD_KW;
 
   state->target_active = Motor_Target_Inactive;
   state->target_result = result;
@@ -300,8 +295,8 @@ static void stop_debug_target(uint8_t motor_index, Motor_TargetResultTypeDef res
   cmd->mode = 1;
   cmd->T = 0.0f;
   cmd->W = 0.0f;
-  cmd->K_P = hold_position ? hold_kp : 0.0f;
-  cmd->K_W = hold_position ? hold_kw : (keep_leg_damping ? LEG_WEB_KW : 0.0f);
+  cmd->K_P = hold_position ? LEG_HOLD_KP : 0.0f;
+  cmd->K_W = hold_position ? LEG_HOLD_KW : (keep_leg_damping ? LEG_WEB_KW : 0.0f);
   cmd->Pos = hold_position ? (Legs[leg]->p_init[motor] + state->target_offset) : state->angle;
   modify_data(cmd);
 
@@ -511,17 +506,14 @@ static void log_leg_finish_if_idle(uint8_t leg, Motor_TargetResultTypeDef result
   for (uint8_t motor = 0; motor < 2; motor++)
   {
     MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
-    Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
-    float hold_kp = (state->target_hold_kp > 0.0f) ? state->target_hold_kp : LEG_HOLD_KP;
-    float hold_kw = (state->target_hold_kw > 0.0f) ? state->target_hold_kw : LEG_HOLD_KW;
     cmd->mode = 1;
     cmd->T = 0.0f;
     cmd->W = 0.0f;
-    cmd->K_P = (result == Motor_Target_Done) ? hold_kp : 0.0f;
-    cmd->K_W = (result == Motor_Target_Done) ? hold_kw : 0.0f;
+    cmd->K_P = (result == Motor_Target_Done) ? LEG_HOLD_KP : 0.0f;
+    cmd->K_W = (result == Motor_Target_Done) ? LEG_HOLD_KW : 0.0f;
     cmd->Pos = (result == Motor_Target_Done)
-                   ? (Legs[leg]->p_init[motor] + state->target_offset)
-                   : state->angle;
+                   ? (Legs[leg]->p_init[motor] + Legs[leg]->motor_state[motor].target_offset)
+                   : Legs[leg]->motor_state[motor].angle;
     modify_data(cmd);
   }
 
@@ -767,10 +759,7 @@ static int start_all_micro_phase(uint8_t phase)
     for (uint8_t motor = 0; motor < 2; motor++)
     {
       uint8_t idx = motor_index_from_leg_motor(leg, motor);
-      start_debug_offset_with_params(idx, offsets[leg][motor],
-                                     LEG_ALL_MICRO_STOP_ERROR_RAD,
-                                     LEG_WEB_KP,
-                                     LEG_WEB_KW);
+      start_debug_offset_with_stop_error(idx, offsets[leg][motor], LEG_ALL_MICRO_STOP_ERROR_RAD);
       if (!apply_debug_target(idx, 0))
       {
         for (uint8_t stop_idx = 0; stop_idx < 8; stop_idx++)
@@ -1054,13 +1043,10 @@ int Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad)
       absf_local((Legs[motor_index / 2]->p_init[motor_index % 2] + state->target_offset) -
                  state->angle);
   state->target_stop_error = LEG_WEB_STOP_ERROR_RAD;
-  state->target_hold_kp = LEG_HOLD_KP;
-  state->target_hold_kw = LEG_HOLD_KW;
   return apply_debug_target(motor_index, 1);
 }
 
-static void start_debug_offset_with_params(uint8_t motor_index, float offset,
-                                           float stop_error, float hold_kp, float hold_kw)
+static void start_debug_offset_with_stop_error(uint8_t motor_index, float offset, float stop_error)
 {
   Motor_RuntimeStateTypeDef *state = motor_state_from_index(motor_index);
   if (state == NULL)
@@ -1076,13 +1062,11 @@ static void start_debug_offset_with_params(uint8_t motor_index, float offset,
       absf_local((Legs[motor_index / 2]->p_init[motor_index % 2] + state->target_offset) -
                  state->angle);
   state->target_stop_error = (stop_error > 0.0f) ? stop_error : LEG_WEB_STOP_ERROR_RAD;
-  state->target_hold_kp = (hold_kp > 0.0f) ? hold_kp : LEG_HOLD_KP;
-  state->target_hold_kw = (hold_kw > 0.0f) ? hold_kw : LEG_HOLD_KW;
 }
 
 static void start_debug_offset(uint8_t motor_index, float offset)
 {
-  start_debug_offset_with_params(motor_index, offset, LEG_WEB_STOP_ERROR_RAD, LEG_HOLD_KP, LEG_HOLD_KW);
+  start_debug_offset_with_stop_error(motor_index, offset, LEG_WEB_STOP_ERROR_RAD);
 }
 
 static void log_leg_nudge_reject(uint8_t leg, const char *reason, uint8_t motor, float value)

@@ -84,8 +84,6 @@ typedef struct
   uint32_t target_progress_tick;                    // 目标误差最近一次明显改善时的 HAL tick。
   float target_last_abs_error;                      // 用于堵转检测的上一次绝对误差。
   float target_stop_error;                          // 当前调试目标的完成误差阈值，转子侧 rad。
-  float target_hold_kp;                             // 当前调试目标完成后的保持位置刚度。
-  float target_hold_kw;                             // 当前调试目标完成后的保持速度阻尼。
   uint32_t debug_last_log_tick;                     // 目标调试日志限频用 tick。
   uint32_t io_error_last_log_tick;                  // 电机 I/O 错误日志限频用 tick。
   uint8_t io_error_count;                           // 连续 I/O 失败计数，用于断联保护。
