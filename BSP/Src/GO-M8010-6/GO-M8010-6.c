@@ -3,7 +3,7 @@
 #include "stdio.h"
 #include <string.h>
 
-#define MOTOR_UART_TIMEOUT_MS 10U
+#define MOTOR_UART_TIMEOUT_MS 20U
 
 #define SATURATE(_IN, _MIN, _MAX) {\
  if (_IN < _MIN)\
@@ -11,6 +11,14 @@
  else if (_IN > _MAX)\
  _IN = _MAX;\
  }
+
+static void motor_uart_reset_rx(UART_HandleTypeDef *huart)
+{
+    // 清掉上一次事务残留的接收字节和错误标志，避免下一帧从旧字节开始读取。
+    HAL_UART_AbortReceive(huart);
+    __HAL_UART_CLEAR_FLAG(huart, UART_CLEAR_OREF | UART_CLEAR_NEF | UART_CLEAR_PEF | UART_CLEAR_FEF);
+    SET_BIT(huart->Instance->RQR, UART_RXDATA_FLUSH_REQUEST);
+}
 
 /**
  * @brief 调整发送的数据
@@ -81,10 +89,12 @@ int extract_data(MOTOR_recv *motor_r)
  */
 HAL_StatusTypeDef SERVO_Send_recv(MOTOR_send *pData, MOTOR_recv *rData, GPIO_TypeDef *Port, uint16_t Pin, UART_HandleTypeDef *huart)
 {
+    const uint16_t rx_expected_len = sizeof(rData->motor_recv_data);
+
     rData->rx_len = 0;
     rData->correct = 0;
     memset(&rData->motor_recv_data, 0, sizeof(rData->motor_recv_data));
-    HAL_UART_AbortReceive(huart);
+    motor_uart_reset_rx(huart);
 
 	//调整数据然后发送并等待接收
     modify_data(pData);
@@ -96,6 +106,7 @@ HAL_StatusTypeDef SERVO_Send_recv(MOTOR_send *pData, MOTOR_recv *rData, GPIO_Typ
     {
         HAL_GPIO_WritePin(Port, Pin, GPIO_PIN_RESET);
         HAL_UART_Abort(huart);
+        motor_uart_reset_rx(huart);
         return tx_ret;
     }
 
@@ -103,14 +114,17 @@ HAL_StatusTypeDef SERVO_Send_recv(MOTOR_send *pData, MOTOR_recv *rData, GPIO_Typ
 	HAL_GPIO_WritePin(Port, Pin, GPIO_PIN_RESET);
 	HAL_StatusTypeDef rx_ret = HAL_UART_Receive(huart,
                                                (uint8_t *)&(rData->motor_recv_data),
-                                               sizeof(rData->motor_recv_data),
+                                               rx_expected_len,
                                                MOTOR_UART_TIMEOUT_MS);
+    if (huart->RxXferSize == rx_expected_len && huart->RxXferCount <= rx_expected_len)
+    {
+      rData->rx_len = rx_expected_len - huart->RxXferCount;
+    }
     if(rx_ret != HAL_OK)
     {
-      HAL_UART_AbortReceive(huart);
+      motor_uart_reset_rx(huart);
       return rx_ret;
     }
-    rData->rx_len = sizeof(rData->motor_recv_data);
 	// 接收处理，如果数据长度为零则是超时，不对就是错误
 
 
@@ -120,8 +134,9 @@ HAL_StatusTypeDef SERVO_Send_recv(MOTOR_send *pData, MOTOR_recv *rData, GPIO_Typ
     {
         if (extract_data(rData))
             return HAL_OK;
+        motor_uart_reset_rx(huart);
         return HAL_ERROR;
     }
-    HAL_UART_AbortReceive(huart);
+    motor_uart_reset_rx(huart);
     return HAL_ERROR;
 }
