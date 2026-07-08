@@ -1311,6 +1311,50 @@ void Leg_Control_LogFootSnapshot(void)
     Communication_SendString(buf);
 }
 
+int Leg_Control_HoldCurrentPosition(void)
+{
+  debug_trace.active = 0U;
+  all_micro.active = 0U;
+
+  for (uint8_t idx = 0; idx < 8; idx++)
+  {
+    Motor_RuntimeStateTypeDef *state = motor_state_from_index(idx);
+    if (state == NULL ||
+        state->online != Motor_Online ||
+        state->angle_valid != Motor_Angle_Valid)
+      return 0;
+  }
+
+  for (uint8_t leg = 0; leg < 4; leg++)
+  {
+    for (uint8_t motor = 0; motor < 2; motor++)
+    {
+      Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
+      MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
+
+      state->target_offset = rotor_wrap_delta(state->angle, Legs[leg]->p_init[motor]);
+      state->target_active = Motor_Target_Inactive;
+      state->target_result = Motor_Target_Done;
+      state->target_start_angle = state->angle;
+      state->target_start_tick = 0;
+      state->target_progress_tick = 0;
+      state->target_last_abs_error = 0.0f;
+      state->target_stop_error = LEG_WEB_STOP_ERROR_RAD;
+
+      cmd->mode = 1;
+      cmd->T = 0.0f;
+      cmd->W = 0.0f;
+      cmd->Pos = state->angle;
+      cmd->K_P = LEG_HOLD_KP;
+      cmd->K_W = LEG_HOLD_KW;
+      modify_data(cmd);
+    }
+  }
+
+  Communication_SendString("MOTOR_HOLD_CURRENT ok\r\n");
+  return 1;
+}
+
 void Leg_Control_StopAllDebugTargets(uint8_t reason)
 {
   Motor_TargetResultTypeDef result = (reason == 0U) ? Motor_Target_Stopped : (Motor_TargetResultTypeDef)reason;

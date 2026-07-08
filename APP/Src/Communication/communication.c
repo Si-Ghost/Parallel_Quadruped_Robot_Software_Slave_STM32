@@ -37,6 +37,7 @@ static const char motor_set_mrad_cmd[] = "MOTOR_SET_MRAD";
 static const char motor_set_cmd[] = "MOTOR_SET";
 static const char motor_rescan_cmd[] = "MOTOR_RESCAN";
 static const char motor_stop_all_cmd[] = "MOTOR_STOP_ALL";
+static const char motor_hold_current_cmd[] = "MOTOR_HOLD_CURRENT";
 static const char leg_nudge_mm_cmd[] = "LEG_NUDGE_MM";
 static const char leg_trace_cmd[] = "LEG_TRACE";
 static const char leg_snapshot_cmd[] = "LEG_SNAPSHOT";
@@ -387,6 +388,7 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         len < sizeof(motor_set_mrad_cmd) - 1 &&
         len < sizeof(motor_rescan_cmd) - 1 &&
         len < sizeof(motor_stop_all_cmd) - 1 &&
+        len < sizeof(motor_hold_current_cmd) - 1 &&
         len < sizeof(leg_nudge_mm_cmd) - 1 &&
         len < sizeof(leg_trace_cmd) - 1 &&
         len < sizeof(leg_snapshot_cmd) - 1 &&
@@ -397,6 +399,15 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         if (memcmp(&data[i], motor_stop_all_cmd, sizeof(motor_stop_all_cmd) - 1) == 0) {
             Leg_Control_StopAllDebugTargets(0);
             Communication_SendString("MOTOR_STOP_ALL ok\r\n");
+            return;
+        }
+    }
+
+    for (uint16_t i = 0; i + sizeof(motor_hold_current_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], motor_hold_current_cmd, sizeof(motor_hold_current_cmd) - 1) == 0) {
+            if (!Leg_Control_HoldCurrentPosition()) {
+                Communication_SendString("MOTOR_HOLD_CURRENT rejected\r\n");
+            }
             return;
         }
     }
