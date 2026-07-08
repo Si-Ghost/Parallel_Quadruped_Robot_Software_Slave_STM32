@@ -651,6 +651,27 @@ static void start_debug_offset(uint8_t motor_index, float offset)
                  state->angle);
 }
 
+static void log_leg_nudge_reject(uint8_t leg, const char *reason, uint8_t motor, float value)
+{
+  char buf[128];
+  int len = snprintf(buf, sizeof(buf),
+                     "LEG_NUDGE reject leg=%u reason=%s motor=%u value=",
+                     leg,
+                     reason,
+                     motor);
+  len = append_fixed4(buf, sizeof(buf), len, value);
+  if (len > 0)
+  {
+    int written = snprintf(&buf[len], sizeof(buf) - (size_t)len, "\r\n");
+    if (written < 0 || written >= (int)(sizeof(buf) - (size_t)len))
+      return;
+    len += written;
+  }
+
+  if (len > 0 && len < (int)sizeof(buf))
+    Communication_SendString(buf);
+}
+
 int Leg_Control_SetDebugFootOffset(uint8_t leg, float dx_mm, float dy_mm)
 {
   if (leg >= 4)
@@ -662,11 +683,22 @@ int Leg_Control_SetDebugFootOffset(uint8_t leg, float dx_mm, float dy_mm)
   for (uint8_t motor = 0; motor < 2; motor++)
   {
     Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
-    float zero_error = rotor_wrap_delta(state->angle, Legs[leg]->rotor_zero_offset[motor]);
-    if (state->online != Motor_Online ||
-        state->angle_valid != Motor_Angle_Valid ||
-        absf_local(zero_error) > LEG_ROTOR_ZERO_NEAR_RAD)
+    if (state->online != Motor_Online)
     {
+      log_leg_nudge_reject(leg, "offline", motor, 0.0f);
+      return 0;
+    }
+    if (state->angle_valid != Motor_Angle_Valid)
+    {
+      log_leg_nudge_reject(leg, "angle_invalid", motor, 0.0f);
+      return 0;
+    }
+
+    float home_zero_error = rotor_wrap_delta(Legs[leg]->p_init[motor],
+                                             Legs[leg]->rotor_zero_offset[motor]);
+    if (absf_local(home_zero_error) > LEG_ROTOR_ZERO_NEAR_RAD)
+    {
+      log_leg_nudge_reject(leg, "home_zero_out", motor, home_zero_error);
       return 0;
     }
   }
@@ -675,11 +707,17 @@ int Leg_Control_SetDebugFootOffset(uint8_t leg, float dx_mm, float dy_mm)
   uint8_t theta_valid[2] = {0, 0};
   if (!Leg_Control_GetJointAngles(leg, &current_angles, theta_valid) ||
       !theta_valid[0] || !theta_valid[1])
+  {
+    log_leg_nudge_reject(leg, "theta_invalid", 0U, 0.0f);
     return 0;
+  }
 
   Leg_PointTypeDef current_foot;
   if (!Leg_Kinematics_Forward(&current_angles, &current_foot))
+  {
+    log_leg_nudge_reject(leg, "fk_fail", 0U, 0.0f);
     return 0;
+  }
 
   Leg_PointTypeDef target_foot = {
       .x = current_foot.x + dx_mm,
@@ -687,18 +725,27 @@ int Leg_Control_SetDebugFootOffset(uint8_t leg, float dx_mm, float dy_mm)
   };
   Leg_JointAnglesTypeDef target_angles;
   if (!Leg_Kinematics_Inverse(&target_foot, &target_angles))
+  {
+    log_leg_nudge_reject(leg, "ik_fail", 0U, target_foot.y);
     return 0;
+  }
 
   float rotor_targets[2];
   if (!Leg_Control_JointToRotorTargets(leg, &target_angles, rotor_targets))
+  {
+    log_leg_nudge_reject(leg, "rotor_target_fail", 0U, 0.0f);
     return 0;
+  }
 
   float offsets[2];
   for (uint8_t motor = 0; motor < 2; motor++)
   {
     offsets[motor] = rotor_wrap_delta(rotor_targets[motor], Legs[leg]->p_init[motor]);
     if (absf_local(offsets[motor]) > LEG_FOOT_NUDGE_ROTOR_RAD)
+    {
+      log_leg_nudge_reject(leg, "rotor_offset_limit", motor, offsets[motor]);
       return 0;
+    }
   }
 
   start_debug_offset(motor_index_from_leg_motor(leg, 0), offsets[0]);
