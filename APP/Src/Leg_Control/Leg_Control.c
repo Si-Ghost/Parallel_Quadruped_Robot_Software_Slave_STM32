@@ -54,11 +54,11 @@ extern UART_HandleTypeDef huart8;
 #define LEG_CASCADE_ANGLE_KD        1.0f
 #define LEG_CASCADE_ANGLE_MAX_OUT   10000.0f
 #define LEG_CASCADE_ANGLE_MAX_IOUT  0.2f
-#define LEG_CASCADE_SPEED_KP        0.01f
-#define LEG_CASCADE_SPEED_KI        0.0006f
-#define LEG_CASCADE_SPEED_KD        0.0015f
+#define LEG_CASCADE_SPEED_KP        0.50f
+#define LEG_CASCADE_SPEED_KI        0.03f
+#define LEG_CASCADE_SPEED_KD        0.00f
 #define LEG_CASCADE_SPEED_MAX_OUT   3.50f
-#define LEG_CASCADE_SPEED_MAX_IOUT  0.2f
+#define LEG_CASCADE_SPEED_MAX_IOUT  1.00f
 #define LEG_HANDSHAKE_KW            0.05f
 #define LEG_HANDSHAKE_RETRY         2U
 #define LEG_DEBUG_LOG_PERIOD_MS     500U
@@ -1589,10 +1589,13 @@ int Leg_Control_StartSineTest(uint8_t leg, float amplitude_mm, float freq_hz)
   len = append_fixed4(buf, sizeof(buf), len, amplitude_mm);
   if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " hz=");
   len = append_fixed4(buf, sizeof(buf), len, freq_hz);
-  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " kp=");
-  len = append_fixed4(buf, sizeof(buf), len, LEG_WEB_KP);
-  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " kw=");
-  len = append_fixed4(buf, sizeof(buf), len, LEG_WEB_KW);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len,
+                               " angKp=%d.%d spdKp=",
+                               (int)LEG_CASCADE_ANGLE_KP,
+                               (int)((LEG_CASCADE_ANGLE_KP - (int)LEG_CASCADE_ANGLE_KP) * 10));
+  len = append_fixed4(buf, sizeof(buf), len, LEG_CASCADE_SPEED_KP);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " spdKi=");
+  len = append_fixed4(buf, sizeof(buf), len, LEG_CASCADE_SPEED_KI);
   if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, "\r\n");
   if (len > 0 && len < (int)sizeof(buf))
     Communication_SendString(buf);
