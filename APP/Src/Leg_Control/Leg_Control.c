@@ -40,6 +40,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_DEBUG_LOG_PERIOD_MS     250U
 #define LEG_IO_ERROR_LOG_PERIOD_MS  1000U
 #define LEG_IO_ERROR_OFFLINE_COUNT  5U
+#define LEG_IO_RETRY_COUNT          1U
 #define LEG_LINK_L1_MM              130.0f
 #define LEG_LINK_L2_MM              260.0f
 #define LEG_REDUCTION_RATIO         6.33f
@@ -323,6 +324,11 @@ static void handle_motor_io_failure(uint8_t leg, uint8_t motor, HAL_StatusTypeDe
     Communication_SendString(buf);
 }
 
+static uint8_t motor_feedback_is_valid(HAL_StatusTypeDef ret, MOTOR_recv *fbk, uint8_t motor)
+{
+  return (ret == HAL_OK && fbk->correct && fbk->motor_id == motor) ? 1U : 0U;
+}
+
 static int apply_debug_target(uint8_t motor_index, uint8_t force_log)
 {
   Motor_RuntimeStateTypeDef *state = motor_state_from_index(motor_index);
@@ -545,7 +551,15 @@ static void poll_online_motor(uint8_t leg, uint8_t motor)
                                           hleg->GPIO_Pin,
                                           hleg->huartx);
 
-  if (ret == HAL_OK && fbk->correct && fbk->motor_id == motor)
+  for (uint8_t retry = 0; retry < LEG_IO_RETRY_COUNT && !motor_feedback_is_valid(ret, fbk, motor); retry++)
+  {
+    ret = SERVO_Send_recv(cmd, fbk,
+                          hleg->GPIOx,
+                          hleg->GPIO_Pin,
+                          hleg->huartx);
+  }
+
+  if (motor_feedback_is_valid(ret, fbk, motor))
   {
     state->angle = fbk->Pos;
     state->angle_valid = Motor_Angle_Valid;
