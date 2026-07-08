@@ -57,6 +57,7 @@ static uint32_t last_service_tick = 0;
 static volatile uint8_t handshake_requested = 0;
 
 static void leg_abort_transfer(Leg_HandlerTypeDef *hleg);
+static void log_leg_finish_if_idle(uint8_t leg, Motor_TargetResultTypeDef result);
 
 static const float default_rotor_zero_offset[4][2] = {
   {4.2988f, 3.4371f},  // LF: motor0(theta2), motor1(theta1)
@@ -208,27 +209,23 @@ static void log_debug_target(uint8_t motor_index, const char *tag, float desired
   MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
   Motor_RuntimeStateTypeDef *state = motor_state_from_index(motor_index);
 
-  char buf[192];
-  int len = snprintf(buf, sizeof(buf), "MOTOR_CMD %s idx=%u off=", tag, motor_index);
+  char buf[160];
+  int len = snprintf(buf, sizeof(buf), "MOTOR_CMD %s i=%u off=", tag, motor_index);
   len = append_fixed4(buf, sizeof(buf), len, state->target_offset);
-  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " cmd=");
-  len = append_fixed4(buf, sizeof(buf), len, cmd->Pos);
   if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " spd=");
   len = append_fixed4(buf, sizeof(buf), len, cmd->W);
-  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " target=");
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " tgt=");
   len = append_fixed4(buf, sizeof(buf), len, desired);
   if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " fbk=");
   len = append_fixed4(buf, sizeof(buf), len, state->angle);
-  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " delta=");
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " d=");
   len = append_fixed4(buf, sizeof(buf), len, delta);
   if (len > 0)
   {
     int written = snprintf(&buf[len], sizeof(buf) - (size_t)len,
-                           " raw_pos=%ld raw_spd=%d raw_kp=%d raw_kw=%d active=%u result=%u\r\n",
+                           " rpos=%ld rspd=%d act=%u res=%u\r\n",
                            (long)cmd->motor_send_data.comd.pos_des,
                            (int)cmd->motor_send_data.comd.spd_des,
-                           (int)cmd->motor_send_data.comd.k_pos,
-                           (int)cmd->motor_send_data.comd.k_spd,
                            state->target_active,
                            state->target_result);
     if (written < 0 || written >= (int)(sizeof(buf) - (size_t)len))
@@ -263,6 +260,56 @@ static void stop_debug_target(uint8_t motor_index, Motor_TargetResultTypeDef res
   cmd->K_W = 0.0f;
   cmd->Pos = state->angle;
   modify_data(cmd);
+
+  log_leg_finish_if_idle(leg, result);
+}
+
+static void log_leg_foot_line(const char *tag, uint8_t leg, const Leg_PointTypeDef *foot,
+                              Motor_TargetResultTypeDef result)
+{
+  if (tag == NULL || foot == NULL || leg >= 4)
+    return;
+
+  char buf[128];
+  int len = snprintf(buf, sizeof(buf), "LEG_FOOT %s leg=%u x=", tag, leg);
+  len = append_fixed4(buf, sizeof(buf), len, foot->x);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " y=");
+  len = append_fixed4(buf, sizeof(buf), len, foot->y);
+  if (len > 0)
+  {
+    int written = snprintf(&buf[len], sizeof(buf) - (size_t)len, " res=%u\r\n", result);
+    if (written < 0 || written >= (int)(sizeof(buf) - (size_t)len))
+      return;
+    len += written;
+  }
+
+  if (len > 0 && len < (int)sizeof(buf))
+    Communication_SendString(buf);
+}
+
+static void log_leg_finish_if_idle(uint8_t leg, Motor_TargetResultTypeDef result)
+{
+  if (leg >= 4)
+    return;
+
+  if (Legs[leg]->motor_state[0].target_active != Motor_Target_Inactive ||
+      Legs[leg]->motor_state[1].target_active != Motor_Target_Inactive)
+    return;
+
+  if (result != Motor_Target_Done &&
+      result != Motor_Target_Timeout &&
+      result != Motor_Target_Stall)
+    return;
+
+  Leg_JointAnglesTypeDef angles;
+  uint8_t valid[2] = {0, 0};
+  Leg_PointTypeDef foot;
+  if (Leg_Control_GetJointAngles(leg, &angles, valid) &&
+      valid[0] && valid[1] &&
+      Leg_Kinematics_Forward(&angles, &foot))
+  {
+    log_leg_foot_line("finish", leg, &foot, result);
+  }
 }
 
 static void log_motor_io_error(uint8_t motor_index, HAL_StatusTypeDef ret, MOTOR_recv *fbk)
@@ -749,27 +796,27 @@ int Leg_Control_SetDebugFootOffset(uint8_t leg, float dx_mm, float dy_mm)
     }
   }
 
-  start_debug_offset(motor_index_from_leg_motor(leg, 0), offsets[0]);
-  start_debug_offset(motor_index_from_leg_motor(leg, 1), offsets[1]);
-  int ok0 = apply_debug_target(motor_index_from_leg_motor(leg, 0), 1);
-  int ok1 = apply_debug_target(motor_index_from_leg_motor(leg, 1), 1);
-
-  char buf[192];
-  int len = snprintf(buf, sizeof(buf), "LEG_NUDGE ok leg=%u foot=", leg);
+  char buf[160];
+  int len = snprintf(buf, sizeof(buf), "LEG_FOOT plan leg=%u cur=", leg);
   len = append_fixed4(buf, sizeof(buf), len, current_foot.x);
   if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, ",");
   len = append_fixed4(buf, sizeof(buf), len, current_foot.y);
-  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " target=");
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " tgt=");
   len = append_fixed4(buf, sizeof(buf), len, target_foot.x);
   if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, ",");
   len = append_fixed4(buf, sizeof(buf), len, target_foot.y);
-  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " rotor_off=");
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " off=");
   len = append_fixed4(buf, sizeof(buf), len, offsets[0]);
   if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, ",");
   len = append_fixed4(buf, sizeof(buf), len, offsets[1]);
   if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, "\r\n");
   if (len > 0 && len < (int)sizeof(buf))
     Communication_SendString(buf);
+
+  start_debug_offset(motor_index_from_leg_motor(leg, 0), offsets[0]);
+  start_debug_offset(motor_index_from_leg_motor(leg, 1), offsets[1]);
+  int ok0 = apply_debug_target(motor_index_from_leg_motor(leg, 0), 1);
+  int ok1 = apply_debug_target(motor_index_from_leg_motor(leg, 1), 1);
 
   return ok0 && ok1;
 }
