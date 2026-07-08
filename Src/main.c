@@ -439,7 +439,7 @@ static void MX_UART5_Init(void)
   {
     Error_Handler();
   }
-  if (HAL_UARTEx_DisableFifoMode(&huart5) != HAL_OK)
+  if (HAL_UARTEx_EnableFifoMode(&huart5) != HAL_OK)
   {
     Error_Handler();
   }
@@ -487,7 +487,7 @@ static void MX_UART7_Init(void)
   {
     Error_Handler();
   }
-  if (HAL_UARTEx_DisableFifoMode(&huart7) != HAL_OK)
+  if (HAL_UARTEx_EnableFifoMode(&huart7) != HAL_OK)
   {
     Error_Handler();
   }
@@ -535,7 +535,7 @@ static void MX_UART8_Init(void)
   {
     Error_Handler();
   }
-  if (HAL_UARTEx_DisableFifoMode(&huart8) != HAL_OK)
+  if (HAL_UARTEx_EnableFifoMode(&huart8) != HAL_OK)
   {
     Error_Handler();
   }
@@ -631,7 +631,7 @@ static void MX_USART2_UART_Init(void)
   {
     Error_Handler();
   }
-  if (HAL_UARTEx_DisableFifoMode(&huart2) != HAL_OK)
+  if (HAL_UARTEx_EnableFifoMode(&huart2) != HAL_OK)
   {
     Error_Handler();
   }
