@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include "crc_ccitt.h"
 #include "Leg_Control.h"
+#include "Leg_Gait.h"
 
 extern RC_DataTypeDef rc_data;
 extern volatile uint32_t last_valid_packet_tick;
@@ -43,6 +44,8 @@ static const char leg_trace_cmd[] = "LEG_TRACE";
 static const char leg_snapshot_cmd[] = "LEG_SNAPSHOT";
 static const char leg_all_micro_cmd[] = "LEG_ALL_MICRO";
 static const char leg_prep_pose_cmd[] = "LEG_PREP_POSE";
+static const char leg_sine_cmd[] = "LEG_SINE";
+static const char leg_trot_cmd[] = "LEG_TROT";
 static const char leg_stand_step_cmd[] = "LEG_STAND_STEP";
 static const char leg_touch_step_cmd[] = "LEG_TOUCH_STEP";
 static const char leg_loaded_step_cmd[] = "LEG_LOADED_STEP";
@@ -374,7 +377,7 @@ static void handle_leg_trace_text(const char *cmd_buf)
     }
 
     if (leg >= 0 && leg < 4) {
-        accepted = Leg_Control_StartDebugTrace((uint8_t)leg);
+        accepted = Leg_Gait_StartDebugTrace((uint8_t)leg);
     }
 
     if (!accepted) {
@@ -384,6 +387,58 @@ static void handle_leg_trace_text(const char *cmd_buf)
             Communication_SendBytes((const uint8_t *)log_buf, (uint16_t)log_len);
         }
     }
+}
+
+static int parse_leg_sine_command(const char *cmd, int *leg, float *amp_mm, float *freq_hz)
+{
+  const char *p = cmd;
+
+  if (memcmp(p, leg_sine_cmd, sizeof(leg_sine_cmd) - 1) != 0)
+    return 0;
+
+  p += sizeof(leg_sine_cmd) - 1;
+  if (*p != ' ' && *p != '\t')
+    return 0;
+
+  if (!parse_int_value(&p, leg))
+    return 0;
+  if (!parse_decimal_value(&p, amp_mm))
+    return 0;
+  if (!parse_decimal_value(&p, freq_hz))
+    return 0;
+
+  p = skip_spaces(p);
+  return *p == '\0';
+}
+
+static void handle_leg_sine_text(const char *cmd_buf)
+{
+  int leg = -1;
+  float amp_mm = 0.0f;
+  float freq_hz = 0.0f;
+  int accepted = 0;
+  char log_buf[96];
+
+  if (!parse_leg_sine_command(cmd_buf, &leg, &amp_mm, &freq_hz)) {
+    int log_len = snprintf(log_buf, sizeof(log_buf),
+                           "LEG_SINE_RX parse_fail cmd=%s\r\n", cmd_buf);
+    if (log_len > 0 && log_len < (int)sizeof(log_buf)) {
+      Communication_SendBytes((const uint8_t *)log_buf, (uint16_t)log_len);
+    }
+    return;
+  }
+
+  if (leg >= 0 && leg < 4) {
+    accepted = Leg_Gait_StartSineTest((uint8_t)leg, amp_mm, freq_hz);
+  }
+
+  if (!accepted) {
+    int log_len = snprintf(log_buf, sizeof(log_buf),
+                           "LEG_SINE_RX rejected leg=%d amp=", leg);
+    if (log_len > 0 && log_len < (int)sizeof(log_buf)) {
+      Communication_SendBytes((const uint8_t *)log_buf, (uint16_t)log_len);
+    }
+  }
 }
 
 static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
@@ -398,6 +453,8 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         len < sizeof(leg_snapshot_cmd) - 1 &&
         len < sizeof(leg_all_micro_cmd) - 1 &&
         len < sizeof(leg_prep_pose_cmd) - 1 &&
+        len < sizeof(leg_sine_cmd) - 1 &&
+        len < sizeof(leg_trot_cmd) - 1 &&
         len < sizeof(leg_stand_step_cmd) - 1 &&
         len < sizeof(leg_touch_step_cmd) - 1 &&
         len < sizeof(leg_loaded_step_cmd) - 1)
@@ -436,7 +493,7 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
 
     for (uint16_t i = 0; i + sizeof(leg_all_micro_cmd) - 1 <= len; i++) {
         if (memcmp(&data[i], leg_all_micro_cmd, sizeof(leg_all_micro_cmd) - 1) == 0) {
-            if (!Leg_Control_StartAllMicroTest()) {
+            if (!Leg_Gait_StartAllMicroTest()) {
                 Communication_SendString("LEG_ALL_MICRO_RX rejected\r\n");
             }
             return;
@@ -445,8 +502,37 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
 
     for (uint16_t i = 0; i + sizeof(leg_prep_pose_cmd) - 1 <= len; i++) {
         if (memcmp(&data[i], leg_prep_pose_cmd, sizeof(leg_prep_pose_cmd) - 1) == 0) {
-            if (!Leg_Control_StartPrepPoseTest()) {
+            if (!Leg_Gait_StartPrepPoseTest()) {
                 Communication_SendString("LEG_PREP_POSE_RX rejected\r\n");
+            }
+            return;
+        }
+    }
+
+    for (uint16_t i = 0; i + sizeof(leg_sine_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], leg_sine_cmd, sizeof(leg_sine_cmd) - 1) == 0) {
+            char cmd_buf[48];
+            uint16_t copy_len = len - i;
+            if (copy_len >= sizeof(cmd_buf))
+                copy_len = sizeof(cmd_buf) - 1;
+            memcpy(cmd_buf, &data[i], copy_len);
+            cmd_buf[copy_len] = '\0';
+            for (uint16_t j = 0; j < copy_len; j++) {
+                if (cmd_buf[j] == '\r' || cmd_buf[j] == '\n') {
+                    cmd_buf[j] = '\0';
+                    break;
+                }
+            }
+
+            handle_leg_sine_text(cmd_buf);
+            return;
+        }
+    }
+
+    for (uint16_t i = 0; i + sizeof(leg_trot_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], leg_trot_cmd, sizeof(leg_trot_cmd) - 1) == 0) {
+            if (!Leg_Gait_StartTrotTest()) {
+                Communication_SendString("LEG_TROT_RX rejected\r\n");
             }
             return;
         }
@@ -454,27 +540,21 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
 
     for (uint16_t i = 0; i + sizeof(leg_stand_step_cmd) - 1 <= len; i++) {
         if (memcmp(&data[i], leg_stand_step_cmd, sizeof(leg_stand_step_cmd) - 1) == 0) {
-            if (!Leg_Control_StartStandStepTest()) {
-                Communication_SendString("LEG_STAND_STEP_RX rejected\r\n");
-            }
+            Communication_SendString("LEG_STAND_STEP_RX rejected (not implemented)\r\n");
             return;
         }
     }
 
     for (uint16_t i = 0; i + sizeof(leg_touch_step_cmd) - 1 <= len; i++) {
         if (memcmp(&data[i], leg_touch_step_cmd, sizeof(leg_touch_step_cmd) - 1) == 0) {
-            if (!Leg_Control_StartTouchStepTest()) {
-                Communication_SendString("LEG_TOUCH_STEP_RX rejected\r\n");
-            }
+            Communication_SendString("LEG_TOUCH_STEP_RX rejected (not implemented)\r\n");
             return;
         }
     }
 
     for (uint16_t i = 0; i + sizeof(leg_loaded_step_cmd) - 1 <= len; i++) {
         if (memcmp(&data[i], leg_loaded_step_cmd, sizeof(leg_loaded_step_cmd) - 1) == 0) {
-            if (!Leg_Control_StartLoadedStepTest()) {
-                Communication_SendString("LEG_LOADED_STEP_RX rejected\r\n");
-            }
+            Communication_SendString("LEG_LOADED_STEP_RX rejected (not implemented)\r\n");
             return;
         }
     }

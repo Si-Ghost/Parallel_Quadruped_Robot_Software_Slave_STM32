@@ -1,15 +1,8 @@
-/**
-******************************************************************************
-  * @file    Leg_Control.h
-  * @author  Si-Ghost
-  * @brief   Head file of Leg_Control.c
-  ******************************************************************************
-  */
-
 #ifndef PARALLEL_QUADRUPED_ROBOT_STM32_LEG_CONTROL_H
 #define PARALLEL_QUADRUPED_ROBOT_STM32_LEG_CONTROL_H
 
 #include "GO-M8010-6.h"
+#include "Leg_Kinematics.h"
 #include "main.h"
 
 typedef enum
@@ -60,38 +53,27 @@ typedef enum
 
 typedef struct
 {
-  float x;
-  float y;
-} Leg_PointTypeDef;
-
-typedef struct
-{
-  float theta1;                                      // 主动杆 AB 的机构角，单位 rad，对应 motor1。
-  float theta2;                                      // 主动杆 AD 的机构角，单位 rad，对应 motor0。
-} Leg_JointAnglesTypeDef;
-
-typedef struct
-{
-  float angle;                                      // 最新反馈角，电机转子侧，单位 rad。
-  Motor_AngleValidTypeDef angle_valid;              // 当前 angle 是否来自有效反馈。
-  Motor_OnlineStateTypeDef online;                  // 该电机是否通过最近一次握手。
-  Motor_HandshakeStatusTypeDef handshake_status;    // 最近一次握手结果。
-  float target_offset;                              // Web 调试目标，相对握手角的转子侧偏移，单位 rad。
-  Motor_TargetActiveTypeDef target_active;          // 当前是否正在执行 Web 调试目标。
-  Motor_TargetResultTypeDef target_result;          // 最近一次 Web 调试目标结果。
+  float angle;
+  float speed;
+  Motor_AngleValidTypeDef angle_valid;
+  Motor_OnlineStateTypeDef online;
+  Motor_HandshakeStatusTypeDef handshake_status;
+  float target_offset;
+  Motor_TargetActiveTypeDef target_active;
+  Motor_TargetResultTypeDef target_result;
   float target_start_angle;
   float target_kp;
   float target_kw;
   float target_hold_kp;
   float target_hold_kw;
   uint8_t target_hold_on_error;
-  uint32_t target_start_tick;                       // 当前目标开始时的 HAL tick。
-  uint32_t target_progress_tick;                    // 目标误差最近一次明显改善时的 HAL tick。
-  float target_last_abs_error;                      // 用于堵转检测的上一次绝对误差。
-  float target_stop_error;                          // 当前调试目标的完成误差阈值，转子侧 rad。
-  uint32_t debug_last_log_tick;                     // 目标调试日志限频用 tick。
-  uint32_t io_error_last_log_tick;                  // 电机 I/O 错误日志限频用 tick。
-  uint8_t io_error_count;                           // 连续 I/O 失败计数，用于断联保护。
+  uint32_t target_start_tick;
+  uint32_t target_progress_tick;
+  float target_last_abs_error;
+  float target_stop_error;
+  uint32_t debug_last_log_tick;
+  uint32_t io_error_last_log_tick;
+  uint8_t io_error_count;
 } Motor_RuntimeStateTypeDef;
 
 typedef struct
@@ -100,15 +82,21 @@ typedef struct
   MOTOR_recv motor_data[2];
   Motor_RuntimeStateTypeDef motor_state[2];
   float p_init[2];
-  float rotor_zero_offset[2];                       // 机构零位对应的电机转子侧角度，单位 rad。
-  float motor_direction[2];                         // 转子角正方向到机构角正方向的符号，取 1 或 -1。
+  float rotor_zero_offset[2];
+  float motor_direction[2];
   GPIO_TypeDef *GPIOx;
   uint16_t GPIO_Pin;
   UART_HandleTypeDef* huartx;
   Leg_StatusTypeDef Leg_Status;
-  Motor_OnlineStateTypeDef has_online_motor;        // 这条腿至少有一个电机通过握手。
+  Motor_OnlineStateTypeDef has_online_motor;
 } Leg_HandlerTypeDef;
 
+#define LEG_WEB_KP                  2.0f
+#define LEG_WEB_KW                  0.15f
+#define LEG_HOLD_KP                 1.0f
+#define LEG_HOLD_KW                 0.15f
+
+/* --- core motor control (Leg_Control.c) --- */
 void Leg_Control_Start(void);
 void Leg_Tx_Handler(Leg_HandlerTypeDef *hleg);
 void Leg_Rx_Handler(Leg_HandlerTypeDef *hleg, uint16_t Size);
@@ -117,13 +105,6 @@ void Leg_Control_Handshake(void);
 void Leg_Control_RequestHandshake(void);
 void Leg_Control_Service(uint32_t now_ms);
 int  Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad);
-int  Leg_Control_SetDebugFootOffset(uint8_t leg, float dx_mm, float dy_mm);
-int  Leg_Control_StartDebugTrace(uint8_t leg);
-int  Leg_Control_StartAllMicroTest(void);
-int  Leg_Control_StartPrepPoseTest(void);
-int  Leg_Control_StartStandStepTest(void);
-int  Leg_Control_StartTouchStepTest(void);
-int  Leg_Control_StartLoadedStepTest(void);
 void Leg_Control_LogFootSnapshot(void);
 int  Leg_Control_HoldCurrentPosition(void);
 void Leg_Control_StopAllDebugTargets(uint8_t reason);
@@ -137,7 +118,18 @@ int  Leg_Control_SetZeroOffsets(uint8_t leg, const float rotor_zero_offset[2], c
 int  Leg_Control_SetCurrentPositionAsZero(uint8_t leg);
 int  Leg_Control_GetJointAngles(uint8_t leg, Leg_JointAnglesTypeDef *angles, uint8_t theta_valid[2]);
 int  Leg_Control_JointToRotorTargets(uint8_t leg, const Leg_JointAnglesTypeDef *angles, float rotor_targets[2]);
-int  Leg_Kinematics_Forward(const Leg_JointAnglesTypeDef *angles, Leg_PointTypeDef *foot);
-int  Leg_Kinematics_Inverse(const Leg_PointTypeDef *foot, Leg_JointAnglesTypeDef *angles);
 
-#endif //PARALLEL_QUADRUPED_ROBOT_STM32_LEG_CONTROL_H
+/* --- shared helpers exported for Leg_Gait --- */
+uint8_t Leg_Control_MotorIndex(uint8_t leg, uint8_t motor);
+Motor_RuntimeStateTypeDef *Leg_Control_MotorState(uint8_t motor_index);
+float Leg_Control_NormalizedMotorDir(float direction);
+int   Leg_Control_GetCurrentFoot(uint8_t leg, Leg_PointTypeDef *foot);
+int   Leg_Control_ComputeFootTargetOffsets(uint8_t leg, const Leg_PointTypeDef *target_foot, float offsets[2]);
+int   Leg_Control_ApplyDebugTarget(uint8_t motor_index, uint8_t force_log);
+void  Leg_Control_StopDebugTarget(uint8_t motor_index, Motor_TargetResultTypeDef result);
+void  Leg_Control_StartOffset(uint8_t motor_index, float offset);
+void  Leg_Control_StartOffsetWithStopError(uint8_t motor_index, float offset, float stop_error);
+int   Leg_Control_SetDebugFootOffset(uint8_t leg, float dx_mm, float dy_mm);
+int   Leg_Control_AppendFixed4(char *buf, size_t size, int pos, float value);
+
+#endif
