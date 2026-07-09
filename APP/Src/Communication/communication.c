@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include "crc_ccitt.h"
 #include "Leg_Control.h"
+#include "Leg_Gait.h"
 
 extern RC_DataTypeDef rc_data;
 extern volatile uint32_t last_valid_packet_tick;
@@ -373,7 +374,7 @@ static void handle_leg_trace_text(const char *cmd_buf)
     }
 
     if (leg >= 0 && leg < 4) {
-        accepted = Leg_Control_StartDebugTrace((uint8_t)leg);
+        accepted = Leg_Gait_StartDebugTrace((uint8_t)leg);
     }
 
     if (!accepted) {
@@ -425,7 +426,7 @@ static void handle_leg_sine_text(const char *cmd_buf)
   }
 
   if (leg >= 0 && leg < 4) {
-    accepted = Leg_Control_StartSineTest((uint8_t)leg, amp_mm, freq_hz);
+    accepted = Leg_Gait_StartSineTest((uint8_t)leg, amp_mm, freq_hz);
   }
 
   if (!accepted) {
@@ -486,7 +487,7 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
 
     for (uint16_t i = 0; i + sizeof(leg_all_micro_cmd) - 1 <= len; i++) {
         if (memcmp(&data[i], leg_all_micro_cmd, sizeof(leg_all_micro_cmd) - 1) == 0) {
-            if (!Leg_Control_StartAllMicroTest()) {
+            if (!Leg_Gait_StartAllMicroTest()) {
                 Communication_SendString("LEG_ALL_MICRO_RX rejected\r\n");
             }
             return;
@@ -495,7 +496,7 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
 
     for (uint16_t i = 0; i + sizeof(leg_prep_pose_cmd) - 1 <= len; i++) {
         if (memcmp(&data[i], leg_prep_pose_cmd, sizeof(leg_prep_pose_cmd) - 1) == 0) {
-            if (!Leg_Control_StartPrepPoseTest()) {
+            if (!Leg_Gait_StartPrepPoseTest()) {
                 Communication_SendString("LEG_PREP_POSE_RX rejected\r\n");
             }
             return;
@@ -524,7 +525,7 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
 
     for (uint16_t i = 0; i + sizeof(leg_trot_cmd) - 1 <= len; i++) {
         if (memcmp(&data[i], leg_trot_cmd, sizeof(leg_trot_cmd) - 1) == 0) {
-            if (!Leg_Control_StartTrotTest()) {
+            if (!Leg_Gait_StartTrotTest()) {
                 Communication_SendString("LEG_TROT_RX rejected\r\n");
             }
             return;

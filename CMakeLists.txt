@@ -48,6 +48,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         BSP/Src/GO-M8010-6/GO-M8010-6.c
         APP/Src/PID/pid.c
         APP/Src/Leg_Control/Leg_Control.c
+        APP/Src/Leg_Kinematics/Leg_Kinematics.c
+        APP/Src/Leg_Gait/Leg_Gait.c
         APP/Src/Communication/communication.c
 )
 
@@ -58,6 +60,8 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         BSP/Inc/GO-M8010-6
         APP/Inc/PID
         APP/Inc/Leg_Control
+        APP/Inc/Leg_Kinematics
+        APP/Inc/Leg_Gait
         APP/Inc/Communication
 )
 
