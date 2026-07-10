@@ -4,26 +4,6 @@
 #include <stdint.h>
 #include "main.h"   // 直接包含main.h，间接包含hal库，增加可移植性
 #include "ris_protocol.h"
-#pragma pack(1)
-
-typedef struct
-{
-    uint8_t head[2];    // 包头         2Byte
-    RIS_Mode_t mode;    // 电机控制模式  1Byte
-    RIS_Fbk_t   fbk;    // 电机反馈数据 11Byte
-    uint16_t  CRC16;    // CRC          2Byte
-} MotorData_t;  //返回数据
-
-typedef struct
-{
-    // 定义 电机控制命令数据包
-    uint8_t head[2];    // 包头         2Byte
-    RIS_Mode_t mode;    // 电机控制模式  1Byte
-    RIS_Comd_t comd;    // 电机期望数据 12Byte
-    uint16_t   CRC16;   // CRC          2Byte
-} ControlData_t;     //电机控制命令数据包
-
-#pragma pack()
 
 typedef struct
 {
@@ -59,7 +39,6 @@ typedef struct
     uint8_t MError;                     // 错误码
 } MOTOR_recv;
 
-uint32_t crc32_core(uint32_t *ptr, uint32_t len);
 int modify_data(MOTOR_send *motor_s);
 int extract_data(MOTOR_recv *motor_r);
 HAL_StatusTypeDef SERVO_Send_recv(MOTOR_send *pData, MOTOR_recv *rData, GPIO_TypeDef *Port, uint16_t Pin, UART_HandleTypeDef *huart);

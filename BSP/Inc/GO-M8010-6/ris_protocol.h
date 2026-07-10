@@ -55,6 +55,22 @@ typedef struct
     uint16_t  none   :13;     // 保留位
 } RIS_Fbk_t;   // 状态数据 11Byte
 
+typedef struct
+{
+    uint8_t head[2];    // 包头         2Byte
+    RIS_Mode_t mode;    // 电机控制模式  1Byte
+    RIS_Fbk_t   fbk;    // 电机反馈数据 11Byte
+    uint16_t  CRC16;    // CRC          2Byte
+} MotorData_t;  //返回数据
+
+typedef struct
+{
+    // 定义 电机控制命令数据包
+    uint8_t head[2];    // 包头         2Byte
+    RIS_Mode_t mode;    // 电机控制模式  1Byte
+    RIS_Comd_t comd;    // 电机期望数据 12Byte
+    uint16_t   CRC16;   // CRC          2Byte
+} ControlData_t;     //电机控制命令数据包
 
 #pragma pack()
 
