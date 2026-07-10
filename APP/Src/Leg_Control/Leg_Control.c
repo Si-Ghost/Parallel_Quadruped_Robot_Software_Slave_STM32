@@ -40,10 +40,10 @@ static uint32_t last_service_tick = 0;
 static volatile uint8_t handshake_requested = 0;
 
 static const float default_rotor_zero_offset[4][2] = {
-  {4.2988f, 3.4371f},
-  {3.4235f, 5.9666f},
-  {5.9979f, 1.0314f},
-  {1.4003f, 5.2892f},
+  /* LF: ID0, ID1 */ {5.4959f, 4.4806f},
+  /* RF: ID0, ID1 */ {0.3530f, 3.5385f},
+  /* LB: ID0, ID1 */ {1.0103f, 2.3756f},
+  /* RB: ID0, ID1 */ {0.3252f, 2.4854f},
 };
 
 static const float default_motor_direction[4][2] = {
