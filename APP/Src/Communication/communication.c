@@ -1013,8 +1013,8 @@ void Communication_SendMotorTransportSummaryBlocking(void)
     char buf[TX_IT_BUF_SIZE];
     int len = snprintf(buf, sizeof(buf),
         "MTR q0=%lu/%lu/%lu q1=%lu/%lu/%lu q2=%lu/%lu/%lu q3=%lu/%lu/%lu "
-        "e=%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu p=%u/%u/%u/%u t=%u/%u/%u/%u "
-        "d=%u%u%u:%u/%u,%u%u%u:%u/%u,%u%u%u:%u/%u,%u%u%u:%u/%u\r\n",
+        "e=%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu u=%lX/%lX/%lX/%lX "
+        "d=%u%u%u:%u,%u%u%u:%u,%u%u%u:%u,%u%u%u:%u\r\n",
         (unsigned long)(stats[0].tx_count[0] + stats[0].tx_count[1]),
         (unsigned long)(stats[0].rx_count[0] + stats[0].rx_count[1]),
         (unsigned long)(stats[0].miss_count[0] + stats[0].miss_count[1]),
@@ -1035,26 +1035,18 @@ void Communication_SendMotorTransportSummaryBlocking(void)
         (unsigned long)uart,
         (unsigned long)rst,
         (unsigned long)stats[0].schedule_overrun_count,
-        stats[0].pending_motor,
-        stats[1].pending_motor,
-        stats[2].pending_motor,
-        stats[3].pending_motor,
-        stats[0].tx_busy,
-        stats[1].tx_busy,
-        stats[2].tx_busy,
-        stats[3].tx_busy,
+        (unsigned long)stats[0].uart_error_bits,
+        (unsigned long)stats[1].uart_error_bits,
+        (unsigned long)stats[2].uart_error_bits,
+        (unsigned long)stats[3].uart_error_bits,
         stats[0].rx_dma_enabled, stats[0].rx_dma_circular,
         stats[0].uart_rx_dma_enabled, stats[0].rx_dma_remaining,
-        stats[0].rx_read_index,
         stats[1].rx_dma_enabled, stats[1].rx_dma_circular,
         stats[1].uart_rx_dma_enabled, stats[1].rx_dma_remaining,
-        stats[1].rx_read_index,
         stats[2].rx_dma_enabled, stats[2].rx_dma_circular,
         stats[2].uart_rx_dma_enabled, stats[2].rx_dma_remaining,
-        stats[2].rx_read_index,
         stats[3].rx_dma_enabled, stats[3].rx_dma_circular,
-        stats[3].uart_rx_dma_enabled, stats[3].rx_dma_remaining,
-        stats[3].rx_read_index);
+        stats[3].uart_rx_dma_enabled, stats[3].rx_dma_remaining);
 
     if (len > 0 && len < (int)sizeof(buf) && comm_ctx.uart != NULL) {
         (void)HAL_UART_Transmit(comm_ctx.uart, (uint8_t *)buf, (uint16_t)len, 100U);

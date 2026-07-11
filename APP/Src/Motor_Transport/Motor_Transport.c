@@ -46,6 +46,7 @@ typedef struct __attribute__((aligned(32)))
   uint32_t id_error_count;
   uint32_t resync_count;
   uint32_t uart_error_count;
+  uint32_t uart_error_bits;
   uint32_t restart_count;
 } Motor_TransportChannel;
 
@@ -96,6 +97,14 @@ static uint16_t ring_available(const Motor_TransportChannel *channel, uint16_t w
                     (MOTOR_TRANSPORT_RING_SIZE - 1U));
 }
 
+static uint8_t rx_ring_is_armed(const Motor_TransportChannel *channel)
+{
+  DMA_Stream_TypeDef *stream = (DMA_Stream_TypeDef *)channel->rx_dma->Instance;
+  return ((stream->CR & (DMA_SxCR_EN | DMA_SxCR_CIRC)) ==
+          (DMA_SxCR_EN | DMA_SxCR_CIRC)) &&
+         ((channel->uart->Instance->CR3 & USART_CR3_DMAR) != 0U);
+}
+
 static HAL_StatusTypeDef arm_rx_ring(Motor_TransportChannel *channel)
 {
   memset(channel->rx_ring, 0, sizeof(channel->rx_ring));
@@ -105,7 +114,9 @@ static HAL_StatusTypeDef arm_rx_ring(Motor_TransportChannel *channel)
                                                    sizeof(channel->rx_ring));
   if (result == HAL_OK) {
     __HAL_DMA_DISABLE_IT(channel->rx_dma, DMA_IT_HT);
-    __HAL_DMA_DISABLE_IT(channel->rx_dma, DMA_IT_TC);
+    /* Keep TC enabled: HAL_DMA_Abort_IT uses the DMA IRQ to finish a UART
+       error abort and eventually call HAL_UART_ErrorCallback. */
+    __HAL_DMA_ENABLE_IT(channel->rx_dma, DMA_IT_TC);
   }
   return result;
 }
@@ -319,6 +330,11 @@ void Motor_Transport_Service(void)
   uint32_t now = HAL_GetTick();
   for (uint8_t i = 0U; i < MOTOR_TRANSPORT_CHANNEL_COUNT; ++i) {
     Motor_TransportChannel *channel = &channels[i];
+    if (!channel->restart_rx && !rx_ring_is_armed(channel)) {
+      channel->restart_rx = 1U;
+      channel->uart_error_bits |= channel->uart->ErrorCode;
+      ++channel->uart_error_count;
+    }
     if (channel->restart_rx) {
       channel->restart_rx = 0U;
       (void)HAL_UART_AbortReceive(channel->uart);
@@ -385,6 +401,7 @@ uint8_t Motor_Transport_GetStats(uint8_t channel_index, Motor_TransportStats *st
   stats->id_error_count = channel->id_error_count;
   stats->resync_count = channel->resync_count;
   stats->uart_error_count = channel->uart_error_count;
+  stats->uart_error_bits = channel->uart_error_bits;
   stats->restart_count = channel->restart_count;
   stats->schedule_overrun_count = schedule_overrun_count;
   return 1U;
@@ -413,6 +430,7 @@ uint8_t Motor_Transport_HandleError(UART_HandleTypeDef *huart)
     channel->tx_busy = 0U;
     channel->pending_motor = MOTOR_TRANSPORT_NO_PENDING;
     channel->restart_rx = transport_running;
+    channel->uart_error_bits |= huart->ErrorCode;
     ++channel->uart_error_count;
     for (uint8_t motor = 0U; motor < MOTOR_TRANSPORT_MOTOR_COUNT; ++motor)
       Legs[channel->leg_index]->motor_state[motor].handshake_status = Motor_Handshake_UartError;

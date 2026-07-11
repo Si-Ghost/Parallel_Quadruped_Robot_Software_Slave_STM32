@@ -36,6 +36,7 @@ typedef struct
   uint32_t id_error_count;
   uint32_t resync_count;
   uint32_t uart_error_count;
+  uint32_t uart_error_bits;
   uint32_t restart_count;
   uint32_t schedule_overrun_count;
 } Motor_TransportStats;
