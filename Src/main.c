@@ -69,6 +69,7 @@ volatile int main_task_start = 0;
 
 /* Transport is verified with zero output; keep PC/Web telemetry enabled. */
 #define MOTOR_TRANSPORT_DIAG_ONLY 0U
+#define MOTOR_TRANSPORT_LOG_GUARD_MS 30U
 
 Leg_HandlerTypeDef Left_Front_Leg;
 Leg_HandlerTypeDef Right_Front_Leg;
@@ -264,7 +265,11 @@ int main(void)
         last_motor_status_report_tick = HAL_GetTick();
         Communication_SendMotorStatus();
       }
-      if (HAL_GetTick() - last_motor_transport_report_tick >= 1000)
+      /* USART6 has one non-blocking TX buffer.  Leave the angle/status frame
+         time to finish before emitting the low-rate transport diagnostic. */
+      if (HAL_GetTick() - last_motor_transport_report_tick >= 1000 &&
+          HAL_GetTick() - last_motor_angle_report_tick >= MOTOR_TRANSPORT_LOG_GUARD_MS &&
+          HAL_GetTick() - last_motor_status_report_tick >= MOTOR_TRANSPORT_LOG_GUARD_MS)
       {
         last_motor_transport_report_tick = HAL_GetTick();
         Communication_SendMotorTransportStatus();
