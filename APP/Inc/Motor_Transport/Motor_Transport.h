@@ -2,6 +2,29 @@
 #define PARALLEL_QUADRUPED_ROBOT_STM32_MOTOR_TRANSPORT_H
 
 #include "main.h"
+#include "GO-M8010-6.h"
+
+typedef uint8_t (*Motor_TransportLoadCommandFn)(uint8_t leg,
+                                                uint8_t motor,
+                                                MOTOR_send *command);
+typedef void (*Motor_TransportFeedbackFn)(uint8_t leg,
+                                          uint8_t motor,
+                                          const MOTOR_recv *feedback,
+                                          uint32_t timestamp);
+typedef void (*Motor_TransportOfflineFn)(uint8_t leg,
+                                         uint8_t motor,
+                                         uint32_t timestamp);
+typedef void (*Motor_TransportUartErrorFn)(uint8_t leg,
+                                           uint32_t error_bits,
+                                           uint32_t timestamp);
+
+typedef struct
+{
+  Motor_TransportLoadCommandFn load_command;
+  Motor_TransportFeedbackFn feedback_received;
+  Motor_TransportOfflineFn feedback_timeout;
+  Motor_TransportUartErrorFn uart_error;
+} Motor_TransportCallbacks;
 
 /*
  * Owns UART2/UART8/UART7/UART5 only while running.
@@ -9,7 +32,7 @@
  * NOLOAD RAM_D2 section.  Stop restores normal RX DMA for blocking handshakes;
  * Start switches RX DMA to circular and arms all four permanent rings.
  */
-HAL_StatusTypeDef Motor_Transport_Init(void);
+HAL_StatusTypeDef Motor_Transport_Init(const Motor_TransportCallbacks *callbacks);
 HAL_StatusTypeDef Motor_Transport_Start(void);
 HAL_StatusTypeDef Motor_Transport_Stop(void);
 void Motor_Transport_Tick(void);

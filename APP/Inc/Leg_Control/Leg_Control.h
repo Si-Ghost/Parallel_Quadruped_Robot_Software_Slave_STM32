@@ -3,6 +3,7 @@
 
 #include "GO-M8010-6.h"
 #include "Leg_Kinematics.h"
+#include "Motor_State.h"
 #include "main.h"
 
 typedef enum
@@ -14,70 +15,6 @@ typedef enum
   Leg_RX_M1,
   Leg_Done
 } Leg_StatusTypeDef;
-
-typedef enum
-{
-  Motor_Angle_Invalid = 0,
-  Motor_Angle_Valid = 1
-} Motor_AngleValidTypeDef;
-
-typedef enum
-{
-  Motor_Offline = 0,
-  Motor_Online = 1
-} Motor_OnlineStateTypeDef;
-
-typedef enum
-{
-  Motor_Handshake_Ok = 0,
-  Motor_Handshake_Timeout = 1,
-  Motor_Handshake_UartError = 2,
-  Motor_Handshake_BadId = 3
-} Motor_HandshakeStatusTypeDef;
-
-typedef enum
-{
-  Motor_Target_Inactive = 0,
-  Motor_Target_Active = 1
-} Motor_TargetActiveTypeDef;
-
-typedef enum
-{
-  Motor_Target_Idle = 0,
-  Motor_Target_Running = 1,
-  Motor_Target_Done = 2,
-  Motor_Target_Timeout = 3,
-  Motor_Target_Stall = 4,
-  Motor_Target_Stopped = 5
-} Motor_TargetResultTypeDef;
-
-typedef struct
-{
-  /* angle is the raw single-turn feedback used by control and zero checks. */
-  float angle;
-  /* display_angle is unwrapped at the 1 kHz transport rate for telemetry. */
-  float display_angle;
-  float speed;
-  Motor_AngleValidTypeDef angle_valid;
-  Motor_OnlineStateTypeDef online;
-  Motor_HandshakeStatusTypeDef handshake_status;
-  float target_offset;
-  Motor_TargetActiveTypeDef target_active;
-  Motor_TargetResultTypeDef target_result;
-  float target_start_angle;
-  float target_kp;
-  float target_kw;
-  float target_hold_kp;
-  float target_hold_kw;
-  uint8_t target_hold_on_error;
-  uint32_t target_start_tick;
-  uint32_t target_progress_tick;
-  float target_last_abs_error;
-  float target_stop_error;
-  uint32_t debug_last_log_tick;
-  uint32_t io_error_last_log_tick;
-  uint8_t io_error_count;
-} Motor_RuntimeStateTypeDef;
 
 typedef struct
 {
@@ -112,6 +49,8 @@ void Leg_Control_LogFootSnapshot(void);
 int  Leg_Control_HoldCurrentPosition(void);
 void Leg_Control_StopAllDebugTargets(uint8_t reason);
 void Leg_Control_GetAngles(float angles[8], uint8_t valid[8]);
+int  Leg_Control_GetMotorStateSnapshot(uint8_t motor_index,
+                                       Motor_StateSnapshotTypeDef *state);
 void Leg_Control_GetOnline(uint8_t motor_online[8], uint8_t leg_online[4]);
 void Leg_Control_GetHandshakeErrors(uint8_t motor_error[8]);
 void Leg_Control_GetTargetStates(uint8_t active[8], uint8_t result[8]);

@@ -1,7 +1,5 @@
 #include "Motor_Transport.h"
 
-#include "GO-M8010-6.h"
-#include "Leg_Control.h"
 #include "crc_ccitt.h"
 
 #include <string.h>
@@ -11,6 +9,7 @@
 #define MOTOR_TRANSPORT_RING_SIZE 256U
 #define MOTOR_TRANSPORT_NO_PENDING 0xFFU
 #define MOTOR_TRANSPORT_OFFLINE_TIMEOUT_MS 100U
+#define MOTOR_TRANSPORT_QUIESCE_TIMEOUT_MS 5U
 
 /*
  * First migration is communication-only.  Leg_Control keeps its command model
@@ -36,6 +35,7 @@ typedef struct __attribute__((aligned(32)))
   volatile uint8_t restart_rx;
   uint16_t read_index;
   uint8_t pending_motor;
+  uint8_t feedback_online[MOTOR_TRANSPORT_MOTOR_COUNT];
   uint32_t last_feedback_tick[MOTOR_TRANSPORT_MOTOR_COUNT];
   uint32_t tx_count[MOTOR_TRANSPORT_MOTOR_COUNT];
   uint32_t rx_count[MOTOR_TRANSPORT_MOTOR_COUNT];
@@ -58,8 +58,6 @@ extern DMA_HandleTypeDef hdma_usart2_rx;
 extern DMA_HandleTypeDef hdma_uart5_rx;
 extern DMA_HandleTypeDef hdma_uart7_rx;
 extern DMA_HandleTypeDef hdma_uart8_rx;
-extern Leg_HandlerTypeDef *Legs[4];
-
 /* RX rings and TX frames are DMA-visible; this NOLOAD object is cleared in Init. */
 static Motor_TransportChannel channels[MOTOR_TRANSPORT_CHANNEL_COUNT]
     __attribute__((section(".dma_buffer"), aligned(32)));
@@ -67,14 +65,7 @@ static volatile uint8_t transport_initialized;
 static volatile uint8_t transport_running;
 static volatile uint32_t transport_ticks;
 static uint32_t schedule_overrun_count;
-
-static void refresh_leg_online(uint8_t leg)
-{
-  if (leg >= MOTOR_TRANSPORT_CHANNEL_COUNT) return;
-  Legs[leg]->has_online_motor =
-      (Legs[leg]->motor_state[0].online == Motor_Online ||
-       Legs[leg]->motor_state[1].online == Motor_Online) ? Motor_Online : Motor_Offline;
-}
+static Motor_TransportCallbacks transport_callbacks;
 
 static HAL_StatusTypeDef configure_rx_mode(Motor_TransportChannel *channel, uint32_t mode)
 {
@@ -123,7 +114,10 @@ static HAL_StatusTypeDef arm_rx_ring(Motor_TransportChannel *channel)
 
 static void prepare_tx_frame(Motor_TransportChannel *channel, uint8_t motor)
 {
-  MOTOR_send command = Legs[channel->leg_index]->motor_cmd[motor];
+  MOTOR_send command;
+  memset(&command, 0, sizeof(command));
+  if (transport_callbacks.load_command != NULL)
+    (void)transport_callbacks.load_command(channel->leg_index, motor, &command);
 
 #if MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY
   command.mode = 1U;
@@ -168,29 +162,20 @@ static void send_motor(Motor_TransportChannel *channel, uint8_t motor)
 static void accept_feedback(Motor_TransportChannel *channel, const MotorData_t *frame)
 {
   uint8_t motor = channel->pending_motor;
-  MOTOR_recv *feedback = &Legs[channel->leg_index]->motor_data[motor];
-  Motor_RuntimeStateTypeDef *state = &Legs[channel->leg_index]->motor_state[motor];
+  MOTOR_recv feedback;
 
-  memcpy(&feedback->motor_recv_data, frame, sizeof(*frame));
-  feedback->rx_len = sizeof(*frame);
-  if (!extract_data(feedback) || feedback->motor_id != motor) return;
+  memset(&feedback, 0, sizeof(feedback));
+  memcpy(&feedback.motor_recv_data, frame, sizeof(*frame));
+  feedback.rx_len = sizeof(*frame);
+  if (!extract_data(&feedback) || feedback.motor_id != motor) return;
 
-  if (state->angle_valid == Motor_Angle_Valid)
-    state->display_angle += rotor_wrap_delta(feedback->Pos, state->angle);
-  else
-    state->display_angle = Legs[channel->leg_index]->rotor_zero_offset[motor] +
-                           rotor_wrap_delta(feedback->Pos,
-                                            Legs[channel->leg_index]->rotor_zero_offset[motor]);
-  state->angle = feedback->Pos;
-  state->speed = feedback->W;
-  state->angle_valid = Motor_Angle_Valid;
-  state->online = Motor_Online;
-  state->handshake_status = Motor_Handshake_Ok;
-  state->io_error_count = 0U;
-  channel->last_feedback_tick[motor] = HAL_GetTick();
+  uint32_t now = HAL_GetTick();
+  channel->last_feedback_tick[motor] = now;
+  channel->feedback_online[motor] = 1U;
   ++channel->rx_count[motor];
   channel->pending_motor = MOTOR_TRANSPORT_NO_PENDING;
-  refresh_leg_online(channel->leg_index);
+  if (transport_callbacks.feedback_received != NULL)
+    transport_callbacks.feedback_received(channel->leg_index, motor, &feedback, now);
 
   if (motor == 0U) send_motor(channel, 1U);
 }
@@ -236,15 +221,14 @@ static void update_online_timeouts(Motor_TransportChannel *channel, uint32_t now
   for (uint8_t motor = 0U; motor < MOTOR_TRANSPORT_MOTOR_COUNT; ++motor) {
     if ((now - channel->last_feedback_tick[motor]) <= MOTOR_TRANSPORT_OFFLINE_TIMEOUT_MS)
       continue;
-    Motor_RuntimeStateTypeDef *state = &Legs[channel->leg_index]->motor_state[motor];
-    state->online = Motor_Offline;
-    state->angle_valid = Motor_Angle_Invalid;
-    state->handshake_status = Motor_Handshake_Timeout;
+    if (!channel->feedback_online[motor]) continue;
+    channel->feedback_online[motor] = 0U;
+    if (transport_callbacks.feedback_timeout != NULL)
+      transport_callbacks.feedback_timeout(channel->leg_index, motor, now);
   }
-  refresh_leg_online(channel->leg_index);
 }
 
-HAL_StatusTypeDef Motor_Transport_Init(void)
+HAL_StatusTypeDef Motor_Transport_Init(const Motor_TransportCallbacks *callbacks)
 {
   Motor_TransportChannel setup[MOTOR_TRANSPORT_CHANNEL_COUNT] = {
       {.uart = &huart2, .rx_dma = &hdma_usart2_rx,
@@ -265,6 +249,11 @@ HAL_StatusTypeDef Motor_Transport_Init(void)
   transport_running = 0U;
   transport_ticks = 0U;
   schedule_overrun_count = 0U;
+  memset(&transport_callbacks, 0, sizeof(transport_callbacks));
+  if (callbacks == NULL || callbacks->load_command == NULL ||
+      callbacks->feedback_received == NULL || callbacks->feedback_timeout == NULL)
+    return HAL_ERROR;
+  transport_callbacks = *callbacks;
   memset(channels, 0, sizeof(channels));
   for (uint8_t i = 0U; i < MOTOR_TRANSPORT_CHANNEL_COUNT; ++i) {
     channels[i] = setup[i];
@@ -283,8 +272,24 @@ HAL_StatusTypeDef Motor_Transport_Stop(void)
   HAL_StatusTypeDef result = HAL_OK;
   transport_running = 0U;
   transport_ticks = 0U;
+
+  /* Stop scheduling first, then let every active UART reach its TC callback
+     before releasing DE or aborting the permanent RX rings. */
+  uint32_t quiesce_start = HAL_GetTick();
+  uint8_t any_tx_busy;
+  do {
+    any_tx_busy = 0U;
+    for (uint8_t i = 0U; i < MOTOR_TRANSPORT_CHANNEL_COUNT; ++i)
+      any_tx_busy |= channels[i].tx_busy;
+  } while (any_tx_busy &&
+           (HAL_GetTick() - quiesce_start) < MOTOR_TRANSPORT_QUIESCE_TIMEOUT_MS);
+
   for (uint8_t i = 0U; i < MOTOR_TRANSPORT_CHANNEL_COUNT; ++i) {
     Motor_TransportChannel *channel = &channels[i];
+    if (channel->tx_busy) {
+      (void)HAL_UART_AbortTransmit(channel->uart);
+      result = HAL_TIMEOUT;
+    }
     HAL_GPIO_WritePin(channel->de_port, channel->de_pin, GPIO_PIN_RESET);
     (void)HAL_UART_Abort(channel->uart);
     __HAL_UART_CLEAR_FLAG(channel->uart,
@@ -293,6 +298,8 @@ HAL_StatusTypeDef Motor_Transport_Stop(void)
     channel->tx_busy = 0U;
     channel->restart_rx = 0U;
     channel->pending_motor = MOTOR_TRANSPORT_NO_PENDING;
+    channel->read_index = 0U;
+    memset(channel->rx_ring, 0, sizeof(channel->rx_ring));
     if (configure_rx_mode(channel, DMA_NORMAL) != HAL_OK) result = HAL_ERROR;
   }
   return result;
@@ -314,6 +321,8 @@ HAL_StatusTypeDef Motor_Transport_Start(void)
     channel->pending_motor = MOTOR_TRANSPORT_NO_PENDING;
     channel->last_feedback_tick[0] = now;
     channel->last_feedback_tick[1] = now;
+    channel->feedback_online[0] = 1U;
+    channel->feedback_online[1] = 1U;
     if (configure_rx_mode(channel, DMA_CIRCULAR) != HAL_OK ||
         arm_rx_ring(channel) != HAL_OK) {
       (void)Motor_Transport_Stop();
@@ -438,8 +447,9 @@ uint8_t Motor_Transport_HandleError(UART_HandleTypeDef *huart)
     channel->restart_rx = transport_running;
     channel->uart_error_bits |= huart->ErrorCode;
     ++channel->uart_error_count;
-    for (uint8_t motor = 0U; motor < MOTOR_TRANSPORT_MOTOR_COUNT; ++motor)
-      Legs[channel->leg_index]->motor_state[motor].handshake_status = Motor_Handshake_UartError;
+    if (transport_callbacks.uart_error != NULL)
+      transport_callbacks.uart_error(channel->leg_index, huart->ErrorCode,
+                                     HAL_GetTick());
     return 1U;
   }
   return 0U;

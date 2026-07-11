@@ -40,6 +40,8 @@ extern UART_HandleTypeDef huart8;
 static uint32_t last_service_tick = 0;
 static volatile uint8_t handshake_requested = 0;
 
+static void refresh_leg_online_state(uint8_t leg);
+
 static const float default_rotor_zero_offset[4][2] = {
   /* LF: ID0, ID1 */ { 4.4221f, 5.5321f},
   /* RF: ID0, ID1 */ {-0.7610f, 4.5657f},
@@ -91,15 +93,14 @@ static float joint_to_rotor_angle(const Leg_HandlerTypeDef *hleg, uint8_t motor,
   return hleg->rotor_zero_offset[motor] + direction * joint_angle * LEG_REDUCTION_RATIO;
 }
 
-static void reset_motor_runtime_state(Motor_RuntimeStateTypeDef *state)
+static void reset_motor_runtime_state(Motor_RuntimeStateTypeDef *state,
+                                      float zero_offset,
+                                      float direction)
 {
   if (state == NULL) return;
-  state->angle = 0.0f;
-  state->display_angle = 0.0f;
-  state->speed = 0.0f;
-  state->angle_valid = Motor_Angle_Invalid;
-  state->online = Motor_Offline;
-  state->handshake_status = Motor_Handshake_Timeout;
+  uint32_t error_count = state->error_count;
+  Motor_State_Init(state, zero_offset, direction);
+  state->error_count = error_count;
   state->target_offset = 0.0f;
   state->target_active = Motor_Target_Inactive;
   state->target_result = Motor_Target_Idle;
@@ -112,6 +113,59 @@ static void reset_motor_runtime_state(Motor_RuntimeStateTypeDef *state)
   state->io_error_last_log_tick = 0;
   state->io_error_count = 0;
 }
+
+static uint8_t transport_load_command(uint8_t leg, uint8_t motor, MOTOR_send *command)
+{
+  if (leg >= 4U || motor >= 2U || command == NULL) return 0U;
+  *command = Legs[leg]->motor_cmd[motor];
+  return 1U;
+}
+
+static void transport_feedback_received(uint8_t leg,
+                                        uint8_t motor,
+                                        const MOTOR_recv *feedback,
+                                        uint32_t timestamp)
+{
+  if (leg >= 4U || motor >= 2U || feedback == NULL) return;
+  Legs[leg]->motor_data[motor] = *feedback;
+  Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
+  Motor_State_UpdateRawFeedback(state, feedback->Pos, feedback->W, feedback->T,
+                                timestamp, LEG_REDUCTION_RATIO,
+                                LEG_ROTOR_ZERO_NEAR_RAD);
+  state->handshake_status = Motor_Handshake_Ok;
+  state->io_error_count = 0U;
+  refresh_leg_online_state(leg);
+}
+
+static void transport_feedback_timeout(uint8_t leg, uint8_t motor, uint32_t timestamp)
+{
+  (void)timestamp;
+  if (leg >= 4U || motor >= 2U) return;
+  Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
+  Motor_State_RecordError(state);
+  Motor_State_MarkOffline(state);
+  state->handshake_status = Motor_Handshake_Timeout;
+  refresh_leg_online_state(leg);
+}
+
+static void transport_uart_error(uint8_t leg, uint32_t error_bits, uint32_t timestamp)
+{
+  (void)error_bits;
+  (void)timestamp;
+  if (leg >= 4U) return;
+  for (uint8_t motor = 0U; motor < 2U; ++motor) {
+    Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
+    Motor_State_RecordError(state);
+    state->handshake_status = Motor_Handshake_UartError;
+  }
+}
+
+static const Motor_TransportCallbacks motor_transport_callbacks = {
+  .load_command = transport_load_command,
+  .feedback_received = transport_feedback_received,
+  .feedback_timeout = transport_feedback_timeout,
+  .uart_error = transport_uart_error,
+};
 
 static uint8_t motor_is_online(uint8_t leg, uint8_t motor)
 {
@@ -532,13 +586,15 @@ static void handle_motor_io_failure(uint8_t leg, uint8_t motor, HAL_StatusTypeDe
   Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
 
   if (state->io_error_count < 255U) state->io_error_count++;
+  Motor_State_RecordError(state);
   state->angle_valid = Motor_Angle_Invalid;
+  state->zero_checked = 0U;
   log_motor_io_error(idx, ret, fbk);
 
   if (state->io_error_count < LEG_IO_ERROR_OFFLINE_COUNT) return;
 
   Leg_Control_StopDebugTarget(idx, Motor_Target_Stopped);
-  state->online = Motor_Offline;
+  Motor_State_MarkOffline(state);
   state->handshake_status = (ret == HAL_TIMEOUT) ? Motor_Handshake_Timeout : Motor_Handshake_UartError;
   refresh_leg_online_state(leg);
   leg_abort_transfer(Legs[leg]);
@@ -595,12 +651,14 @@ void Leg_Control_InitSafe(void)
       modify_data(cmd);
       Legs[leg]->motor_data[motor].rx_len = 0;
       Legs[leg]->motor_data[motor].correct = 0;
-      reset_motor_runtime_state(&Legs[leg]->motor_state[motor]);
+      reset_motor_runtime_state(&Legs[leg]->motor_state[motor],
+                                Legs[leg]->rotor_zero_offset[motor],
+                                Legs[leg]->motor_direction[motor]);
     }
     Legs[leg]->has_online_motor = Motor_Offline;
   }
 
-  if (Motor_Transport_Init() != HAL_OK) Error_Handler();
+  if (Motor_Transport_Init(&motor_transport_callbacks) != HAL_OK) Error_Handler();
 }
 
 void Leg_Control_Handshake(void)
@@ -619,7 +677,9 @@ void Leg_Control_Handshake(void)
       Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
       MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
       MOTOR_recv *fbk = &Legs[leg]->motor_data[motor];
-      reset_motor_runtime_state(state);
+      reset_motor_runtime_state(state,
+                                Legs[leg]->rotor_zero_offset[motor],
+                                Legs[leg]->motor_direction[motor]);
       cmd->id = motor;
       cmd->mode = 1;
       cmd->T = 0.0f;
@@ -633,22 +693,22 @@ void Leg_Control_Handshake(void)
         HAL_StatusTypeDef ret = SERVO_Send_recv(cmd, fbk, Legs[leg]->GPIOx,
                                                 Legs[leg]->GPIO_Pin, Legs[leg]->huartx);
         if (ret == HAL_OK && fbk->correct && fbk->motor_id == motor) {
-          state->online = Motor_Online;
-          state->angle_valid = Motor_Angle_Valid;
+          Motor_State_UpdateRawFeedback(state, fbk->Pos, fbk->W, fbk->T,
+                                        HAL_GetTick(), LEG_REDUCTION_RATIO,
+                                        LEG_ROTOR_ZERO_NEAR_RAD);
           state->handshake_status = Motor_Handshake_Ok;
-          state->angle = fbk->Pos;
-          state->display_angle = Legs[leg]->rotor_zero_offset[motor] +
-                                 rotor_wrap_delta(fbk->Pos,
-                                                  Legs[leg]->rotor_zero_offset[motor]);
           Legs[leg]->p_init[motor] = fbk->Pos;
           cmd->Pos = fbk->Pos;
           modify_data(cmd);
           break;
         } else if (ret == HAL_TIMEOUT) {
+          Motor_State_RecordError(state);
           state->handshake_status = Motor_Handshake_Timeout;
         } else if (ret == HAL_OK) {
+          Motor_State_RecordError(state);
           state->handshake_status = Motor_Handshake_BadId;
         } else {
+          Motor_State_RecordError(state);
           state->handshake_status = Motor_Handshake_UartError;
         }
       }
@@ -662,8 +722,8 @@ void Leg_Control_Handshake(void)
     for (uint8_t leg = 0; leg < 4; ++leg) {
       Legs[leg]->has_online_motor = Motor_Offline;
       for (uint8_t motor = 0; motor < 2; ++motor) {
-        Legs[leg]->motor_state[motor].online = Motor_Offline;
-        Legs[leg]->motor_state[motor].angle_valid = Motor_Angle_Invalid;
+        Motor_State_RecordError(&Legs[leg]->motor_state[motor]);
+        Motor_State_MarkOffline(&Legs[leg]->motor_state[motor]);
         Legs[leg]->motor_state[motor].handshake_status = Motor_Handshake_UartError;
       }
     }
@@ -694,8 +754,9 @@ static void __attribute__((unused)) poll_online_motor(uint8_t leg, uint8_t motor
     ret = SERVO_Send_recv(cmd, fbk, hleg->GPIOx, hleg->GPIO_Pin, hleg->huartx);
 
   if (motor_feedback_is_valid(ret, fbk, motor)) {
-    state->angle = fbk->Pos;
-    state->angle_valid = Motor_Angle_Valid;
+    Motor_State_UpdateRawFeedback(state, fbk->Pos, fbk->W, fbk->T,
+                                  HAL_GetTick(), LEG_REDUCTION_RATIO,
+                                  LEG_ROTOR_ZERO_NEAR_RAD);
     state->io_error_count = 0;
   } else {
     handle_motor_io_failure(leg, motor, ret, fbk);
@@ -838,6 +899,16 @@ void Leg_Control_GetAngles(float angles[8], uint8_t valid[8])
   __enable_irq();
 }
 
+int Leg_Control_GetMotorStateSnapshot(uint8_t motor_index,
+                                      Motor_StateSnapshotTypeDef *state)
+{
+  if (motor_index >= 8U || state == NULL) return 0;
+  __disable_irq();
+  Motor_State_GetSnapshot(Leg_Control_MotorState(motor_index), state);
+  __enable_irq();
+  return 1;
+}
+
 void Leg_Control_GetOnline(uint8_t motor_online[8], uint8_t leg_online[4])
 {
   __disable_irq();
@@ -884,9 +955,8 @@ void Leg_Control_GetZeroCheck(float zero_error[8], uint8_t zero_ok[8], uint8_t *
     uint8_t leg = i / 2U;
     uint8_t motor = i % 2U;
     Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
-    float error = rotor_wrap_delta(state->angle, Legs[leg]->rotor_zero_offset[motor]);
-    uint8_t ok = (state->online == Motor_Online && state->angle_valid == Motor_Angle_Valid &&
-                  absf_local(error) <= LEG_ROTOR_ZERO_NEAR_RAD) ? 1U : 0U;
+    float error = Motor_State_GetZeroError(state);
+    uint8_t ok = state->zero_checked;
     zero_error[i] = error;
     zero_ok[i] = ok;
     if (!ok) all_ok = 0U;
@@ -902,6 +972,11 @@ int Leg_Control_SetZeroOffsets(uint8_t leg, const float rotor_zero_offset[2], co
   for (uint8_t motor = 0; motor < 2; motor++) {
     Legs[leg]->rotor_zero_offset[motor] = rotor_zero_offset[motor];
     Legs[leg]->motor_direction[motor] = Leg_Control_NormalizedMotorDir(motor_direction[motor]);
+    Motor_State_SetCalibration(&Legs[leg]->motor_state[motor],
+                               Legs[leg]->rotor_zero_offset[motor],
+                               Legs[leg]->motor_direction[motor],
+                               LEG_REDUCTION_RATIO,
+                               LEG_ROTOR_ZERO_NEAR_RAD);
   }
   __enable_irq();
   return 1;
@@ -916,8 +991,14 @@ int Leg_Control_SetCurrentPositionAsZero(uint8_t leg)
       __enable_irq(); return 0;
     }
   }
-  for (uint8_t motor = 0; motor < 2; motor++)
+  for (uint8_t motor = 0; motor < 2; motor++) {
     Legs[leg]->rotor_zero_offset[motor] = Legs[leg]->motor_state[motor].angle;
+    Motor_State_SetCalibration(&Legs[leg]->motor_state[motor],
+                               Legs[leg]->rotor_zero_offset[motor],
+                               Legs[leg]->motor_direction[motor],
+                               LEG_REDUCTION_RATIO,
+                               LEG_ROTOR_ZERO_NEAR_RAD);
+  }
   __enable_irq();
   return 1;
 }
@@ -926,14 +1007,12 @@ int Leg_Control_GetJointAngles(uint8_t leg, Leg_JointAnglesTypeDef *angles, uint
 {
   if (leg >= 4 || angles == NULL) return 0;
 
-  float rotor_angle[2], rotor_zero_offset[2], motor_direction[2];
+  float joint_angle[2];
   uint8_t angle_valid[2];
 
   __disable_irq();
   for (uint8_t motor = 0; motor < 2; motor++) {
-    rotor_angle[motor] = Legs[leg]->motor_state[motor].angle;
-    rotor_zero_offset[motor] = Legs[leg]->rotor_zero_offset[motor];
-    motor_direction[motor] = Legs[leg]->motor_direction[motor];
+    joint_angle[motor] = Legs[leg]->motor_state[motor].joint_angle;
     angle_valid[motor] = Legs[leg]->motor_state[motor].angle_valid;
   }
   __enable_irq();
@@ -943,12 +1022,8 @@ int Leg_Control_GetJointAngles(uint8_t leg, Leg_JointAnglesTypeDef *angles, uint
     theta_valid[1] = angle_valid[LEG_MOTOR_THETA2];
   }
 
-  angles->theta1 = Leg_Control_NormalizedMotorDir(motor_direction[LEG_MOTOR_THETA1]) *
-                   rotor_wrap_delta(rotor_angle[LEG_MOTOR_THETA1], rotor_zero_offset[LEG_MOTOR_THETA1]) /
-                   LEG_REDUCTION_RATIO;
-  angles->theta2 = Leg_Control_NormalizedMotorDir(motor_direction[LEG_MOTOR_THETA2]) *
-                   rotor_wrap_delta(rotor_angle[LEG_MOTOR_THETA2], rotor_zero_offset[LEG_MOTOR_THETA2]) /
-                   LEG_REDUCTION_RATIO;
+  angles->theta1 = joint_angle[LEG_MOTOR_THETA1];
+  angles->theta2 = joint_angle[LEG_MOTOR_THETA2];
   return 1;
 }
 
@@ -991,12 +1066,20 @@ void Leg_Rx_Handler(Leg_HandlerTypeDef *hleg, uint16_t Size)
       extract_data(&hleg->motor_data[0]);
       if (idx < 8) {
         Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(idx);
-        state->angle = hleg->motor_data[0].Pos;
-        state->speed = hleg->motor_data[0].W;
-        state->angle_valid = (state->online && hleg->motor_data[0].correct) ? Motor_Angle_Valid : Motor_Angle_Invalid;
+        if (state->online && hleg->motor_data[0].correct)
+          Motor_State_UpdateRawFeedback(state, hleg->motor_data[0].Pos,
+                                        hleg->motor_data[0].W,
+                                        hleg->motor_data[0].T, HAL_GetTick(),
+                                        LEG_REDUCTION_RATIO,
+                                        LEG_ROTOR_ZERO_NEAR_RAD);
+        else {
+          state->angle_valid = Motor_Angle_Invalid;
+          state->zero_checked = 0U;
+        }
       }
     } else if (idx < 8) {
       Leg_Control_MotorState(idx)->angle_valid = Motor_Angle_Invalid;
+      Leg_Control_MotorState(idx)->zero_checked = 0U;
     }
 
     if (l < 4 && motor_is_online(l, 1)) {
@@ -1018,12 +1101,20 @@ void Leg_Rx_Handler(Leg_HandlerTypeDef *hleg, uint16_t Size)
       extract_data(&hleg->motor_data[1]);
       if (idx < 8) {
         Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(idx);
-        state->angle = hleg->motor_data[1].Pos;
-        state->speed = hleg->motor_data[1].W;
-        state->angle_valid = (state->online && hleg->motor_data[1].correct) ? Motor_Angle_Valid : Motor_Angle_Invalid;
+        if (state->online && hleg->motor_data[1].correct)
+          Motor_State_UpdateRawFeedback(state, hleg->motor_data[1].Pos,
+                                        hleg->motor_data[1].W,
+                                        hleg->motor_data[1].T, HAL_GetTick(),
+                                        LEG_REDUCTION_RATIO,
+                                        LEG_ROTOR_ZERO_NEAR_RAD);
+        else {
+          state->angle_valid = Motor_Angle_Invalid;
+          state->zero_checked = 0U;
+        }
       }
     } else if (idx < 8) {
       Leg_Control_MotorState(idx)->angle_valid = Motor_Angle_Invalid;
+      Leg_Control_MotorState(idx)->zero_checked = 0U;
     }
     hleg->Leg_Status = Leg_Done;
   }

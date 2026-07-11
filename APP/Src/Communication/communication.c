@@ -822,9 +822,13 @@ static int append_fixed4(char *buf, size_t size, int pos, float value)
 
 void Communication_SendMotorAngles(void)
 {
+    static uint8_t detail_motor = 0U;
     float angles[8];
     uint8_t valid[8];
+    Motor_StateSnapshotTypeDef state;
     Leg_Control_GetAngles(angles, valid);
+    if (!Leg_Control_GetMotorStateSnapshot(detail_motor, &state))
+        return;
 
     char buf[192];
     int len = snprintf(buf, sizeof(buf), "MOTOR_ANGLES ");
@@ -842,17 +846,38 @@ void Communication_SendMotorAngles(void)
 
     if (len > 0) {
         int written = snprintf(&buf[len], sizeof(buf) - (size_t)len,
-        "%u,%u,%u,%u,%u,%u,%u,%u\n",
+        "%u,%u,%u,%u,%u,%u,%u,%u S%u=",
         valid[0], valid[1], valid[2], valid[3],
-        valid[4], valid[5], valid[6], valid[7]);
+        valid[4], valid[5], valid[6], valid[7], detail_motor);
         if (written < 0 || written >= (int)(sizeof(buf) - (size_t)len))
             len = -1;
         else
             len += written;
     }
 
+    /* Stable compatibility suffix: raw, single-turn, accumulated, joint.
+       The current ESP32 parser consumes the legacy prefix and ignores this. */
+    const float detail[4] = {
+        state.raw_position,
+        state.single_turn_angle,
+        state.accumulated_angle,
+        state.joint_angle,
+    };
+    for (uint8_t i = 0U; i < 4U && len > 0; ++i) {
+        len = append_fixed4(buf, sizeof(buf), len, detail[i]);
+        if (len > 0) {
+            int written = snprintf(&buf[len], sizeof(buf) - (size_t)len,
+                                   "%c", (i == 3U) ? '\n' : ',');
+            if (written < 0 || written >= (int)(sizeof(buf) - (size_t)len))
+                len = -1;
+            else
+                len += written;
+        }
+    }
+
     if (len > 0 && len < (int)sizeof(buf)) {
         Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
+        detail_motor = (uint8_t)((detail_motor + 1U) & 0x07U);
     }
 }
 

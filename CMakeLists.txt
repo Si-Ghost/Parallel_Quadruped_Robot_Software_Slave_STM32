@@ -50,6 +50,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         APP/Src/Leg_Control/Leg_Control.c
         APP/Src/Leg_Kinematics/Leg_Kinematics.c
         APP/Src/Leg_Gait/Leg_Gait.c
+        APP/Src/Motor_State/Motor_State.c
         APP/Src/Motor_Transport/Motor_Transport.c
         APP/Src/Communication/communication.c
 )
@@ -63,6 +64,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         APP/Inc/Leg_Control
         APP/Inc/Leg_Kinematics
         APP/Inc/Leg_Gait
+        APP/Inc/Motor_State
         APP/Inc/Motor_Transport
         APP/Inc/Communication
 )
