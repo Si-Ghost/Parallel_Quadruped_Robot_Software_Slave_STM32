@@ -67,6 +67,8 @@ DMA_HandleTypeDef hdma_usart6_tx;
 /* USER CODE BEGIN PV */
 volatile int main_task_start = 0;
 
+#define MOTOR_TRANSPORT_DIAG_ONLY 1U
+
 Leg_HandlerTypeDef Left_Front_Leg;
 Leg_HandlerTypeDef Right_Front_Leg;
 Leg_HandlerTypeDef Left_Back_Leg;
@@ -228,7 +230,9 @@ int main(void)
 
   // 握手成功后再开启控制定时器
   Leg_Control_Handshake();
+#if !MOTOR_TRANSPORT_DIAG_ONLY
   Communication_SendMotorStatus();
+#endif
   Communication_ResetWatchdog();
   HAL_TIM_Base_Start_IT(&htim7);
 
@@ -248,6 +252,7 @@ int main(void)
 
       Communication_Task();
       Leg_Control_Service(HAL_GetTick());
+#if !MOTOR_TRANSPORT_DIAG_ONLY
       if (HAL_GetTick() - last_motor_angle_report_tick >= 100)
       {
         last_motor_angle_report_tick = HAL_GetTick();
@@ -263,6 +268,18 @@ int main(void)
         last_motor_transport_report_tick = HAL_GetTick();
         Communication_SendMotorTransportStatus();
       }
+#else
+      (void)last_motor_angle_report_tick;
+      (void)last_motor_status_report_tick;
+      (void)Communication_SendMotorTransportStatus;
+      if (HAL_GetTick() - last_motor_transport_report_tick >= 1000)
+      {
+        last_motor_transport_report_tick = HAL_GetTick();
+        HAL_TIM_Base_Stop_IT(&htim7);
+        Communication_SendMotorTransportSummaryBlocking();
+        HAL_TIM_Base_Start_IT(&htim7);
+      }
+#endif
 
     }
 

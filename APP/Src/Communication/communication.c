@@ -983,3 +983,68 @@ void Communication_SendMotorTransportStatus(void)
         Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
     }
 }
+
+void Communication_SendMotorTransportSummaryBlocking(void)
+{
+    Motor_TransportStats stats[4];
+    for (uint8_t i = 0; i < 4U; ++i) {
+        if (!Motor_Transport_GetStats(i, &stats[i])) {
+            return;
+        }
+    }
+
+    uint32_t busy = 0U;
+    uint32_t txe = 0U;
+    uint32_t crc = 0U;
+    uint32_t id = 0U;
+    uint32_t resync = 0U;
+    uint32_t uart = 0U;
+    uint32_t rst = 0U;
+    for (uint8_t i = 0; i < 4U; ++i) {
+        busy += stats[i].busy_count;
+        txe += stats[i].tx_error_count;
+        crc += stats[i].crc_error_count;
+        id += stats[i].id_error_count;
+        resync += stats[i].resync_count;
+        uart += stats[i].uart_error_count;
+        rst += stats[i].restart_count;
+    }
+
+    char buf[TX_IT_BUF_SIZE];
+    int len = snprintf(buf, sizeof(buf),
+        "MTR q0=%lu/%lu/%lu q1=%lu/%lu/%lu q2=%lu/%lu/%lu q3=%lu/%lu/%lu "
+        "e=%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu p=%u/%u/%u/%u t=%u/%u/%u/%u\r\n",
+        (unsigned long)(stats[0].tx_count[0] + stats[0].tx_count[1]),
+        (unsigned long)(stats[0].rx_count[0] + stats[0].rx_count[1]),
+        (unsigned long)(stats[0].miss_count[0] + stats[0].miss_count[1]),
+        (unsigned long)(stats[1].tx_count[0] + stats[1].tx_count[1]),
+        (unsigned long)(stats[1].rx_count[0] + stats[1].rx_count[1]),
+        (unsigned long)(stats[1].miss_count[0] + stats[1].miss_count[1]),
+        (unsigned long)(stats[2].tx_count[0] + stats[2].tx_count[1]),
+        (unsigned long)(stats[2].rx_count[0] + stats[2].rx_count[1]),
+        (unsigned long)(stats[2].miss_count[0] + stats[2].miss_count[1]),
+        (unsigned long)(stats[3].tx_count[0] + stats[3].tx_count[1]),
+        (unsigned long)(stats[3].rx_count[0] + stats[3].rx_count[1]),
+        (unsigned long)(stats[3].miss_count[0] + stats[3].miss_count[1]),
+        (unsigned long)busy,
+        (unsigned long)txe,
+        (unsigned long)crc,
+        (unsigned long)id,
+        (unsigned long)resync,
+        (unsigned long)uart,
+        (unsigned long)rst,
+        (unsigned long)stats[0].schedule_overrun_count,
+        stats[0].pending_motor,
+        stats[1].pending_motor,
+        stats[2].pending_motor,
+        stats[3].pending_motor,
+        stats[0].tx_busy,
+        stats[1].tx_busy,
+        stats[2].tx_busy,
+        stats[3].tx_busy);
+
+    if (len > 0 && len < (int)sizeof(buf) && comm_ctx.uart != NULL) {
+        (void)HAL_UART_Transmit(comm_ctx.uart, (uint8_t *)buf, (uint16_t)len, 100U);
+        comm_ctx.tx_busy = 0U;
+    }
+}

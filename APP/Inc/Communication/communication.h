@@ -40,5 +40,6 @@ void Communication_NotifyTxComplete(void);
 void Communication_SendMotorAngles(void);
 void Communication_SendMotorStatus(void);
 void Communication_SendMotorTransportStatus(void);
+void Communication_SendMotorTransportSummaryBlocking(void);
 
 #endif
