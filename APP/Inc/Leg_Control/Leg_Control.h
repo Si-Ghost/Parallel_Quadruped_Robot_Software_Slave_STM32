@@ -53,7 +53,10 @@ typedef enum
 
 typedef struct
 {
+  /* angle is the raw single-turn feedback used by control and zero checks. */
   float angle;
+  /* display_angle is unwrapped at the 1 kHz transport rate for telemetry. */
+  float display_angle;
   float speed;
   Motor_AngleValidTypeDef angle_valid;
   Motor_OnlineStateTypeDef online;

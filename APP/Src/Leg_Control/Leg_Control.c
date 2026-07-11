@@ -96,6 +96,7 @@ static void reset_motor_runtime_state(Motor_RuntimeStateTypeDef *state)
 {
   if (state == NULL) return;
   state->angle = 0.0f;
+  state->display_angle = 0.0f;
   state->speed = 0.0f;
   state->angle_valid = Motor_Angle_Invalid;
   state->online = Motor_Offline;
@@ -637,6 +638,9 @@ void Leg_Control_Handshake(void)
           state->angle_valid = Motor_Angle_Valid;
           state->handshake_status = Motor_Handshake_Ok;
           state->angle = fbk->Pos;
+          state->display_angle = Legs[leg]->rotor_zero_offset[motor] +
+                                 rotor_wrap_delta(fbk->Pos,
+                                                  Legs[leg]->rotor_zero_offset[motor]);
           Legs[leg]->p_init[motor] = fbk->Pos;
           cmd->Pos = fbk->Pos;
           modify_data(cmd);
@@ -829,7 +833,7 @@ void Leg_Control_GetAngles(float angles[8], uint8_t valid[8])
   __disable_irq();
   for (uint8_t i = 0; i < 8; i++) {
     Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(i);
-    angles[i] = state->angle;
+    angles[i] = state->display_angle;
     valid[i] = state->angle_valid;
   }
   __enable_irq();

@@ -175,6 +175,12 @@ static void accept_feedback(Motor_TransportChannel *channel, const MotorData_t *
   feedback->rx_len = sizeof(*frame);
   if (!extract_data(feedback) || feedback->motor_id != motor) return;
 
+  if (state->angle_valid == Motor_Angle_Valid)
+    state->display_angle += rotor_wrap_delta(feedback->Pos, state->angle);
+  else
+    state->display_angle = Legs[channel->leg_index]->rotor_zero_offset[motor] +
+                           rotor_wrap_delta(feedback->Pos,
+                                            Legs[channel->leg_index]->rotor_zero_offset[motor]);
   state->angle = feedback->Pos;
   state->speed = feedback->W;
   state->angle_valid = Motor_Angle_Valid;
