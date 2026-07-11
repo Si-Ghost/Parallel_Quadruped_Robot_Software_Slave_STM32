@@ -88,6 +88,7 @@ typedef struct
   uint16_t GPIO_Pin;
   UART_HandleTypeDef* huartx;
   Leg_StatusTypeDef Leg_Status;
+  uint32_t transaction_start_tick;
   Motor_OnlineStateTypeDef has_online_motor;
 } Leg_HandlerTypeDef;
 
@@ -106,6 +107,7 @@ void Leg_Control_RequestHandshake(void);
 void Leg_Control_Service(uint32_t now_ms);
 int  Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad);
 void Leg_Control_LogFootSnapshot(void);
+void Leg_Control_LogDmaStats(void);
 int  Leg_Control_HoldCurrentPosition(void);
 void Leg_Control_StopAllDebugTargets(uint8_t reason);
 void Leg_Control_GetAngles(float angles[8], uint8_t valid[8]);

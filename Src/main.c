@@ -245,6 +245,7 @@ int main(void)
       {
         last_motor_status_report_tick = HAL_GetTick();
         Communication_SendMotorStatus();
+        Leg_Control_LogDmaStats();
       }
 
     }
