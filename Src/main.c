@@ -163,6 +163,19 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
     }
   }
 }
+/* Motor replies use fixed-length HAL_UART_Receive_DMA transfers. */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+  for (int i = 0; i < 4; i++)
+  {
+    if (huart->Instance == Legs[i]->huartx->Instance)
+    {
+      Leg_Rx_Handler(Legs[i], sizeof(MotorData_t));
+      break;
+    }
+  }
+}
+
 /* USER CODE END 0 */
 
 /**

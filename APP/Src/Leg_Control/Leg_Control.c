@@ -688,15 +688,14 @@ static void start_motor_dma(uint8_t leg, uint8_t motor)
   dma_start_count++;
   __HAL_UART_CLEAR_FLAG(hleg->huartx, UART_CLEAR_OREF | UART_CLEAR_NEF | UART_CLEAR_PEF | UART_CLEAR_FEF);
   SET_BIT(hleg->huartx->Instance->RQR, UART_RXDATA_FLUSH_REQUEST);
-  /* Arm RX before TX: at 4 Mbps the reply can otherwise start before DMA is ready. */
-  HAL_StatusTypeDef rx_ret = HAL_UARTEx_ReceiveToIdle_DMA(hleg->huartx,
+  /* Fixed 16-byte reply: arm normal RX DMA before TX, never ReceiveToIdle_DMA.
+     An IDLE event may occur before the motor starts replying and truncate the frame. */
+  HAL_StatusTypeDef rx_ret = HAL_UART_Receive_DMA(hleg->huartx,
                               leg_dma_rx[leg][motor], sizeof(MotorData_t));
   if (rx_ret != HAL_OK) {
     dma_fail(leg, motor, rx_ret);
     return;
   }
-  if (hleg->huartx->hdmarx != NULL)
-    __HAL_DMA_DISABLE_IT(hleg->huartx->hdmarx, DMA_IT_HT);
   HAL_GPIO_WritePin(hleg->GPIOx, hleg->GPIO_Pin, GPIO_PIN_SET);
   if (HAL_UART_Transmit_DMA(hleg->huartx, leg_dma_tx[leg][motor], sizeof(ControlData_t)) != HAL_OK)
     dma_fail(leg, motor, HAL_ERROR);
