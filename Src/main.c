@@ -23,7 +23,6 @@
 /* USER CODE BEGIN Includes */
 #include "GO-M8010-6.h"
 #include "Leg_Control.h"
-#include "Motor_Transport.h"
 #include "communication.h"
 /* USER CODE END Includes */
 
@@ -112,15 +111,12 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   if (htim->Instance == TIM7)
   {
     main_task_start = 1;
-    Motor_Transport_Tick();
   }
 }
 
 // UART接受满回调函数
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
-  if (Motor_Transport_HandleTxComplete(huart)) return;
-
   if (huart->Instance == UART4)
   {
     // IMU
@@ -165,11 +161,6 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
       }
     }
   }
-}
-
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
-{
-  (void)Motor_Transport_HandleError(huart);
 }
 /* USER CODE END 0 */
 
@@ -238,9 +229,6 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    /* Drain the RX rings between 1 ms ticks, matching the verified MotorTest. */
-    Motor_Transport_Service();
-
     // 1ms进行一次的任务
     if (main_task_start == 1)
     {
