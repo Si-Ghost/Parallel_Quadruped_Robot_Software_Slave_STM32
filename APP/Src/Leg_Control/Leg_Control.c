@@ -703,9 +703,12 @@ static void start_motor_dma(uint8_t leg, uint8_t motor)
 
 void Leg_Control_Start(void)
 {
-  for (uint8_t leg = 0; leg < 4; leg++)
-    if (Legs[leg]->has_online_motor && Legs[leg]->Leg_Status == Leg_Idle)
-      start_motor_dma(leg, 0);
+  for (uint8_t leg = 0; leg < 4; leg++) {
+    if (!Legs[leg]->has_online_motor || Legs[leg]->Leg_Status != Leg_Idle) continue;
+    /* An offline ID0 must not starve an otherwise healthy ID1 on the same leg. */
+    if (motor_is_online(leg, 0)) start_motor_dma(leg, 0);
+    else if (motor_is_online(leg, 1)) start_motor_dma(leg, 1);
+  }
 }
 
 /* ---- main service ---- */
