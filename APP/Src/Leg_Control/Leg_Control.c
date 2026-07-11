@@ -16,7 +16,7 @@ extern UART_HandleTypeDef huart5;
 extern UART_HandleTypeDef huart7;
 extern UART_HandleTypeDef huart8;
 
-#define LEG_SERVICE_PERIOD_MS       2U /* DMA transport A/B test: 500 Hz scheduler. */
+#define LEG_SERVICE_PERIOD_MS       10U /* DMA transport baseline: 100 Hz scheduler. */
 #define LEG_DEBUG_SERVICE_PERIOD_MS 50U
 #define LEG_DMA_TRANSACTION_TIMEOUT_MS 5U
 #define LEG_WEB_ANGLE_MIN_RAD      -1.50f
