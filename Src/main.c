@@ -83,6 +83,7 @@ RC_DataTypeDef rc_data;
 volatile uint32_t last_valid_packet_tick = 0;
 static uint32_t last_motor_angle_report_tick = 0;
 static uint32_t last_motor_status_report_tick = 0;
+static uint32_t last_dma_stats_report_tick = 0;
 
 /* USER CODE END PV */
 
@@ -245,6 +246,12 @@ int main(void)
       {
         last_motor_status_report_tick = HAL_GetTick();
         Communication_SendMotorStatus();
+      }
+      /* Send after the larger status frame has cleared UART6's one-frame TX buffer. */
+      if ((HAL_GetTick() - last_dma_stats_report_tick >= 1000U) &&
+          (HAL_GetTick() - last_motor_status_report_tick >= 100U))
+      {
+        last_dma_stats_report_tick = HAL_GetTick();
         Leg_Control_LogDmaStats();
       }
 
