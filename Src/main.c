@@ -84,6 +84,7 @@ RC_DataTypeDef rc_data;
 volatile uint32_t last_valid_packet_tick = 0;
 static uint32_t last_motor_angle_report_tick = 0;
 static uint32_t last_motor_status_report_tick = 0;
+static uint32_t last_motor_transport_report_tick = 500;
 
 /* USER CODE END PV */
 
@@ -256,6 +257,11 @@ int main(void)
       {
         last_motor_status_report_tick = HAL_GetTick();
         Communication_SendMotorStatus();
+      }
+      if (HAL_GetTick() - last_motor_transport_report_tick >= 1000)
+      {
+        last_motor_transport_report_tick = HAL_GetTick();
+        Communication_SendMotorTransportStatus();
       }
 
     }
@@ -450,7 +456,7 @@ static void MX_UART5_Init(void)
   {
     Error_Handler();
   }
-  if (HAL_UARTEx_EnableFifoMode(&huart5) != HAL_OK)
+  if (HAL_UARTEx_DisableFifoMode(&huart5) != HAL_OK)
   {
     Error_Handler();
   }
@@ -498,7 +504,7 @@ static void MX_UART7_Init(void)
   {
     Error_Handler();
   }
-  if (HAL_UARTEx_EnableFifoMode(&huart7) != HAL_OK)
+  if (HAL_UARTEx_DisableFifoMode(&huart7) != HAL_OK)
   {
     Error_Handler();
   }
@@ -546,7 +552,7 @@ static void MX_UART8_Init(void)
   {
     Error_Handler();
   }
-  if (HAL_UARTEx_EnableFifoMode(&huart8) != HAL_OK)
+  if (HAL_UARTEx_DisableFifoMode(&huart8) != HAL_OK)
   {
     Error_Handler();
   }
@@ -642,7 +648,7 @@ static void MX_USART2_UART_Init(void)
   {
     Error_Handler();
   }
-  if (HAL_UARTEx_EnableFifoMode(&huart2) != HAL_OK)
+  if (HAL_UARTEx_DisableFifoMode(&huart2) != HAL_OK)
   {
     Error_Handler();
   }

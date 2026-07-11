@@ -353,6 +353,35 @@ void Motor_Transport_Service(void)
   }
 }
 
+uint8_t Motor_Transport_GetStats(uint8_t channel_index, Motor_TransportStats *stats)
+{
+  if (channel_index >= MOTOR_TRANSPORT_CHANNEL_COUNT || stats == NULL) return 0U;
+
+  Motor_TransportChannel *channel = &channels[channel_index];
+  memset(stats, 0, sizeof(*stats));
+  stats->running = transport_running;
+  stats->leg_index = channel->leg_index;
+  stats->pending_motor = channel->pending_motor;
+  stats->tx_busy = channel->tx_busy;
+  stats->rx_write_index = transport_running ? ring_write_index(channel) : 0U;
+  stats->rx_read_index = channel->read_index;
+  stats->tx_count[0] = channel->tx_count[0];
+  stats->tx_count[1] = channel->tx_count[1];
+  stats->rx_count[0] = channel->rx_count[0];
+  stats->rx_count[1] = channel->rx_count[1];
+  stats->miss_count[0] = channel->miss_count[0];
+  stats->miss_count[1] = channel->miss_count[1];
+  stats->busy_count = channel->busy_count;
+  stats->tx_error_count = channel->tx_error_count;
+  stats->crc_error_count = channel->crc_error_count;
+  stats->id_error_count = channel->id_error_count;
+  stats->resync_count = channel->resync_count;
+  stats->uart_error_count = channel->uart_error_count;
+  stats->restart_count = channel->restart_count;
+  stats->schedule_overrun_count = schedule_overrun_count;
+  return 1U;
+}
+
 uint8_t Motor_Transport_HandleTxComplete(UART_HandleTypeDef *huart)
 {
   if (!transport_initialized) return 0U;

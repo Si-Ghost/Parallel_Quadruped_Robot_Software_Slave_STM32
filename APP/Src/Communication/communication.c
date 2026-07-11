@@ -4,6 +4,7 @@
 #include "crc_ccitt.h"
 #include "Leg_Control.h"
 #include "Leg_Gait.h"
+#include "Motor_Transport.h"
 
 extern RC_DataTypeDef rc_data;
 extern volatile uint32_t last_valid_packet_tick;
@@ -938,6 +939,46 @@ void Communication_SendMotorStatus(void)
         len = append_motor_zero(buf, sizeof(buf), len);
     }
 
+    if (len > 0 && len < (int)sizeof(buf)) {
+        Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
+    }
+}
+
+void Communication_SendMotorTransportStatus(void)
+{
+    static uint8_t channel_index = 0;
+    static const char *const channel_name[4] = {"LF", "RF", "LB", "RB"};
+    Motor_TransportStats stats;
+
+    if (!Motor_Transport_GetStats(channel_index, &stats)) {
+        channel_index = 0;
+        return;
+    }
+
+    char buf[TX_IT_BUF_SIZE];
+    int len = snprintf(buf, sizeof(buf),
+        "MOTOR_TRANSPORT %s run=%u tx=%lu/%lu rx=%lu/%lu miss=%lu/%lu "
+        "busy=%lu txe=%lu crc=%lu id=%lu resync=%lu uart=%lu rst=%lu "
+        "pend=%u tb=%u r=%u/%u ov=%lu\n",
+        channel_name[channel_index],
+        stats.running,
+        stats.tx_count[0], stats.tx_count[1],
+        stats.rx_count[0], stats.rx_count[1],
+        stats.miss_count[0], stats.miss_count[1],
+        stats.busy_count,
+        stats.tx_error_count,
+        stats.crc_error_count,
+        stats.id_error_count,
+        stats.resync_count,
+        stats.uart_error_count,
+        stats.restart_count,
+        stats.pending_motor,
+        stats.tx_busy,
+        stats.rx_read_index,
+        stats.rx_write_index,
+        stats.schedule_overrun_count);
+
+    channel_index = (uint8_t)((channel_index + 1U) & 0x03U);
     if (len > 0 && len < (int)sizeof(buf)) {
         Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
     }
