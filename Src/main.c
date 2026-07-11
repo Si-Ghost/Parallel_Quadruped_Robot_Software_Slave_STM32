@@ -67,7 +67,8 @@ DMA_HandleTypeDef hdma_usart6_tx;
 /* USER CODE BEGIN PV */
 volatile int main_task_start = 0;
 
-#define MOTOR_TRANSPORT_DIAG_ONLY 1U
+/* Transport is verified with zero output; keep PC/Web telemetry enabled. */
+#define MOTOR_TRANSPORT_DIAG_ONLY 0U
 
 Leg_HandlerTypeDef Left_Front_Leg;
 Leg_HandlerTypeDef Right_Front_Leg;
