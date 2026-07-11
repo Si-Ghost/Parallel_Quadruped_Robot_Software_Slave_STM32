@@ -1,4 +1,5 @@
 #include "Leg_Control.h"
+#include "Motor_Transport.h"
 #include "Leg_Gait.h"
 #include "communication.h"
 #include <math.h>
@@ -315,7 +316,7 @@ int Leg_Control_ApplyDebugTarget(uint8_t motor_index, uint8_t force_log)
   return 1;
 }
 
-static void update_debug_targets(void)
+static void __attribute__((unused)) update_debug_targets(void)
 {
   for (uint8_t idx = 0; idx < 8; idx++) {
     Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(idx);
@@ -602,6 +603,9 @@ void Leg_Control_InitSafe(void)
 
 void Leg_Control_Handshake(void)
 {
+  /* Blocking SERVO_Send_recv must never share a UART with the DMA rings. */
+  Motor_Transport_Stop();
+
   for (uint8_t leg = 0; leg < 4; leg++)
     leg_abort_transfer(Legs[leg]);
 
@@ -645,6 +649,9 @@ void Leg_Control_Handshake(void)
     Legs[leg]->Leg_Status = Leg_Idle;
     HAL_GPIO_WritePin(Legs[leg]->GPIOx, Legs[leg]->GPIO_Pin, GPIO_PIN_RESET);
   }
+
+  /* Recreate all four RX circular DMA rings after the blocking rescan. */
+  Motor_Transport_Start();
 }
 
 void Leg_Control_RequestHandshake(void)
@@ -654,7 +661,7 @@ void Leg_Control_RequestHandshake(void)
 
 /* ---- motor polling ---- */
 
-static void poll_online_motor(uint8_t leg, uint8_t motor)
+static void __attribute__((unused)) poll_online_motor(uint8_t leg, uint8_t motor)
 {
   if (leg >= 4 || motor >= 2 || !motor_is_online(leg, motor)) return;
 
@@ -681,11 +688,7 @@ static void poll_online_motor(uint8_t leg, uint8_t motor)
 
 void Leg_Control_Start(void)
 {
-  for (int i = 0; i < 4; i++) {
-    if (!Legs[i]->has_online_motor) continue;
-    poll_online_motor((uint8_t)i, 0);
-    poll_online_motor((uint8_t)i, 1);
-  }
+  Motor_Transport_Service();
 }
 
 /* ---- main service ---- */
@@ -700,13 +703,7 @@ void Leg_Control_Service(uint32_t now_ms)
   if ((now_ms - last_service_tick) < LEG_SERVICE_PERIOD_MS) return;
   last_service_tick = now_ms;
 
-  update_debug_targets();
-  Leg_Gait_ServiceSine();
-  Leg_Gait_ServiceTrot();
-  Leg_Control_Start();
-  Leg_Gait_ServiceDebugTrace();
-  Leg_Gait_ServiceAllMicro();
-  Leg_Gait_ServicePrepPose();
+  /* The first DMA migration is communication-only: no PID or gait service. */
 }
 
 /* ---- hold / stop ---- */
