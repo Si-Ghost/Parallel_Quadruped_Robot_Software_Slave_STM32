@@ -48,11 +48,11 @@ static const float default_rotor_zero_offset[4][2] = {
 };
 
 static const float default_motor_direction[4][2] = {
-  /* Physical verification: positive rotor angle means positive joint angle. */
-  {1.0f, 1.0f},
-  {1.0f, 1.0f},
-  {1.0f, 1.0f},
-  {1.0f, 1.0f},
+  /* LF: ID0, ID1 */ { 1.0f, 1.0f},
+  /* RF: ID0, ID1 */ { 1.0f, 1.0f},
+  /* LB: ID0 (AB) is mounted opposite to the positive theta1 convention. */
+  /* LB: ID0, ID1 */ {-1.0f, 1.0f},
+  /* RB: ID0, ID1 */ { 1.0f, 1.0f},
 };
 
 /* ---- helpers ---- */
