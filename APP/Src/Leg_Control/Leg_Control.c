@@ -3,7 +3,6 @@
 #include "communication.h"
 #include <math.h>
 #include <stdio.h>
-#include <string.h>
 
 extern Leg_HandlerTypeDef Left_Front_Leg;
 extern Leg_HandlerTypeDef Right_Front_Leg;
@@ -16,9 +15,7 @@ extern UART_HandleTypeDef huart5;
 extern UART_HandleTypeDef huart7;
 extern UART_HandleTypeDef huart8;
 
-#define LEG_SERVICE_PERIOD_MS       10U /* DMA transport baseline: 100 Hz scheduler. */
-#define LEG_DEBUG_SERVICE_PERIOD_MS 50U
-#define LEG_DMA_TRANSACTION_TIMEOUT_MS 5U
+#define LEG_SERVICE_PERIOD_MS       50U
 #define LEG_WEB_ANGLE_MIN_RAD      -1.50f
 #define LEG_WEB_ANGLE_MAX_RAD       1.50f
 #define LEG_WEB_STOP_ERROR_RAD      0.08f
@@ -40,17 +37,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_MOTOR_THETA2            1U /* ID1 drives AD after front/rear mounting swap. */
 
 static uint32_t last_service_tick = 0;
-static uint32_t last_debug_service_tick = 0;
 static volatile uint8_t handshake_requested = 0;
-static volatile uint32_t dma_start_count = 0;
-static volatile uint32_t dma_complete_count = 0;
-static volatile uint32_t dma_timeout_count = 0;
-
-/* H7 UART DMA cannot access DTCMRAM; keep every live DMA buffer in RAM_D2. */
-static uint8_t leg_dma_tx[4][2][sizeof(ControlData_t)]
-  __attribute__((section(".dma_buffer"), aligned(32)));
-static uint8_t leg_dma_rx[4][2][sizeof(MotorData_t)]
-  __attribute__((section(".dma_buffer"), aligned(32)));
 
 static const float default_rotor_zero_offset[4][2] = {
   /* LF: ID0, ID1 */ { 4.4221f, 5.5321f},
@@ -665,49 +652,39 @@ void Leg_Control_RequestHandshake(void)
   handshake_requested = 1;
 }
 
-/* ---- 4-UART asynchronous DMA scheduler ---- */
+/* ---- motor polling ---- */
 
-static void dma_fail(uint8_t leg, uint8_t motor, HAL_StatusTypeDef ret)
-{
-  Leg_HandlerTypeDef *hleg = Legs[leg];
-  HAL_GPIO_WritePin(hleg->GPIOx, hleg->GPIO_Pin, GPIO_PIN_RESET);
-  hleg->Leg_Status = Leg_Idle;
-  if (ret == HAL_TIMEOUT) dma_timeout_count++;
-  handle_motor_io_failure(leg, motor, ret, &hleg->motor_data[motor]);
-}
-
-static void start_motor_dma(uint8_t leg, uint8_t motor)
+static void poll_online_motor(uint8_t leg, uint8_t motor)
 {
   if (leg >= 4 || motor >= 2 || !motor_is_online(leg, motor)) return;
+
   Leg_HandlerTypeDef *hleg = Legs[leg];
   MOTOR_send *cmd = &hleg->motor_cmd[motor];
-  modify_data(cmd);
-  memcpy(leg_dma_tx[leg][motor], &cmd->motor_send_data, sizeof(ControlData_t));
+  MOTOR_recv *fbk = &hleg->motor_data[motor];
+  Motor_RuntimeStateTypeDef *state = &hleg->motor_state[motor];
+
   hleg->Leg_Status = tx_status_for_motor(motor);
-  hleg->transaction_start_tick = HAL_GetTick();
-  dma_start_count++;
-  __HAL_UART_CLEAR_FLAG(hleg->huartx, UART_CLEAR_OREF | UART_CLEAR_NEF | UART_CLEAR_PEF | UART_CLEAR_FEF);
-  SET_BIT(hleg->huartx->Instance->RQR, UART_RXDATA_FLUSH_REQUEST);
-  /* Fixed 16-byte reply: arm normal RX DMA before TX, never ReceiveToIdle_DMA.
-     An IDLE event may occur before the motor starts replying and truncate the frame. */
-  HAL_StatusTypeDef rx_ret = HAL_UART_Receive_DMA(hleg->huartx,
-                              leg_dma_rx[leg][motor], sizeof(MotorData_t));
-  if (rx_ret != HAL_OK) {
-    dma_fail(leg, motor, rx_ret);
-    return;
+  HAL_StatusTypeDef ret = SERVO_Send_recv(cmd, fbk, hleg->GPIOx, hleg->GPIO_Pin, hleg->huartx);
+
+  for (uint8_t retry = 0; retry < LEG_IO_RETRY_COUNT && !motor_feedback_is_valid(ret, fbk, motor); retry++)
+    ret = SERVO_Send_recv(cmd, fbk, hleg->GPIOx, hleg->GPIO_Pin, hleg->huartx);
+
+  if (motor_feedback_is_valid(ret, fbk, motor)) {
+    state->angle = fbk->Pos;
+    state->angle_valid = Motor_Angle_Valid;
+    state->io_error_count = 0;
+  } else {
+    handle_motor_io_failure(leg, motor, ret, fbk);
   }
-  HAL_GPIO_WritePin(hleg->GPIOx, hleg->GPIO_Pin, GPIO_PIN_SET);
-  if (HAL_UART_Transmit_DMA(hleg->huartx, leg_dma_tx[leg][motor], sizeof(ControlData_t)) != HAL_OK)
-    dma_fail(leg, motor, HAL_ERROR);
+  hleg->Leg_Status = Leg_Done;
 }
 
 void Leg_Control_Start(void)
 {
-  for (uint8_t leg = 0; leg < 4; leg++) {
-    if (!Legs[leg]->has_online_motor || Legs[leg]->Leg_Status != Leg_Idle) continue;
-    /* An offline ID0 must not starve an otherwise healthy ID1 on the same leg. */
-    if (motor_is_online(leg, 0)) start_motor_dma(leg, 0);
-    else if (motor_is_online(leg, 1)) start_motor_dma(leg, 1);
+  for (int i = 0; i < 4; i++) {
+    if (!Legs[i]->has_online_motor) continue;
+    poll_online_motor((uint8_t)i, 0);
+    poll_online_motor((uint8_t)i, 1);
   }
 }
 
@@ -723,23 +700,10 @@ void Leg_Control_Service(uint32_t now_ms)
   if ((now_ms - last_service_tick) < LEG_SERVICE_PERIOD_MS) return;
   last_service_tick = now_ms;
 
-  for (uint8_t leg = 0; leg < 4; leg++) {
-    Leg_HandlerTypeDef *hleg = Legs[leg];
-    if (hleg->Leg_Status != Leg_Idle && hleg->Leg_Status != Leg_Done &&
-        (now_ms - hleg->transaction_start_tick) > LEG_DMA_TRANSACTION_TIMEOUT_MS) {
-      uint8_t motor = (hleg->Leg_Status == Leg_TX_M1 || hleg->Leg_Status == Leg_RX_M1) ? 1U : 0U;
-      HAL_UART_Abort(hleg->huartx);
-      dma_fail(leg, motor, HAL_TIMEOUT);
-    }
-  }
-  Leg_Control_Start();
-
-  if ((now_ms - last_debug_service_tick) < LEG_DEBUG_SERVICE_PERIOD_MS) return;
-  last_debug_service_tick = now_ms;
-
   update_debug_targets();
   Leg_Gait_ServiceSine();
   Leg_Gait_ServiceTrot();
+  Leg_Control_Start();
   Leg_Gait_ServiceDebugTrace();
   Leg_Gait_ServiceAllMicro();
   Leg_Gait_ServicePrepPose();
@@ -848,20 +812,6 @@ void Leg_Control_LogFootSnapshot(void)
 }
 
 /* ---- state queries (ISR-safe) ---- */
-
-void Leg_Control_LogDmaStats(void)
-{
-  uint32_t started, completed, timed_out;
-  __disable_irq();
-  started = dma_start_count;
-  completed = dma_complete_count;
-  timed_out = dma_timeout_count;
-  __enable_irq();
-  char buf[96];
-  int len = snprintf(buf, sizeof(buf), "DMA_STATS start=%lu done=%lu timeout=%lu\r\n",
-                     (unsigned long)started, (unsigned long)completed, (unsigned long)timed_out);
-  if (len > 0 && len < (int)sizeof(buf)) Communication_SendString(buf);
-}
 
 void Leg_Control_GetAngles(float angles[8], uint8_t valid[8])
 {
@@ -1001,38 +951,66 @@ int Leg_Control_JointToRotorTargets(uint8_t leg, const Leg_JointAnglesTypeDef *a
 void Leg_Tx_Handler(Leg_HandlerTypeDef *hleg)
 {
   HAL_GPIO_WritePin(hleg->GPIOx, hleg->GPIO_Pin, GPIO_PIN_RESET);
-  uint8_t leg = leg_index_from_handle(hleg);
-  if (leg >= 4 || (hleg->Leg_Status != Leg_TX_M0 && hleg->Leg_Status != Leg_TX_M1)) return;
-  uint8_t motor = (hleg->Leg_Status == Leg_TX_M1) ? 1U : 0U;
-  (void)leg;
-  /* RX DMA was armed before TX; this transition only releases the RS485 bus. */
-  hleg->Leg_Status = motor ? Leg_RX_M1 : Leg_RX_M0;
+  if (hleg->Leg_Status == Leg_TX_M0) {
+    hleg->Leg_Status = Leg_RX_M0;
+    HAL_UARTEx_ReceiveToIdle_DMA(hleg->huartx,
+                                 (uint8_t *)&(hleg->motor_data[0].motor_recv_data),
+                                 sizeof(hleg->motor_data[0].motor_recv_data));
+  }
+  if (hleg->Leg_Status == Leg_TX_M1) {
+    hleg->Leg_Status = Leg_RX_M1;
+    HAL_UARTEx_ReceiveToIdle_DMA(hleg->huartx,
+                                 (uint8_t *)&(hleg->motor_data[1].motor_recv_data),
+                                 sizeof(hleg->motor_data[1].motor_recv_data));
+  }
 }
 
 void Leg_Rx_Handler(Leg_HandlerTypeDef *hleg, uint16_t Size)
 {
   HAL_GPIO_WritePin(hleg->GPIOx, hleg->GPIO_Pin, GPIO_PIN_SET);
-  uint8_t leg = leg_index_from_handle(hleg);
-  if (leg >= 4 || (hleg->Leg_Status != Leg_RX_M0 && hleg->Leg_Status != Leg_RX_M1)) return;
-  uint8_t motor = (hleg->Leg_Status == Leg_RX_M1) ? 1U : 0U;
-  MOTOR_recv *fbk = &hleg->motor_data[motor];
-  fbk->rx_len = Size;
-  fbk->correct = 0;
-  if (Size == sizeof(MotorData_t)) {
-    memcpy(&fbk->motor_recv_data, leg_dma_rx[leg][motor], sizeof(MotorData_t));
-    extract_data(fbk);
+
+  if (hleg->Leg_Status == Leg_RX_M0) {
+    hleg->motor_data[0].rx_len = Size;
+    uint8_t l = leg_index_from_handle(hleg);
+    uint8_t idx = l == 0xFF ? 0xFF : Leg_Control_MotorIndex(l, 0);
+    if (Size == sizeof(hleg->motor_data[0].motor_recv_data)) {
+      extract_data(&hleg->motor_data[0]);
+      if (idx < 8) {
+        Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(idx);
+        state->angle = hleg->motor_data[0].Pos;
+        state->speed = hleg->motor_data[0].W;
+        state->angle_valid = (state->online && hleg->motor_data[0].correct) ? Motor_Angle_Valid : Motor_Angle_Invalid;
+      }
+    } else if (idx < 8) {
+      Leg_Control_MotorState(idx)->angle_valid = Motor_Angle_Invalid;
+    }
+
+    if (l < 4 && motor_is_online(l, 1)) {
+      hleg->Leg_Status = Leg_TX_M1;
+      modify_data(&(hleg->motor_cmd[1]));
+      HAL_UART_Transmit_DMA(hleg->huartx,
+                            (uint8_t *)&(hleg->motor_cmd[1].motor_send_data),
+                            sizeof(hleg->motor_cmd[1].motor_send_data));
+    } else {
+      hleg->Leg_Status = Leg_Done;
+    }
   }
-  if (!motor_feedback_is_valid(HAL_OK, fbk, motor)) {
-    dma_fail(leg, motor, HAL_ERROR);
-    return;
+
+  if (hleg->Leg_Status == Leg_RX_M1) {
+    hleg->motor_data[1].rx_len = Size;
+    uint8_t l = leg_index_from_handle(hleg);
+    uint8_t idx = l == 0xFF ? 0xFF : Leg_Control_MotorIndex(l, 1);
+    if (Size == sizeof(hleg->motor_data[1].motor_recv_data)) {
+      extract_data(&hleg->motor_data[1]);
+      if (idx < 8) {
+        Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(idx);
+        state->angle = hleg->motor_data[1].Pos;
+        state->speed = hleg->motor_data[1].W;
+        state->angle_valid = (state->online && hleg->motor_data[1].correct) ? Motor_Angle_Valid : Motor_Angle_Invalid;
+      }
+    } else if (idx < 8) {
+      Leg_Control_MotorState(idx)->angle_valid = Motor_Angle_Invalid;
+    }
+    hleg->Leg_Status = Leg_Done;
   }
-  Motor_RuntimeStateTypeDef *state = &hleg->motor_state[motor];
-  state->angle = fbk->Pos;
-  state->speed = fbk->W;
-  state->angle_valid = Motor_Angle_Valid;
-  state->io_error_count = 0;
-  dma_complete_count++;
-  hleg->Leg_Status = Leg_Idle;
-  if (motor == 0U && motor_is_online(leg, 1U))
-    start_motor_dma(leg, 1U);
 }

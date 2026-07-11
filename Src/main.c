@@ -83,7 +83,6 @@ RC_DataTypeDef rc_data;
 volatile uint32_t last_valid_packet_tick = 0;
 static uint32_t last_motor_angle_report_tick = 0;
 static uint32_t last_motor_status_report_tick = 0;
-static uint32_t last_dma_stats_report_tick = 0;
 
 /* USER CODE END PV */
 
@@ -163,19 +162,6 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
     }
   }
 }
-/* Motor replies use fixed-length HAL_UART_Receive_DMA transfers. */
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
-  for (int i = 0; i < 4; i++)
-  {
-    if (huart->Instance == Legs[i]->huartx->Instance)
-    {
-      Leg_Rx_Handler(Legs[i], sizeof(MotorData_t));
-      break;
-    }
-  }
-}
-
 /* USER CODE END 0 */
 
 /**
@@ -259,13 +245,6 @@ int main(void)
       {
         last_motor_status_report_tick = HAL_GetTick();
         Communication_SendMotorStatus();
-      }
-      /* Send after the larger status frame has cleared UART6's one-frame TX buffer. */
-      if ((HAL_GetTick() - last_dma_stats_report_tick >= 1000U) &&
-          (HAL_GetTick() - last_motor_status_report_tick >= 100U))
-      {
-        last_dma_stats_report_tick = HAL_GetTick();
-        Leg_Control_LogDmaStats();
       }
 
     }
