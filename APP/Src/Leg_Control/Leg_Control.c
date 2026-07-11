@@ -626,7 +626,8 @@ void Leg_Control_Handshake(void)
       cmd->W = 0;
       cmd->Pos = 0.0f;
       cmd->K_P = 0.0f;
-      cmd->K_W = LEG_HANDSHAKE_KW;
+      /* DMA migration validation is communication-only: keep every output zero. */
+      cmd->K_W = 0.0f;
 
       for (uint8_t retry = 0; retry < LEG_HANDSHAKE_RETRY; retry++) {
         HAL_StatusTypeDef ret = SERVO_Send_recv(cmd, fbk, Legs[leg]->GPIOx,
