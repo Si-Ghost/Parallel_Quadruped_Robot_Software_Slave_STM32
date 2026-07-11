@@ -47,11 +47,11 @@ static const float default_rotor_zero_offset[4][2] = {
 };
 
 static const float default_motor_direction[4][2] = {
-  /* Motors were mounted front/back opposite to the original convention. */
-  {-1.0f, -1.0f},
-  {-1.0f, -1.0f},
-  {-1.0f, -1.0f},
-  {-1.0f, -1.0f},
+  /* Physical verification: positive rotor angle means positive joint angle. */
+  {1.0f, 1.0f},
+  {1.0f, 1.0f},
+  {1.0f, 1.0f},
+  {1.0f, 1.0f},
 };
 
 /* ---- helpers ---- */
