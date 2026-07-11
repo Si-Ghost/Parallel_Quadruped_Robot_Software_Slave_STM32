@@ -21,8 +21,12 @@ typedef struct
   uint8_t leg_index;
   uint8_t pending_motor;
   uint8_t tx_busy;
+  uint8_t rx_dma_enabled;
+  uint8_t rx_dma_circular;
+  uint8_t uart_rx_dma_enabled;
   uint16_t rx_write_index;
   uint16_t rx_read_index;
+  uint16_t rx_dma_remaining;
   uint32_t tx_count[2];
   uint32_t rx_count[2];
   uint32_t miss_count[2];

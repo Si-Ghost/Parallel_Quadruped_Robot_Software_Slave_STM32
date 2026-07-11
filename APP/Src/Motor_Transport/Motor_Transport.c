@@ -358,11 +358,19 @@ uint8_t Motor_Transport_GetStats(uint8_t channel_index, Motor_TransportStats *st
   if (channel_index >= MOTOR_TRANSPORT_CHANNEL_COUNT || stats == NULL) return 0U;
 
   Motor_TransportChannel *channel = &channels[channel_index];
+  DMA_Stream_TypeDef *rx_stream = (DMA_Stream_TypeDef *)channel->rx_dma->Instance;
   memset(stats, 0, sizeof(*stats));
   stats->running = transport_running;
   stats->leg_index = channel->leg_index;
   stats->pending_motor = channel->pending_motor;
   stats->tx_busy = channel->tx_busy;
+  stats->rx_dma_enabled =
+      (rx_stream->CR & DMA_SxCR_EN) != 0U ? 1U : 0U;
+  stats->rx_dma_circular =
+      (rx_stream->CR & DMA_SxCR_CIRC) != 0U ? 1U : 0U;
+  stats->uart_rx_dma_enabled =
+      (channel->uart->Instance->CR3 & USART_CR3_DMAR) != 0U ? 1U : 0U;
+  stats->rx_dma_remaining = (uint16_t)__HAL_DMA_GET_COUNTER(channel->rx_dma);
   stats->rx_write_index = transport_running ? ring_write_index(channel) : 0U;
   stats->rx_read_index = channel->read_index;
   stats->tx_count[0] = channel->tx_count[0];

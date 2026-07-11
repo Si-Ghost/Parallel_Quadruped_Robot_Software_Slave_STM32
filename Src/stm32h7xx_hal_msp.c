@@ -228,7 +228,7 @@ void HAL_UART_MspInit(UART_HandleTypeDef* huart)
     hdma_uart5_rx.Init.MemInc = DMA_MINC_ENABLE;
     hdma_uart5_rx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
     hdma_uart5_rx.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
-    hdma_uart5_rx.Init.Mode = DMA_NORMAL;
+    hdma_uart5_rx.Init.Mode = DMA_CIRCULAR;
     hdma_uart5_rx.Init.Priority = DMA_PRIORITY_LOW;
     hdma_uart5_rx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
     if (HAL_DMA_Init(&hdma_uart5_rx) != HAL_OK)
@@ -303,7 +303,7 @@ void HAL_UART_MspInit(UART_HandleTypeDef* huart)
     hdma_uart7_rx.Init.MemInc = DMA_MINC_ENABLE;
     hdma_uart7_rx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
     hdma_uart7_rx.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
-    hdma_uart7_rx.Init.Mode = DMA_NORMAL;
+    hdma_uart7_rx.Init.Mode = DMA_CIRCULAR;
     hdma_uart7_rx.Init.Priority = DMA_PRIORITY_LOW;
     hdma_uart7_rx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
     if (HAL_DMA_Init(&hdma_uart7_rx) != HAL_OK)
@@ -380,7 +380,7 @@ void HAL_UART_MspInit(UART_HandleTypeDef* huart)
     hdma_uart8_rx.Init.MemInc = DMA_MINC_ENABLE;
     hdma_uart8_rx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
     hdma_uart8_rx.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
-    hdma_uart8_rx.Init.Mode = DMA_NORMAL;
+    hdma_uart8_rx.Init.Mode = DMA_CIRCULAR;
     hdma_uart8_rx.Init.Priority = DMA_PRIORITY_LOW;
     hdma_uart8_rx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
     if (HAL_DMA_Init(&hdma_uart8_rx) != HAL_OK)
@@ -491,7 +491,7 @@ void HAL_UART_MspInit(UART_HandleTypeDef* huart)
     hdma_usart2_rx.Init.MemInc = DMA_MINC_ENABLE;
     hdma_usart2_rx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
     hdma_usart2_rx.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
-    hdma_usart2_rx.Init.Mode = DMA_NORMAL;
+    hdma_usart2_rx.Init.Mode = DMA_CIRCULAR;
     hdma_usart2_rx.Init.Priority = DMA_PRIORITY_LOW;
     hdma_usart2_rx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
     if (HAL_DMA_Init(&hdma_usart2_rx) != HAL_OK)
