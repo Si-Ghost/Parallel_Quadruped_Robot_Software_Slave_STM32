@@ -256,6 +256,10 @@ void HAL_UART_MspInit(UART_HandleTypeDef* huart)
 
     __HAL_LINKDMA(huart,hdmatx,hdma_uart5_tx);
 
+    /* UART TC interrupt releases RS485 DE after the final stop bit. */
+    HAL_NVIC_SetPriority(UART5_IRQn, 2, 0);
+    HAL_NVIC_EnableIRQ(UART5_IRQn);
+
     /* USER CODE BEGIN UART5_MspInit 1 */
 
     /* USER CODE END UART5_MspInit 1 */
@@ -331,7 +335,7 @@ void HAL_UART_MspInit(UART_HandleTypeDef* huart)
     __HAL_LINKDMA(huart,hdmatx,hdma_uart7_tx);
 
     /* UART7 interrupt Init */
-    HAL_NVIC_SetPriority(UART7_IRQn, 0, 0);
+    HAL_NVIC_SetPriority(UART7_IRQn, 2, 0);
     HAL_NVIC_EnableIRQ(UART7_IRQn);
     /* USER CODE BEGIN UART7_MspInit 1 */
 
@@ -405,7 +409,7 @@ void HAL_UART_MspInit(UART_HandleTypeDef* huart)
     __HAL_LINKDMA(huart,hdmatx,hdma_uart8_tx);
 
     /* UART8 interrupt Init */
-    HAL_NVIC_SetPriority(UART8_IRQn, 0, 0);
+    HAL_NVIC_SetPriority(UART8_IRQn, 2, 0);
     HAL_NVIC_EnableIRQ(UART8_IRQn);
     /* USER CODE BEGIN UART8_MspInit 1 */
 
@@ -516,7 +520,7 @@ void HAL_UART_MspInit(UART_HandleTypeDef* huart)
     __HAL_LINKDMA(huart,hdmatx,hdma_usart2_tx);
 
     /* USART2 interrupt Init */
-    HAL_NVIC_SetPriority(USART2_IRQn, 0, 0);
+    HAL_NVIC_SetPriority(USART2_IRQn, 2, 0);
     HAL_NVIC_EnableIRQ(USART2_IRQn);
     /* USER CODE BEGIN USART2_MspInit 1 */
 
@@ -642,6 +646,8 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* huart)
     /* UART5 DMA DeInit */
     HAL_DMA_DeInit(huart->hdmarx);
     HAL_DMA_DeInit(huart->hdmatx);
+
+    HAL_NVIC_DisableIRQ(UART5_IRQn);
     /* USER CODE BEGIN UART5_MspDeInit 1 */
 
     /* USER CODE END UART5_MspDeInit 1 */
