@@ -33,17 +33,17 @@ extern UART_HandleTypeDef huart8;
 #define LEG_IO_ERROR_OFFLINE_COUNT  5U
 #define LEG_IO_RETRY_COUNT          1U
 #define LEG_ROTOR_ZERO_NEAR_RAD     1.50f
-#define LEG_MOTOR_THETA1            1U
-#define LEG_MOTOR_THETA2            0U
+#define LEG_MOTOR_THETA1            0U /* ID0 drives AB after front/rear mounting swap. */
+#define LEG_MOTOR_THETA2            1U /* ID1 drives AD after front/rear mounting swap. */
 
 static uint32_t last_service_tick = 0;
 static volatile uint8_t handshake_requested = 0;
 
 static const float default_rotor_zero_offset[4][2] = {
-  /* LF: ID0, ID1 */ {5.4959f, 4.4806f},
-  /* RF: ID0, ID1 */ {0.3530f, 3.5385f},
-  /* LB: ID0, ID1 */ {1.0103f, 2.3756f},
-  /* RB: ID0, ID1 */ {0.3252f, 2.4854f},
+  /* LF: ID0, ID1 */ { 4.4221f, 5.5321f},
+  /* RF: ID0, ID1 */ {-0.7610f, 4.5657f},
+  /* LB: ID0, ID1 */ { 0.0832f, 3.3468f},
+  /* RB: ID0, ID1 */ {-0.9794f, 3.3552f},
 };
 
 static const float default_motor_direction[4][2] = {
