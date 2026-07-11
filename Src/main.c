@@ -69,6 +69,8 @@ volatile int main_task_start = 0;
 
 /* Transport is verified with zero output; keep PC/Web telemetry enabled. */
 #define MOTOR_TRANSPORT_DIAG_ONLY 0U
+/* The ESP32 UI has priority over verbose UART6 transport diagnostics. */
+#define MOTOR_TRANSPORT_RUNTIME_LOG_ENABLED 0U
 #define MOTOR_TRANSPORT_LOG_GUARD_MS 30U
 
 Leg_HandlerTypeDef Left_Front_Leg;
@@ -88,7 +90,9 @@ RC_DataTypeDef rc_data;
 volatile uint32_t last_valid_packet_tick = 0;
 static uint32_t last_motor_angle_report_tick = 0;
 static uint32_t last_motor_status_report_tick = 0;
+#if MOTOR_TRANSPORT_DIAG_ONLY || MOTOR_TRANSPORT_RUNTIME_LOG_ENABLED
 static uint32_t last_motor_transport_report_tick = 500;
+#endif
 
 /* USER CODE END PV */
 
@@ -265,6 +269,7 @@ int main(void)
         last_motor_status_report_tick = HAL_GetTick();
         Communication_SendMotorStatus();
       }
+#if MOTOR_TRANSPORT_RUNTIME_LOG_ENABLED
       /* USART6 has one non-blocking TX buffer.  Leave the angle/status frame
          time to finish before emitting the low-rate transport diagnostic. */
       if (HAL_GetTick() - last_motor_transport_report_tick >= 1000 &&
@@ -274,6 +279,7 @@ int main(void)
         last_motor_transport_report_tick = HAL_GetTick();
         Communication_SendMotorTransportStatus();
       }
+#endif
 #else
       (void)last_motor_angle_report_tick;
       (void)last_motor_status_report_tick;
