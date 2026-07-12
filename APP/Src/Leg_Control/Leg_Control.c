@@ -231,15 +231,26 @@ static void transport_feedback_received(uint8_t leg,
   refresh_leg_online_state(leg);
 }
 
-static void transport_feedback_timeout(uint8_t leg, uint8_t motor, uint32_t timestamp)
+static void transport_feedback_timeout(uint8_t leg, uint8_t motor, uint32_t timestamp,
+                                       uint32_t feedback_age_ms)
 {
-  (void)timestamp;
   if (leg >= 4U || motor >= 2U) return;
   Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
+  uint8_t index = Leg_Control_MotorIndex(leg, motor);
   Motor_State_RecordError(state);
   Motor_State_MarkOffline(state);
   state->handshake_status = Motor_Handshake_Timeout;
   refresh_leg_online_state(leg);
+  if ((timestamp - state->io_error_last_log_tick) >= LEG_IO_ERROR_LOG_PERIOD_MS) {
+    state->io_error_last_log_tick = timestamp;
+    char buf[96];
+    int len = snprintf(buf, sizeof(buf),
+                       "MOTOR_OFFLINE idx=%u age_ms=%lu last_rx=%lu err=%lu\r\n",
+                       (unsigned int)index, (unsigned long)feedback_age_ms,
+                       (unsigned long)state->timestamp, (unsigned long)state->error_count);
+    if (len > 0 && len < (int)sizeof(buf))
+      Communication_SendString(buf);
+  }
   Leg_Control_ForceZeroOutput(Motor_Control_Reason_Offline);
 }
 

@@ -13,7 +13,8 @@ typedef void (*Motor_TransportFeedbackFn)(uint8_t leg,
                                           uint32_t timestamp);
 typedef void (*Motor_TransportOfflineFn)(uint8_t leg,
                                          uint8_t motor,
-                                         uint32_t timestamp);
+                                         uint32_t timestamp,
+                                         uint32_t feedback_age_ms);
 typedef void (*Motor_TransportUartErrorFn)(uint8_t leg,
                                            uint32_t error_bits,
                                            uint32_t timestamp);

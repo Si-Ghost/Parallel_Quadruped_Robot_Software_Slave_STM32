@@ -224,7 +224,8 @@ static void update_online_timeouts(Motor_TransportChannel *channel, uint32_t now
     if (!channel->feedback_online[motor]) continue;
     channel->feedback_online[motor] = 0U;
     if (transport_callbacks.feedback_timeout != NULL)
-      transport_callbacks.feedback_timeout(channel->leg_index, motor, now);
+      transport_callbacks.feedback_timeout(channel->leg_index, motor, now,
+                                           now - channel->last_feedback_tick[motor]);
   }
 }
 
