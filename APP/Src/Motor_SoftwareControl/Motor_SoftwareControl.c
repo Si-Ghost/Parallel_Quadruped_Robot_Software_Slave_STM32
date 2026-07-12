@@ -28,6 +28,7 @@
 #define SWCTRL_CASCADE_SPEED_KD        0.0015f
 #define SWCTRL_CASCADE_TORQUE_MAX      0.10f
 #define SWCTRL_CASCADE_INTEGRAL_MAX    0.20f
+#define SWCTRL_CASCADE_TORQUE_SLEW_NM_S 0.50f
 #define SWCTRL_FLEET_OFFSET_RAD        0.100f
 #define SWCTRL_FLEET_DURATION_MS       1500U
 
@@ -129,12 +130,10 @@ int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
   }
   uint8_t fleet_match = matches_fleet_dry_run(motor_index, offset_rad, kp, kd,
                                                duration_ms);
-  /* The eight-motor +/-1 rad cascade plan has completed dry-run review and is
-   * the only live software-torque signature. Keep the former +/-0.1 rad fleet
-   * plan dry-run-only so an old UI request cannot regain live authority. */
-  if (matches_cascade_dry_run(motor_index, offset_rad, kp, kd, duration_ms))
-    control.mode = Motor_SoftwareControl_CascadeActiveTorque;
-  else if (fleet_match)
+  /* Filtered-speed and torque-slew changes require a fresh dry-run before any
+   * software torque is authorized. */
+  if (fleet_match || matches_cascade_dry_run(motor_index, offset_rad, kp, kd,
+                                              duration_ms))
     control.mode = Motor_SoftwareControl_CascadeDryRun;
   else
     control.mode = Motor_SoftwareControl_DryRun;
@@ -181,6 +180,7 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
     previous_feedback_timestamp = feedback_timestamp;
     control.actual_position = rotor_position;
     control.raw_velocity = rotor_velocity;
+    control.filtered_velocity = rotor_velocity;
     control.feedback_timestamp = feedback_timestamp;
     control.elapsed_ms = now_ms - plan_start_ms;
     return;
@@ -220,7 +220,7 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
                                   SWCTRL_CASCADE_POSITION_KI * 0.0f +
                                   SWCTRL_CASCADE_POSITION_KD * position_delta,
                                   SWCTRL_CASCADE_POSITION_MAX);
-    control.speed_error = control.speed_target - rotor_velocity;
+    control.speed_error = control.speed_target - control.filtered_velocity;
     float speed_delta = control.speed_error - cascade_speed_error_previous;
     cascade_speed_error_previous = control.speed_error;
     control.p_term = SWCTRL_CASCADE_SPEED_KP * control.speed_error;
@@ -248,8 +248,16 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
   if (limited == unsaturated || (integral_error * unsaturated) < 0.0f)
     control.i_term = i_candidate;
   control.calculated_torque = control.p_term + control.i_term + control.d_term;
-  control.limited_torque = clampf(control.calculated_torque, control.torque_limit);
-  control.torque_limited = (control.limited_torque != control.calculated_torque) ? 1U : 0U;
+  float torque_clamped = clampf(control.calculated_torque, control.torque_limit);
+  float previous_torque = control.limited_torque;
+  float max_torque_step = cascade_mode
+                              ? SWCTRL_CASCADE_TORQUE_SLEW_NM_S * dt
+                              : control.torque_limit;
+  control.limited_torque = previous_torque +
+                           clampf(torque_clamped - previous_torque,
+                                  max_torque_step);
+  control.torque_limited =
+      (control.limited_torque != control.calculated_torque) ? 1U : 0U;
 }
 
 void Motor_SoftwareControl_GetSnapshot(Motor_SoftwareControlSnapshot *snapshot)

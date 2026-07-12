@@ -1283,13 +1283,14 @@ void Communication_SendSoftwarePidTelemetry(void)
     if (phase == 0U) {
         len = snprintf(buf, sizeof(buf),
             "SW_PID_STATE {\"m\":%u,\"i\":%d,\"rt\":%ld,\"sp\":%ld,"
-            "\"p\":%ld,\"e\":%ld,\"v\":%ld,\"dt\":%lu,\"el\":%lu}\n",
+            "\"p\":%ld,\"e\":%ld,\"v\":%ld,\"fv\":%ld,\"dt\":%lu,\"el\":%lu}\n",
             (unsigned int)s.mode, (int)s.motor_index,
             (long)(s.raw_target * 1000000.0f),
             (long)(s.ramped_target * 1000000.0f),
             (long)(s.actual_position * 1000000.0f),
             (long)(s.position_error * 1000000.0f),
             (long)(s.raw_velocity * 1000000.0f),
+            (long)(s.filtered_velocity * 1000000.0f),
             (unsigned long)(s.dt_s * 1000000.0f),
             (unsigned long)s.elapsed_ms);
     } else {
