@@ -135,7 +135,7 @@ static void handle_hello(const uint8_t *data, uint16_t len)
 
 static const char *skip_spaces(const char *p)
 {
-    while (*p == ' ' || *p == '\t')
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
         p++;
     return p;
 }
