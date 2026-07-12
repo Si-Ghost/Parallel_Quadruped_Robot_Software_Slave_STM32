@@ -40,7 +40,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_SINGLE_MOTOR_MAX_KW               0.30f
 #define LEG_SINGLE_MOTOR_MAX_DURATION_MS      3000U
 #define LEG_UART_HARD_ERROR_MASK \
-  (HAL_UART_ERROR_ORE | HAL_UART_ERROR_DMA | HAL_UART_ERROR_RTO)
+  (HAL_UART_ERROR_DMA | HAL_UART_ERROR_RTO)
 #define LEG_MOTOR_THETA1            0U /* ID0 drives AB after front/rear mounting swap. */
 #define LEG_MOTOR_THETA2            1U /* ID1 drives AD after front/rear mounting swap. */
 
@@ -271,13 +271,14 @@ static void transport_uart_error(uint8_t leg, uint32_t error_bits, uint32_t time
   transport_uart_error_bits[leg] = error_bits;
   ++transport_uart_error_sequence[leg];
 
-  /* A 4 Mbaud half-duplex direction transition can raise an isolated PE/NE/FE
-   * while the permanent RX ring is active.  Motor_Transport discards the bad
-   * byte, restarts RX, and only publishes feedback after frame CRC and ID
-   * validation.  Do not revoke an arm solely for that recoverable line event;
-   * loss of valid feedback is independently fail-safe through the offline
-   * timeout.  Receiver overrun, DMA failure, or receiver timeout means the
-   * transport itself is no longer trustworthy and must revoke immediately. */
+  /* A 4 Mbaud half-duplex direction transition can raise PE/NE/FE while the
+   * permanent RX ring is active.  HAL then aborts RX; bytes arriving before
+   * the foreground restart can additionally raise ORE.  These are byte-level
+   * line/recovery events, not proof that validated motor feedback is lost.
+   * Motor_Transport discards them, restarts RX, and only publishes frames that
+   * pass CRC and ID validation.  Loss of valid feedback is independently
+   * fail-safe through the offline timeout.  DMA/RTO means the transport itself
+   * is no longer trustworthy and revokes the arm immediately. */
   if ((error_bits & LEG_UART_HARD_ERROR_MASK) != 0U) {
     for (uint8_t motor = 0U; motor < 2U; ++motor) {
       Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
@@ -1011,6 +1012,9 @@ void Leg_Control_Service(uint32_t now_ms)
     uint32_t bits = transport_uart_error_bits[leg];
     transport_uart_error_reported[leg] = sequence;
     transport_uart_error_report_tick[leg] = now_ms;
+    /* Soft line/recovery events remain available in Motor_Transport stats but
+     * do not occupy the PC command log. */
+    if ((bits & LEG_UART_HARD_ERROR_MASK) == 0U) continue;
     char buf[144];
     int len = snprintf(buf, sizeof(buf),
                        "MOTOR_UART_ERROR leg=%u bits=0x%08lX count=%lu class=%s "
