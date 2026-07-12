@@ -35,6 +35,9 @@ extern UART_HandleTypeDef huart8;
 #define LEG_IO_RETRY_COUNT          1U
 #define LEG_ROTOR_ZERO_NEAR_RAD     1.50f
 #define LEG_SINGLE_MOTOR_MAX_ROTOR_OFFSET_RAD 0.50f
+#define LEG_SINGLE_MOTOR_MAX_KP               3.00f
+#define LEG_SINGLE_MOTOR_MAX_KW               0.30f
+#define LEG_SINGLE_MOTOR_MAX_DURATION_MS      3000U
 #define LEG_MOTOR_THETA1            0U /* ID0 drives AB after front/rear mounting swap. */
 #define LEG_MOTOR_THETA2            1U /* ID1 drives AD after front/rear mounting swap. */
 
@@ -48,6 +51,9 @@ typedef struct
   int8_t armed_motor_index;
   float arm_rotor_position;
   float target_rotor_position;
+  float kp;
+  float kw;
+  uint32_t duration_ms;
 } SingleMotorControlContextTypeDef;
 
 static SingleMotorControlContextTypeDef single_motor_control = {
@@ -89,6 +95,9 @@ void Leg_Control_ForceZeroOutput(Motor_ControlReasonTypeDef reason)
   single_motor_control.armed_motor_index = -1;
   single_motor_control.arm_rotor_position = 0.0f;
   single_motor_control.target_rotor_position = 0.0f;
+  single_motor_control.kp = 0.0f;
+  single_motor_control.kw = 0.0f;
+  single_motor_control.duration_ms = 0U;
   if (primask == 0U) __enable_irq();
 }
 
@@ -101,8 +110,9 @@ void Leg_Control_GetControlSnapshot(Motor_ControlSnapshotTypeDef *snapshot)
   snapshot->reason = single_motor_control.reason;
   snapshot->armed_motor_index = single_motor_control.armed_motor_index;
   snapshot->target_rotor_position = single_motor_control.target_rotor_position;
-  snapshot->kp = 0.0f;
-  snapshot->kw = 0.0f;
+  snapshot->kp = single_motor_control.kp;
+  snapshot->kw = single_motor_control.kw;
+  snapshot->duration_ms = single_motor_control.duration_ms;
   snapshot->zero_output_guard = 1U;
   snapshot->actual_rotor_position = 0.0f;
   snapshot->target_joint_position = 0.0f;
@@ -611,7 +621,7 @@ int Leg_Control_SetDebugFootOffset(uint8_t leg, float dx_mm, float dy_mm)
 
 /* ---- single-motor angle test ---- */
 
-int Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad)
+int Leg_Control_ArmSingleMotor(uint8_t motor_index)
 {
   Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
   if (state == NULL || state->online != Motor_Online ||
@@ -620,24 +630,29 @@ int Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad)
     return 0;
   }
 
-  /* The existing ESP32 bridge can only forward MOTOR_SET.  During the PID
-   * staging phase, a zero offset is an explicit arm operation; a later
-   * non-zero offset plans a target for that same one motor.  Neither path
-   * writes a non-zero motor command. */
-  if (angle_rad == 0.0f) {
-    Leg_Control_ForceZeroOutput(Motor_Control_Reason_None);
-    __disable_irq();
-    single_motor_control.mode = Motor_Control_ArmedSingleMotor;
-    single_motor_control.reason = Motor_Control_Reason_None;
-    single_motor_control.armed_motor_index = (int8_t)motor_index;
-    single_motor_control.arm_rotor_position = state->rotor_position;
-    single_motor_control.target_rotor_position = state->rotor_position;
-    __enable_irq();
-    return 1;
-  }
+  Leg_Control_ForceZeroOutput(Motor_Control_Reason_None);
+  __disable_irq();
+  single_motor_control.mode = Motor_Control_ArmedSingleMotor;
+  single_motor_control.reason = Motor_Control_Reason_None;
+  single_motor_control.armed_motor_index = (int8_t)motor_index;
+  single_motor_control.arm_rotor_position = state->rotor_position;
+  single_motor_control.target_rotor_position = state->rotor_position;
+  __enable_irq();
+  return 1;
+}
 
-  if (angle_rad < -LEG_SINGLE_MOTOR_MAX_ROTOR_OFFSET_RAD ||
-      angle_rad > LEG_SINGLE_MOTOR_MAX_ROTOR_OFFSET_RAD ||
+int Leg_Control_PlanSingleMotor(uint8_t motor_index, float offset_rad,
+                                float kp, float kw, uint32_t duration_ms)
+{
+  Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
+  if (state == NULL || state->online != Motor_Online ||
+      state->angle_valid != Motor_Angle_Valid ||
+      offset_rad == 0.0f ||
+      offset_rad < -LEG_SINGLE_MOTOR_MAX_ROTOR_OFFSET_RAD ||
+      offset_rad > LEG_SINGLE_MOTOR_MAX_ROTOR_OFFSET_RAD ||
+      kp < 0.0f || kp > LEG_SINGLE_MOTOR_MAX_KP ||
+      kw < 0.0f || kw > LEG_SINGLE_MOTOR_MAX_KW ||
+      duration_ms == 0U || duration_ms > LEG_SINGLE_MOTOR_MAX_DURATION_MS ||
       single_motor_control.mode != Motor_Control_ArmedSingleMotor ||
       single_motor_control.armed_motor_index != (int8_t)motor_index) {
     Leg_Control_ForceZeroOutput(Motor_Control_Reason_InvalidCommand);
@@ -648,9 +663,31 @@ int Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad)
   single_motor_control.mode = Motor_Control_SingleMotorPosition;
   single_motor_control.reason = Motor_Control_Reason_None;
   single_motor_control.target_rotor_position =
-      single_motor_control.arm_rotor_position + angle_rad;
+      single_motor_control.arm_rotor_position + offset_rad;
+  single_motor_control.kp = kp;
+  single_motor_control.kw = kw;
+  single_motor_control.duration_ms = duration_ms;
+
+  /* Dry-run command path: only the armed motor holds the planned PD frame.
+   * Motor_Transport still overrides every output field to zero at its final
+   * frame boundary while MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY is 1. */
+  MOTOR_send *cmd = &Legs[motor_index / 2U]->motor_cmd[motor_index % 2U];
+  cmd->mode = 1U;
+  cmd->T = 0.0f;
+  cmd->W = 0.0f;
+  cmd->Pos = single_motor_control.target_rotor_position;
+  cmd->K_P = kp;
+  cmd->K_W = kw;
+  modify_data(cmd);
   __enable_irq();
   return 1;
+}
+
+int Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad)
+{
+  if (angle_rad == 0.0f)
+    return Leg_Control_ArmSingleMotor(motor_index);
+  return Leg_Control_PlanSingleMotor(motor_index, angle_rad, 0.0f, 0.0f, 1U);
 }
 
 /* ---- IO error handling ---- */

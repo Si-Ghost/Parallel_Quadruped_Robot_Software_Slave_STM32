@@ -64,6 +64,7 @@ typedef struct
   float position_error;
   float kp;
   float kw;
+  uint32_t duration_ms;
   uint8_t zero_output_guard;
 } Motor_ControlSnapshotTypeDef;
 
@@ -81,6 +82,9 @@ void Leg_Control_Handshake(void);
 void Leg_Control_RequestHandshake(void);
 void Leg_Control_Service(uint32_t now_ms);
 int  Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad);
+int  Leg_Control_ArmSingleMotor(uint8_t motor_index);
+int  Leg_Control_PlanSingleMotor(uint8_t motor_index, float offset_rad,
+                                  float kp, float kw, uint32_t duration_ms);
 void Leg_Control_ForceZeroOutput(Motor_ControlReasonTypeDef reason);
 void Leg_Control_GetControlSnapshot(Motor_ControlSnapshotTypeDef *snapshot);
 void Leg_Control_LogFootSnapshot(void);

@@ -35,11 +35,14 @@ static Communication_ContextTypeDef comm_ctx = {0};
 
 static const char esp32_hello[] = "ESP32_HELLO";
 static const char stm32_ack[] = "STM32_ACK\n";
+static void handle_pid_control_text(const char *cmd_buf);
 static const char motor_set_mrad_cmd[] = "MOTOR_SET_MRAD";
 static const char motor_set_cmd[] = "MOTOR_SET";
 static const char motor_rescan_cmd[] = "MOTOR_RESCAN";
 static const char motor_stop_all_cmd[] = "MOTOR_STOP_ALL";
 static const char motor_hold_current_cmd[] = "MOTOR_HOLD_CURRENT";
+static const char pid_arm_cmd[] = "PID_ARM";
+static const char pid_plan_cmd[] = "PID_PLAN";
 static const char leg_nudge_mm_cmd[] = "LEG_NUDGE_MM";
 static const char leg_trace_cmd[] = "LEG_TRACE";
 static const char leg_snapshot_cmd[] = "LEG_SNAPSHOT";
@@ -449,6 +452,8 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         len < sizeof(motor_rescan_cmd) - 1 &&
         len < sizeof(motor_stop_all_cmd) - 1 &&
         len < sizeof(motor_hold_current_cmd) - 1 &&
+        len < sizeof(pid_arm_cmd) - 1 &&
+        len < sizeof(pid_plan_cmd) - 1 &&
         len < sizeof(leg_nudge_mm_cmd) - 1 &&
         len < sizeof(leg_trace_cmd) - 1 &&
         len < sizeof(leg_snapshot_cmd) - 1 &&
@@ -460,6 +465,27 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         len < sizeof(leg_touch_step_cmd) - 1 &&
         len < sizeof(leg_loaded_step_cmd) - 1)
         return;
+
+    for (uint16_t i = 0; i + sizeof(pid_plan_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], pid_plan_cmd, sizeof(pid_plan_cmd) - 1) == 0) {
+            char cmd_buf[96];
+            uint16_t copy_len = (len < sizeof(cmd_buf) - 1U) ? len : sizeof(cmd_buf) - 1U;
+            memcpy(cmd_buf, data, copy_len);
+            cmd_buf[copy_len] = '\0';
+            handle_pid_control_text(cmd_buf);
+            return;
+        }
+    }
+    for (uint16_t i = 0; i + sizeof(pid_arm_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], pid_arm_cmd, sizeof(pid_arm_cmd) - 1) == 0) {
+            char cmd_buf[32];
+            uint16_t copy_len = (len < sizeof(cmd_buf) - 1U) ? len : sizeof(cmd_buf) - 1U;
+            memcpy(cmd_buf, data, copy_len);
+            cmd_buf[copy_len] = '\0';
+            handle_pid_control_text(cmd_buf);
+            return;
+        }
+    }
 
     for (uint16_t i = 0; i + sizeof(motor_stop_all_cmd) - 1 <= len; i++) {
         if (memcmp(&data[i], motor_stop_all_cmd, sizeof(motor_stop_all_cmd) - 1) == 0) {
@@ -975,6 +1001,52 @@ void Communication_SendMotorStatus(void)
     }
 }
 
+static int parse_pid_arm_command(const char *cmd, int *motor)
+{
+    const char *p = cmd;
+    if (memcmp(p, pid_arm_cmd, sizeof(pid_arm_cmd) - 1) != 0) return 0;
+    p += sizeof(pid_arm_cmd) - 1;
+    if (*p != ' ' && *p != '\t') return 0;
+    if (!parse_int_value(&p, motor)) return 0;
+    p = skip_spaces(p);
+    return *p == '\0';
+}
+
+static int parse_pid_plan_command(const char *cmd, int *motor, int *offset_mrad,
+                                  int *kp_milli, int *kw_milli, int *duration_ms)
+{
+    const char *p = cmd;
+    if (memcmp(p, pid_plan_cmd, sizeof(pid_plan_cmd) - 1) != 0) return 0;
+    p += sizeof(pid_plan_cmd) - 1;
+    if (*p != ' ' && *p != '\t') return 0;
+    if (!parse_int_value(&p, motor) || !parse_int_value(&p, offset_mrad) ||
+        !parse_int_value(&p, kp_milli) || !parse_int_value(&p, kw_milli) ||
+        !parse_int_value(&p, duration_ms)) return 0;
+    p = skip_spaces(p);
+    return *p == '\0';
+}
+
+static void handle_pid_control_text(const char *cmd_buf)
+{
+    int motor = -1, offset_mrad = 0, kp_milli = 0, kw_milli = 0, duration_ms = 0;
+    int accepted = 0;
+    if (parse_pid_arm_command(cmd_buf, &motor)) {
+        if (motor >= 0 && motor < 8)
+            accepted = Leg_Control_ArmSingleMotor((uint8_t)motor);
+    } else if (parse_pid_plan_command(cmd_buf, &motor, &offset_mrad, &kp_milli,
+                                      &kw_milli, &duration_ms)) {
+        if (motor >= 0 && motor < 8)
+            accepted = Leg_Control_PlanSingleMotor((uint8_t)motor,
+                        (float)offset_mrad / 1000.0f, (float)kp_milli / 1000.0f,
+                        (float)kw_milli / 1000.0f, (uint32_t)duration_ms);
+    } else {
+        Communication_SendString("MOTOR_CONTROL rejected: parse\r\n");
+        return;
+    }
+    if (!accepted)
+        Communication_SendString("MOTOR_CONTROL rejected: safety_gate\r\n");
+}
+
 void Communication_SendMotorControlStatus(void)
 {
     Motor_ControlSnapshotTypeDef control;
@@ -983,12 +1055,13 @@ void Communication_SendMotorControlStatus(void)
     char buf[TX_IT_BUF_SIZE];
     int len = snprintf(buf, sizeof(buf),
         "MOTOR_CONTROL mode=%u reason=%u guard=%u armed=%d target=%.4f actual=%.4f "
-        "target_joint=%.4f actual_joint=%.4f error=%.4f kp=%.4f kw=%.4f\n",
+        "target_joint=%.4f actual_joint=%.4f error=%.4f kp=%.4f kw=%.4f duration=%lu\n",
         (unsigned int)control.mode, (unsigned int)control.reason,
         (unsigned int)control.zero_output_guard, (int)control.armed_motor_index,
         (double)control.target_rotor_position, (double)control.actual_rotor_position,
         (double)control.target_joint_position, (double)control.actual_joint_position,
-        (double)control.position_error, (double)control.kp, (double)control.kw);
+        (double)control.position_error, (double)control.kp, (double)control.kw,
+        (unsigned long)control.duration_ms);
     if (len > 0 && len < (int)sizeof(buf)) {
         Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
     }
