@@ -36,6 +36,7 @@ typedef struct
   float arm_position;
   float raw_target;
   float ramped_target;
+  float ramp_velocity;
   float actual_position;
   float position_error;
   float raw_velocity;
