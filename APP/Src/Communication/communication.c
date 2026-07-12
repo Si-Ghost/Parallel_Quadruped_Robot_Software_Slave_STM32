@@ -1087,6 +1087,11 @@ static void handle_pid_control_text(const char *cmd_buf)
     int motor = -1, offset_mrad = 0, kp_milli = 0, kw_milli = 0, duration_ms = 0;
     int accepted = 0;
     const char *parse_reason = "arm_or_plan";
+    Motor_ControlSnapshotTypeDef control_before;
+    Motor_StateSnapshotTypeDef motor_before;
+    memset(&control_before, 0, sizeof(control_before));
+    memset(&motor_before, 0, sizeof(motor_before));
+    Leg_Control_GetControlSnapshot(&control_before);
     if (parse_pid_arm_command(cmd_buf, &motor)) {
         if (motor >= 0 && motor < 8)
             accepted = Leg_Control_ArmSingleMotor((uint8_t)motor);
@@ -1105,9 +1110,18 @@ static void handle_pid_control_text(const char *cmd_buf)
         return;
     }
     if (!accepted) {
-        char buf[96];
-        int len = snprintf(buf, sizeof(buf), "PID_PLAN rejected gate=%s\r\n",
-                           Leg_Control_GetLastPlanRejectReason());
+        int has_motor = (motor >= 0 && motor < 8) &&
+                        Leg_Control_GetMotorStateSnapshot((uint8_t)motor, &motor_before);
+        char buf[192];
+        int len = snprintf(buf, sizeof(buf),
+                           "PID_PLAN rejected gate=%s prior_mode=%u prior_reason=%u "
+                           "prior_armed=%d req=%d online=%u valid=%u\r\n",
+                           Leg_Control_GetLastPlanRejectReason(),
+                           (unsigned int)control_before.mode,
+                           (unsigned int)control_before.reason,
+                           (int)control_before.armed_motor_index, motor,
+                           has_motor ? (unsigned int)motor_before.online : 0U,
+                           has_motor ? (unsigned int)motor_before.angle_valid : 0U);
         if (len > 0 && len < (int)sizeof(buf))
             Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
     }
