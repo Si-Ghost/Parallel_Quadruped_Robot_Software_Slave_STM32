@@ -1052,17 +1052,22 @@ void Leg_Control_Service(uint32_t now_ms)
   if (single_motor_control.mode == Motor_Control_SingleMotorPosition) {
     uint8_t motor_index = (uint8_t)single_motor_control.armed_motor_index;
     Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
+    uint8_t stopped = 0U;
     if (state == NULL || state->online != Motor_Online ||
         state->angle_valid != Motor_Angle_Valid) {
       Leg_Control_ForceZeroOutput(Motor_Control_Reason_Offline);
+      stopped = 1U;
     } else if ((now_ms - single_motor_control.plan_start_tick) >=
                single_motor_control.duration_ms) {
       Leg_Control_ForceZeroOutput(Motor_Control_Reason_PlanTimeout);
+      stopped = 1U;
     } else if (absf_local(single_motor_control.target_rotor_position -
                           state->rotor_position) > LEG_SINGLE_MOTOR_MAX_ERROR_RAD ||
                absf_local(state->raw_velocity) > LEG_SINGLE_MOTOR_MAX_VELOCITY_RAD_S) {
       Leg_Control_ForceZeroOutput(Motor_Control_Reason_SafetyLimit);
+      stopped = 1U;
     }
+    if (stopped) Communication_SendMotorControlStatus();
   }
 
   if ((now_ms - last_service_tick) < LEG_SERVICE_PERIOD_MS) return;
