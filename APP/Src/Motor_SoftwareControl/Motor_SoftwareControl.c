@@ -7,7 +7,7 @@
 #define SWCTRL_MAX_KP                  0.50f
 #define SWCTRL_MAX_KD                  0.05f
 #define SWCTRL_MAX_DURATION_MS         1500U
-#define SWCTRL_TARGET_SPEED_RAD_S      0.25f
+#define SWCTRL_TARGET_SPEED_RAD_S      0.50f
 #define SWCTRL_TORQUE_LIMIT            0.02f
 #define SWCTRL_INTEGRAL_LIMIT          0.05f
 #define SWCTRL_VELOCITY_FILTER_HZ      30.0f
@@ -15,10 +15,10 @@
 #define SWCTRL_MAX_DT_S                0.0100f
 #define SWCTRL_MATCH_EPSILON           0.00001f
 #define SWCTRL_CASCADE_MOTOR_INDEX     2U
-#define SWCTRL_CASCADE_OFFSET_RAD      0.100f
+#define SWCTRL_CASCADE_OFFSET_RAD      1.000f
 #define SWCTRL_CASCADE_SIGNATURE_KP    0.50f
 #define SWCTRL_CASCADE_SIGNATURE_KD    0.0f
-#define SWCTRL_CASCADE_DURATION_MS     1500U
+#define SWCTRL_CASCADE_DURATION_MS     4000U
 #define SWCTRL_CASCADE_POSITION_KP     35.9f
 #define SWCTRL_CASCADE_POSITION_KI     0.0f
 #define SWCTRL_CASCADE_POSITION_KD     1.0f
@@ -115,14 +115,13 @@ int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
     Motor_SoftwareControl_Stop(Motor_SoftwareControl_StopInvalidCommand);
     return 0;
   }
-  /* Exact higher-torque RF tuple is authorized for one bounded live test;
-   * every other valid plan remains calculation-only. */
+  /* One-radian RF plan is dry-run only until its expanded target and duration
+   * have been reviewed. */
   control.mode = matches_cascade_dry_run(motor_index, offset_rad, kp, kd,
                                          duration_ms)
-                     ? Motor_SoftwareControl_CascadeActiveTorque
+                     ? Motor_SoftwareControl_CascadeDryRun
                      : Motor_SoftwareControl_DryRun;
-  control.dry_run = (control.mode == Motor_SoftwareControl_CascadeActiveTorque)
-                        ? 0U : 1U;
+  control.dry_run = 1U;
   control.stop_reason = Motor_SoftwareControl_StopNone;
   control.raw_target = control.arm_position + offset_rad;
   control.ramped_target = control.arm_position;
