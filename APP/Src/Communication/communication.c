@@ -1214,11 +1214,13 @@ static void handle_pid_control_text(const char *cmd_buf)
         char buf[192];
         int len = snprintf(buf, sizeof(buf),
                            "PID_PLAN rejected gate=%s prior_mode=%u prior_reason=%u "
-                           "prior_armed=%d req=%d online=%u valid=%u\r\n",
+                           "armed=%d req=%d off_mrad=%d kp_milli=%d kw_milli=%d "
+                           "dur=%d online=%u valid=%u\r\n",
                            Leg_Control_GetLastPlanRejectReason(),
                            (unsigned int)control_before.mode,
                            (unsigned int)control_before.reason,
-                           (int)control_before.armed_motor_index, motor,
+                           (int)control_before.armed_motor_index, motor, offset_mrad,
+                           kp_milli, kw_milli, duration_ms,
                            has_motor ? (unsigned int)motor_before.online : 0U,
                            has_motor ? (unsigned int)motor_before.angle_valid : 0U);
         if (len > 0 && len < (int)sizeof(buf))

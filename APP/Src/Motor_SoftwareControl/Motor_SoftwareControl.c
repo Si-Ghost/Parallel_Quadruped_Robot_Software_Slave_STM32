@@ -13,7 +13,7 @@
 #define SWCTRL_VELOCITY_FILTER_HZ      30.0f
 #define SWCTRL_MIN_DT_S                0.0002f
 #define SWCTRL_MAX_DT_S                0.0100f
-#define SWCTRL_MATCH_EPSILON           0.00001f
+#define SWCTRL_MATCH_EPSILON           0.0015f
 #define SWCTRL_CASCADE_MOTOR_INDEX     2U
 #define SWCTRL_CASCADE_OFFSET_RAD      1.000f
 #define SWCTRL_CASCADE_SIGNATURE_KP    0.50f
