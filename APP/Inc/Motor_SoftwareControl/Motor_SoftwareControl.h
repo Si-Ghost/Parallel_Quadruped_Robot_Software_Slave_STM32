@@ -9,7 +9,8 @@ typedef enum
   Motor_SoftwareControl_Armed = 1,
   Motor_SoftwareControl_DryRun = 2,
   Motor_SoftwareControl_Stopped = 3,
-  Motor_SoftwareControl_ActiveTorque = 4
+  Motor_SoftwareControl_ActiveTorque = 4,
+  Motor_SoftwareControl_CascadeDryRun = 5
 } Motor_SoftwareControlMode;
 
 typedef enum
@@ -48,6 +49,11 @@ typedef struct
   float limited_torque;
   float torque_limit;
   float target_velocity_limit;
+  float speed_target;
+  float speed_error;
+  float position_loop_kp;
+  float speed_loop_kp;
+  float speed_loop_ki;
   float dt_s;
   uint32_t duration_ms;
   uint32_t elapsed_ms;

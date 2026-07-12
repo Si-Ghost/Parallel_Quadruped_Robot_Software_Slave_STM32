@@ -13,12 +13,15 @@
 #define SWCTRL_VELOCITY_FILTER_HZ      30.0f
 #define SWCTRL_MIN_DT_S                0.0002f
 #define SWCTRL_MAX_DT_S                0.0100f
-#define SWCTRL_LIVE_MOTOR_INDEX        0U
-#define SWCTRL_LIVE_OFFSET_RAD         0.020f
-#define SWCTRL_LIVE_KP                 0.50f
-#define SWCTRL_LIVE_KD                 0.0f
-#define SWCTRL_LIVE_DURATION_MS        500U
 #define SWCTRL_MATCH_EPSILON           0.00001f
+#define SWCTRL_CASCADE_MOTOR_INDEX     2U
+#define SWCTRL_CASCADE_OFFSET_RAD      0.020f
+#define SWCTRL_CASCADE_SIGNATURE_KP    0.50f
+#define SWCTRL_CASCADE_SIGNATURE_KD    0.0f
+#define SWCTRL_CASCADE_DURATION_MS     1000U
+#define SWCTRL_CASCADE_POSITION_KP     5.0f
+#define SWCTRL_CASCADE_SPEED_KP        0.05f
+#define SWCTRL_CASCADE_SPEED_KI        0.0f
 
 static Motor_SoftwareControlSnapshot control;
 static uint32_t plan_start_ms;
@@ -32,14 +35,14 @@ static float clampf(float value, float limit)
   return value;
 }
 
-static uint8_t matches_live_authorization(uint8_t motor_index, float offset_rad,
-                                          float kp, float kd, uint32_t duration_ms)
+static uint8_t matches_cascade_dry_run(uint8_t motor_index, float offset_rad,
+                                       float kp, float kd, uint32_t duration_ms)
 {
-  return motor_index == SWCTRL_LIVE_MOTOR_INDEX &&
-         fabsf(offset_rad - SWCTRL_LIVE_OFFSET_RAD) <= SWCTRL_MATCH_EPSILON &&
-         fabsf(kp - SWCTRL_LIVE_KP) <= SWCTRL_MATCH_EPSILON &&
-         fabsf(kd - SWCTRL_LIVE_KD) <= SWCTRL_MATCH_EPSILON &&
-         duration_ms == SWCTRL_LIVE_DURATION_MS;
+  return motor_index == SWCTRL_CASCADE_MOTOR_INDEX &&
+         fabsf(offset_rad - SWCTRL_CASCADE_OFFSET_RAD) <= SWCTRL_MATCH_EPSILON &&
+         fabsf(kp - SWCTRL_CASCADE_SIGNATURE_KP) <= SWCTRL_MATCH_EPSILON &&
+         fabsf(kd - SWCTRL_CASCADE_SIGNATURE_KD) <= SWCTRL_MATCH_EPSILON &&
+         duration_ms == SWCTRL_CASCADE_DURATION_MS;
 }
 
 void Motor_SoftwareControl_Init(void)
@@ -102,17 +105,24 @@ int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
     Motor_SoftwareControl_Stop(Motor_SoftwareControl_StopInvalidCommand);
     return 0;
   }
-  control.mode = matches_live_authorization(motor_index, offset_rad, kp, kd,
-                                             duration_ms)
-                     ? Motor_SoftwareControl_ActiveTorque
+  /* The previous LF live authorization is intentionally revoked while the
+   * cascade controller is audited behind the transport-wide zero gate. */
+  control.mode = matches_cascade_dry_run(motor_index, offset_rad, kp, kd,
+                                         duration_ms)
+                     ? Motor_SoftwareControl_CascadeDryRun
                      : Motor_SoftwareControl_DryRun;
-  control.dry_run = (control.mode == Motor_SoftwareControl_DryRun) ? 1U : 0U;
+  control.dry_run = 1U;
   control.stop_reason = Motor_SoftwareControl_StopNone;
   control.raw_target = control.arm_position + offset_rad;
   control.ramped_target = control.arm_position;
   control.kp = kp;
   control.ki = 0.0f;
   control.kd = kd;
+  if (control.mode == Motor_SoftwareControl_CascadeDryRun) {
+    control.position_loop_kp = SWCTRL_CASCADE_POSITION_KP;
+    control.speed_loop_kp = SWCTRL_CASCADE_SPEED_KP;
+    control.speed_loop_ki = SWCTRL_CASCADE_SPEED_KI;
+  }
   control.duration_ms = duration_ms;
   control.elapsed_ms = 0U;
   control.i_term = 0.0f;
@@ -128,7 +138,8 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
                                   uint32_t feedback_timestamp, uint32_t now_ms)
 {
   if (control.mode != Motor_SoftwareControl_DryRun &&
-      control.mode != Motor_SoftwareControl_ActiveTorque) return;
+      control.mode != Motor_SoftwareControl_ActiveTorque &&
+      control.mode != Motor_SoftwareControl_CascadeDryRun) return;
   if (!isfinite(rotor_position) || !isfinite(rotor_velocity)) {
     Motor_SoftwareControl_Stop(Motor_SoftwareControl_StopInvalidNumber);
     return;
@@ -164,10 +175,22 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
                 (1.0f + two_pi * SWCTRL_VELOCITY_FILTER_HZ * dt);
   control.filtered_velocity += alpha * (rotor_velocity - control.filtered_velocity);
   control.position_error = control.ramped_target - rotor_position;
-  control.p_term = control.kp * control.position_error;
-  control.d_term = -control.kd * control.filtered_velocity;
+  if (control.mode == Motor_SoftwareControl_CascadeDryRun) {
+    control.speed_target = clampf(control.position_loop_kp * control.position_error,
+                                  control.target_velocity_limit);
+    control.speed_error = control.speed_target - rotor_velocity;
+    control.p_term = control.speed_loop_kp * control.speed_error;
+    control.d_term = 0.0f;
+  } else {
+    control.p_term = control.kp * control.position_error;
+    control.d_term = -control.kd * control.filtered_velocity;
+  }
 
-  float i_candidate = clampf(control.i_term + control.ki * control.position_error * dt,
+  float integral_error = (control.mode == Motor_SoftwareControl_CascadeDryRun)
+                             ? control.speed_error : control.position_error;
+  float integral_gain = (control.mode == Motor_SoftwareControl_CascadeDryRun)
+                            ? control.speed_loop_ki : control.ki;
+  float i_candidate = clampf(control.i_term + integral_gain * integral_error * dt,
                              SWCTRL_INTEGRAL_LIMIT);
   float unsaturated = control.p_term + i_candidate + control.d_term;
   float limited = clampf(unsaturated, control.torque_limit);
