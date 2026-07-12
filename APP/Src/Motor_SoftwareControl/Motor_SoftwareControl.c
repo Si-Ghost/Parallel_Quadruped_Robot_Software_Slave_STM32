@@ -14,6 +14,7 @@
 #define SWCTRL_MIN_DT_S                0.0002f
 #define SWCTRL_MAX_DT_S                0.0100f
 #define SWCTRL_MATCH_EPSILON           0.0015f
+#define SWCTRL_CASCADE_MOTOR_INDEX     2U
 #define SWCTRL_CASCADE_OFFSET_RAD      1.000f
 #define SWCTRL_CASCADE_SIGNATURE_KP    0.50f
 #define SWCTRL_CASCADE_SIGNATURE_KD    0.0f
@@ -49,6 +50,17 @@ static uint8_t matches_cascade_dry_run(uint8_t motor_index, float offset_rad,
 {
   return motor_index < 8U &&
          fabsf(fabsf(offset_rad) - SWCTRL_CASCADE_OFFSET_RAD) <= SWCTRL_MATCH_EPSILON &&
+         fabsf(kp - SWCTRL_CASCADE_SIGNATURE_KP) <= SWCTRL_MATCH_EPSILON &&
+         fabsf(kd - SWCTRL_CASCADE_SIGNATURE_KD) <= SWCTRL_MATCH_EPSILON &&
+         duration_ms == SWCTRL_CASCADE_DURATION_MS;
+}
+
+static uint8_t matches_rf_id0_expanded_live(uint8_t motor_index,
+                                             float offset_rad, float kp,
+                                             float kd, uint32_t duration_ms)
+{
+  return motor_index == SWCTRL_CASCADE_MOTOR_INDEX &&
+         fabsf(offset_rad - SWCTRL_CASCADE_OFFSET_RAD) <= SWCTRL_MATCH_EPSILON &&
          fabsf(kp - SWCTRL_CASCADE_SIGNATURE_KP) <= SWCTRL_MATCH_EPSILON &&
          fabsf(kd - SWCTRL_CASCADE_SIGNATURE_KD) <= SWCTRL_MATCH_EPSILON &&
          duration_ms == SWCTRL_CASCADE_DURATION_MS;
@@ -128,9 +140,12 @@ int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
   }
   uint8_t fleet_match = matches_fleet_dry_run(motor_index, offset_rad, kp, kd,
                                                duration_ms);
-  /* Reference-gain expanded envelope requires a fresh dry-run. */
-  if (fleet_match || matches_cascade_dry_run(motor_index, offset_rad, kp, kd,
-                                              duration_ms))
+  /* Only the explicitly approved RF ID0 positive expanded signature is live. */
+  if (matches_rf_id0_expanded_live(motor_index, offset_rad, kp, kd,
+                                    duration_ms))
+    control.mode = Motor_SoftwareControl_CascadeActiveTorque;
+  else if (fleet_match || matches_cascade_dry_run(motor_index, offset_rad, kp,
+                                                   kd, duration_ms))
     control.mode = Motor_SoftwareControl_CascadeDryRun;
   else
     control.mode = Motor_SoftwareControl_DryRun;
