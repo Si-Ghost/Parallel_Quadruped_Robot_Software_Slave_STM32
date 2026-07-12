@@ -43,6 +43,13 @@ extern UART_HandleTypeDef huart8;
 
 static uint32_t last_service_tick = 0;
 static volatile uint8_t handshake_requested = 0;
+/* Written in the motor UART ISR and reported from the foreground service.
+ * This keeps fault evidence visible without attempting an ESP32 UART transmit
+ * from inside HAL_UART_ErrorCallback or flooding the PC log. */
+static volatile uint32_t transport_uart_error_bits[4];
+static volatile uint32_t transport_uart_error_sequence[4];
+static uint32_t transport_uart_error_reported[4];
+static uint32_t transport_uart_error_report_tick[4];
 
 typedef struct
 {
@@ -256,9 +263,10 @@ static void transport_feedback_timeout(uint8_t leg, uint8_t motor, uint32_t time
 
 static void transport_uart_error(uint8_t leg, uint32_t error_bits, uint32_t timestamp)
 {
-  (void)error_bits;
   (void)timestamp;
   if (leg >= 4U) return;
+  transport_uart_error_bits[leg] = error_bits;
+  ++transport_uart_error_sequence[leg];
   for (uint8_t motor = 0U; motor < 2U; ++motor) {
     Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
     Motor_State_RecordError(state);
@@ -979,6 +987,33 @@ void Leg_Control_Start(void)
 
 void Leg_Control_Service(uint32_t now_ms)
 {
+  for (uint8_t leg = 0U; leg < 4U; ++leg) {
+    uint32_t sequence = transport_uart_error_sequence[leg];
+    if (sequence == transport_uart_error_reported[leg]) continue;
+    if (transport_uart_error_reported[leg] != 0U &&
+        (now_ms - transport_uart_error_report_tick[leg]) < LEG_IO_ERROR_LOG_PERIOD_MS) {
+      continue;
+    }
+
+    uint32_t bits = transport_uart_error_bits[leg];
+    transport_uart_error_reported[leg] = sequence;
+    transport_uart_error_report_tick[leg] = now_ms;
+    char buf[112];
+    int len = snprintf(buf, sizeof(buf),
+                       "MOTOR_UART_ERROR leg=%u bits=0x%08lX count=%lu "
+                       "[PE=%u NE=%u FE=%u ORE=%u DMA=%u RTO=%u]\r\n",
+                       (unsigned int)leg, (unsigned long)bits,
+                       (unsigned long)sequence,
+                       (unsigned int)((bits & HAL_UART_ERROR_PE) != 0U),
+                       (unsigned int)((bits & HAL_UART_ERROR_NE) != 0U),
+                       (unsigned int)((bits & HAL_UART_ERROR_FE) != 0U),
+                       (unsigned int)((bits & HAL_UART_ERROR_ORE) != 0U),
+                       (unsigned int)((bits & HAL_UART_ERROR_DMA) != 0U),
+                       (unsigned int)((bits & HAL_UART_ERROR_RTO) != 0U));
+    if (len > 0 && len < (int)sizeof(buf))
+      Communication_SendString(buf);
+  }
+
   if (handshake_requested) {
     handshake_requested = 0;
     Leg_Control_Handshake();
