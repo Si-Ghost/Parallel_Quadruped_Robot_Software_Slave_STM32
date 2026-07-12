@@ -26,6 +26,7 @@ typedef struct {
 
 void Communication_Init(UART_HandleTypeDef *huart);
 void Communication_RxCallback(UART_HandleTypeDef *huart, uint16_t Size);
+void Communication_HandleUartError(UART_HandleTypeDef *huart);
 int  Communication_IsHandshakeDone(void);
 int  Communication_IsLinkAlive(void);
 void Communication_SetSafeRCData(void);

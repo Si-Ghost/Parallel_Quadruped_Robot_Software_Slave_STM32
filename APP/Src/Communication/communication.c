@@ -13,11 +13,13 @@ extern volatile uint32_t last_valid_packet_tick;
 #define TX_IT_BUF_SIZE 256
 #define RX_SNAPSHOT_SIZE 16
 #define TEXT_COMMAND_BUF_SIZE 128
+#define RX_CHUNK_QUEUE_DEPTH 8U
 
 typedef struct
 {
     UART_HandleTypeDef *uart;                  /* 连接 ESP32 的 USART6 句柄。 */
-    uint8_t rx_buf[RX_BUF_SIZE];               /* 接收缓冲区，承载遥控帧和文本指令。 */
+    uint8_t rx_buf[RX_BUF_SIZE];               /* 当前 HAL Receive-to-Idle 缓冲。 */
+    volatile uint8_t rx_rearm_pending;         /* 挂接失败时由前台任务重试。 */
     uint8_t tx_buf[TX_IT_BUF_SIZE];            /* ESP32 回复共用的中断发送缓冲区。 */
     volatile uint8_t tx_busy;                  /* HAL_UART_Transmit_IT 发送期间为非 0。 */
     volatile uint8_t handshake_done;           /* 收到 ESP32 hello 或有效遥控帧后置位。 */
@@ -41,6 +43,15 @@ static volatile uint8_t motor_control_status_pending = 0U;
  * callback boundary chosen by the UART idle detector. */
 static char text_command_buf[TEXT_COMMAND_BUF_SIZE];
 static uint16_t text_command_len = 0U;
+typedef struct
+{
+    uint16_t len;
+    uint8_t data[RX_BUF_SIZE];
+} Communication_RxChunkTypeDef;
+static Communication_RxChunkTypeDef rx_chunk_queue[RX_CHUNK_QUEUE_DEPTH];
+static volatile uint8_t rx_chunk_read = 0U;
+static volatile uint8_t rx_chunk_write = 0U;
+static volatile uint32_t rx_chunk_overflow_count = 0U;
 
 static const char esp32_hello[] = "ESP32_HELLO";
 static const char stm32_ack[] = "STM32_ACK\n";
@@ -69,11 +80,22 @@ static const char leg_loaded_step_cmd[] = "LEG_LOADED_STEP";
 #define RC_DEADZONE      363
 
 
+static HAL_StatusTypeDef arm_esp32_rx(void)
+{
+    if (!comm_ctx.uart) return HAL_ERROR;
+    HAL_StatusTypeDef status = HAL_UARTEx_ReceiveToIdle_IT(
+        comm_ctx.uart, comm_ctx.rx_buf, RX_BUF_SIZE);
+    if (status == HAL_OK) {
+        comm_ctx.rx_rearm_pending = 0U;
+    } else {
+        comm_ctx.rx_rearm_pending = 1U;
+    }
+    return status;
+}
+
 static void restart_esp32_rx(void)
 {
-    if (comm_ctx.uart) {
-        HAL_UARTEx_ReceiveToIdle_IT(comm_ctx.uart, comm_ctx.rx_buf, RX_BUF_SIZE);
-    }
+    (void)arm_esp32_rx();
 }
 
 static void send_esp32_rx_echo(uint16_t size, int parsed_frame)
@@ -784,7 +806,7 @@ void Communication_Init(UART_HandleTypeDef *huart)
     Communication_SetSafeRCData();
     last_valid_packet_tick = 0;
 
-    restart_esp32_rx();
+    (void)arm_esp32_rx();
 }
 
 static void consume_text_command_stream(const uint8_t *data, uint16_t len)
@@ -823,21 +845,42 @@ static void consume_text_command_stream(const uint8_t *data, uint16_t len)
 void Communication_RxCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
     /* USART6 承载来自 ESP32 的遥控帧和文本调试指令。 */
-    if (huart->Instance != USART6 || Size == 0) {
+    if (huart->Instance != USART6) return;
+    if (Size == 0U) {
         restart_esp32_rx();
         return;
     }
 
-    /* 保留一小段接收快照，供可选回显调试使用。 */
+    /* ISR work is deliberately bounded: copy this completed chunk into a
+       small foreground queue and immediately re-arm USART6.  Parsing, PID
+       state changes, snprintf, and UART replies run later in Communication_Task. */
     comm_ctx.rx_count++;
     comm_ctx.last_rx_size = Size;
     uint16_t snap_len = Size < RX_SNAPSHOT_SIZE ? Size : RX_SNAPSHOT_SIZE;
     memcpy((void *)comm_ctx.rx_snapshot, comm_ctx.rx_buf, snap_len);
 
-    handle_hello(comm_ctx.rx_buf, Size);
-    consume_text_command_stream(comm_ctx.rx_buf, Size);
-    int parsed_len = parse_frame(comm_ctx.rx_buf, Size);
-    send_esp32_rx_echo(Size, parsed_len > 0);
+    uint8_t write = rx_chunk_write;
+    uint8_t next = (uint8_t)((write + 1U) % RX_CHUNK_QUEUE_DEPTH);
+    if (next != rx_chunk_read) {
+        rx_chunk_queue[write].len = Size;
+        memcpy(rx_chunk_queue[write].data, comm_ctx.rx_buf, Size);
+        __DMB();
+        rx_chunk_write = next;
+    } else {
+        ++rx_chunk_overflow_count;
+    }
+    restart_esp32_rx();
+}
+
+void Communication_HandleUartError(UART_HandleTypeDef *huart)
+{
+    if (huart == NULL || huart->Instance != USART6) return;
+    __HAL_UART_CLEAR_FLAG(huart,
+                          UART_CLEAR_OREF | UART_CLEAR_NEF |
+                          UART_CLEAR_PEF | UART_CLEAR_FEF);
+    SET_BIT(huart->Instance->RQR, UART_RXDATA_FLUSH_REQUEST);
+    text_command_len = 0U;
+    comm_ctx.rx_rearm_pending = 1U;
     restart_esp32_rx();
 }
 
@@ -858,6 +901,23 @@ void Communication_ResetWatchdog(void)
 
 void Communication_Task(void)
 {
+    while (rx_chunk_read != rx_chunk_write) {
+        uint8_t read = rx_chunk_read;
+        const uint8_t *data = rx_chunk_queue[read].data;
+        uint16_t size = rx_chunk_queue[read].len;
+        handle_hello(data, size);
+        consume_text_command_stream(data, size);
+        int parsed_len = parse_frame(data, size);
+        send_esp32_rx_echo(size, parsed_len > 0);
+        __DMB();
+        rx_chunk_read = (uint8_t)((read + 1U) % RX_CHUNK_QUEUE_DEPTH);
+    }
+
+    if (comm_ctx.rx_rearm_pending && comm_ctx.uart &&
+        comm_ctx.uart->RxState == HAL_UART_STATE_READY) {
+        restart_esp32_rx();
+    }
+
     if (!comm_ctx.handshake_done && comm_ctx.uart &&
         (HAL_GetTick() - comm_ctx.last_hello_tick) >= 500) {
         comm_ctx.last_hello_tick = HAL_GetTick();

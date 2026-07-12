@@ -179,6 +179,11 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
+  if (huart->Instance == USART6)
+  {
+    Communication_HandleUartError(huart);
+    return;
+  }
   (void)Motor_Transport_HandleError(huart);
 }
 /* USER CODE END 0 */
@@ -228,10 +233,16 @@ int main(void)
   Leg_Control_InitSafe();
 
   // 等待ESP32握手（收到第一包有效数据），LED闪烁指示等待状态
+  uint32_t handshake_led_tick = HAL_GetTick();
   while (!Communication_IsHandshakeDone())
   {
-    HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
-    HAL_Delay(200);
+    Communication_Task();
+    if ((HAL_GetTick() - handshake_led_tick) >= 200U)
+    {
+      handshake_led_tick = HAL_GetTick();
+      HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
+    }
+    HAL_Delay(1);
   }
   HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET); // 握手成功，LED常亮
 
