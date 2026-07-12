@@ -1268,6 +1268,7 @@ void Communication_SendSoftwarePidTelemetry(void)
     Motor_SoftwareControlSnapshot s;
     Motor_SoftwareControl_GetSnapshot(&s);
     if (s.mode != Motor_SoftwareControl_DryRun &&
+        s.mode != Motor_SoftwareControl_ActiveTorque &&
         s.mode != Motor_SoftwareControl_Stopped) return;
 
     /* Dedicated compact JSON, separate from the human-readable command log.

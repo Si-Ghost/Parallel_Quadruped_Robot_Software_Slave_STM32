@@ -11,9 +11,10 @@
 #define MOTOR_TRANSPORT_OFFLINE_TIMEOUT_MS 100U
 #define MOTOR_TRANSPORT_QUIESCE_TIMEOUT_MS 5U
 
-/* Software-controller development guard: all driver control fields remain zero
- * until dry-run evidence is reviewed and a non-zero test is separately approved. */
-#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 1U
+/* The transport-wide guard is open only for the approved LF ID0 software-P
+ * test. Leg_Control reconstructs every frame from zero and requests torque
+ * through Motor_SoftwareControl's exact-parameter authorization gate. */
+#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 0U
 
 _Static_assert((MOTOR_TRANSPORT_RING_SIZE & (MOTOR_TRANSPORT_RING_SIZE - 1U)) == 0U,
                "motor RX ring size must be a power of two");

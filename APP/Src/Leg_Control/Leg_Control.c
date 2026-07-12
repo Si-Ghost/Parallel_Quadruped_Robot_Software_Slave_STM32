@@ -5,6 +5,7 @@
 #include "communication.h"
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 extern Leg_HandlerTypeDef Left_Front_Leg;
 extern Leg_HandlerTypeDef Right_Front_Leg;
@@ -40,8 +41,8 @@ extern UART_HandleTypeDef huart8;
 #define LEG_SINGLE_MOTOR_MAX_KP               0.50f
 #define LEG_SINGLE_MOTOR_MAX_KW               0.05f
 #define LEG_SINGLE_MOTOR_MAX_DURATION_MS      1500U
-#define LEG_SINGLE_MOTOR_MAX_ERROR_RAD        0.45f
-#define LEG_SINGLE_MOTOR_MAX_VELOCITY_RAD_S   20.0f
+#define LEG_SINGLE_MOTOR_MAX_ERROR_RAD        0.05f
+#define LEG_SINGLE_MOTOR_MAX_VELOCITY_RAD_S   2.0f
 #define LEG_UART_HARD_ERROR_MASK \
   (HAL_UART_ERROR_DMA | HAL_UART_ERROR_RTO)
 #define LEG_MOTOR_THETA1            0U /* ID0 drives AB after front/rear mounting swap. */
@@ -235,7 +236,17 @@ static void reset_motor_runtime_state(Motor_RuntimeStateTypeDef *state,
 static uint8_t transport_load_command(uint8_t leg, uint8_t motor, MOTOR_send *command)
 {
   if (leg >= 4U || motor >= 2U || command == NULL) return 0U;
-  *command = Legs[leg]->motor_cmd[motor];
+  memset(command, 0, sizeof(*command));
+  command->id = motor;
+  command->mode = 1U;
+  float torque = 0.0f;
+  if (Motor_SoftwareControl_GetAuthorizedTorque(Leg_Control_MotorIndex(leg, motor),
+                                                 &torque))
+    command->T = torque;
+  command->W = 0.0f;
+  command->Pos = 0.0f;
+  command->K_P = 0.0f;
+  command->K_W = 0.0f;
   return 1U;
 }
 

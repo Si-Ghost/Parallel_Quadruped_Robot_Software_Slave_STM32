@@ -7,12 +7,18 @@
 #define SWCTRL_MAX_KP                  0.50f
 #define SWCTRL_MAX_KD                  0.05f
 #define SWCTRL_MAX_DURATION_MS         1500U
-#define SWCTRL_TARGET_SPEED_RAD_S      0.20f
-#define SWCTRL_TORQUE_LIMIT            0.20f
+#define SWCTRL_TARGET_SPEED_RAD_S      0.10f
+#define SWCTRL_TORQUE_LIMIT            0.02f
 #define SWCTRL_INTEGRAL_LIMIT          0.05f
 #define SWCTRL_VELOCITY_FILTER_HZ      30.0f
 #define SWCTRL_MIN_DT_S                0.0002f
 #define SWCTRL_MAX_DT_S                0.0100f
+#define SWCTRL_LIVE_MOTOR_INDEX        0U
+#define SWCTRL_LIVE_OFFSET_RAD         0.020f
+#define SWCTRL_LIVE_KP                 0.50f
+#define SWCTRL_LIVE_KD                 0.0f
+#define SWCTRL_LIVE_DURATION_MS        500U
+#define SWCTRL_MATCH_EPSILON           0.00001f
 
 static Motor_SoftwareControlSnapshot control;
 static uint32_t plan_start_ms;
@@ -24,6 +30,16 @@ static float clampf(float value, float limit)
   if (value > limit) return limit;
   if (value < -limit) return -limit;
   return value;
+}
+
+static uint8_t matches_live_authorization(uint8_t motor_index, float offset_rad,
+                                          float kp, float kd, uint32_t duration_ms)
+{
+  return motor_index == SWCTRL_LIVE_MOTOR_INDEX &&
+         fabsf(offset_rad - SWCTRL_LIVE_OFFSET_RAD) <= SWCTRL_MATCH_EPSILON &&
+         fabsf(kp - SWCTRL_LIVE_KP) <= SWCTRL_MATCH_EPSILON &&
+         fabsf(kd - SWCTRL_LIVE_KD) <= SWCTRL_MATCH_EPSILON &&
+         duration_ms == SWCTRL_LIVE_DURATION_MS;
 }
 
 void Motor_SoftwareControl_Init(void)
@@ -86,7 +102,11 @@ int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
     Motor_SoftwareControl_Stop(Motor_SoftwareControl_StopInvalidCommand);
     return 0;
   }
-  control.mode = Motor_SoftwareControl_DryRun;
+  control.mode = matches_live_authorization(motor_index, offset_rad, kp, kd,
+                                             duration_ms)
+                     ? Motor_SoftwareControl_ActiveTorque
+                     : Motor_SoftwareControl_DryRun;
+  control.dry_run = (control.mode == Motor_SoftwareControl_DryRun) ? 1U : 0U;
   control.stop_reason = Motor_SoftwareControl_StopNone;
   control.raw_target = control.arm_position + offset_rad;
   control.ramped_target = control.arm_position;
@@ -107,7 +127,8 @@ int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
 void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
                                   uint32_t feedback_timestamp, uint32_t now_ms)
 {
-  if (control.mode != Motor_SoftwareControl_DryRun) return;
+  if (control.mode != Motor_SoftwareControl_DryRun &&
+      control.mode != Motor_SoftwareControl_ActiveTorque) return;
   if (!isfinite(rotor_position) || !isfinite(rotor_velocity)) {
     Motor_SoftwareControl_Stop(Motor_SoftwareControl_StopInvalidNumber);
     return;
@@ -165,4 +186,18 @@ void Motor_SoftwareControl_GetSnapshot(Motor_SoftwareControlSnapshot *snapshot)
 const char *Motor_SoftwareControl_GetLastRejectReason(void)
 {
   return last_reject_reason;
+}
+
+int Motor_SoftwareControl_GetAuthorizedTorque(uint8_t motor_index, float *torque)
+{
+  if (torque == NULL) return 0;
+  *torque = 0.0f;
+  if (control.mode != Motor_SoftwareControl_ActiveTorque ||
+      control.motor_index != (int8_t)motor_index || control.dry_run != 0U)
+    return 0;
+  if (!isfinite(control.limited_torque) ||
+      fabsf(control.limited_torque) > SWCTRL_TORQUE_LIMIT)
+    return 0;
+  *torque = control.limited_torque;
+  return 1;
 }

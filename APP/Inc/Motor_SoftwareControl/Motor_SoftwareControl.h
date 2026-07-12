@@ -8,7 +8,8 @@ typedef enum
   Motor_SoftwareControl_Disabled = 0,
   Motor_SoftwareControl_Armed = 1,
   Motor_SoftwareControl_DryRun = 2,
-  Motor_SoftwareControl_Stopped = 3
+  Motor_SoftwareControl_Stopped = 3,
+  Motor_SoftwareControl_ActiveTorque = 4
 } Motor_SoftwareControlMode;
 
 typedef enum
@@ -65,6 +66,7 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
                                   uint32_t feedback_timestamp, uint32_t now_ms);
 void Motor_SoftwareControl_Stop(Motor_SoftwareControlStopReason reason);
 void Motor_SoftwareControl_GetSnapshot(Motor_SoftwareControlSnapshot *snapshot);
+int Motor_SoftwareControl_GetAuthorizedTorque(uint8_t motor_index, float *torque);
 const char *Motor_SoftwareControl_GetLastRejectReason(void);
 
 #endif
