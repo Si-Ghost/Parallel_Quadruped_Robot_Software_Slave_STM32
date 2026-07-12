@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+#define MOTOR_STATE_TWO_PI  6.28318530717958647692f
+
 static float normalized_direction(float direction)
 {
   return direction < 0.0f ? -1.0f : 1.0f;
@@ -10,6 +12,19 @@ static float normalized_direction(float direction)
 static float absolute_value(float value)
 {
   return value < 0.0f ? -value : value;
+}
+
+/* Feedback is multi-turn, while the stored assembly calibration may differ
+ * from this boot's reported turn count by an integer multiple of 2*pi.  Pick
+ * that one equivalent calibration reference once, then never wrap runtime
+ * position deltas. */
+static float align_zero_reference(float calibration_zero, float rotor_position)
+{
+  float turns = (rotor_position - calibration_zero) / MOTOR_STATE_TWO_PI;
+  int32_t nearest_turn = (turns >= 0.0f)
+                             ? (int32_t)(turns + 0.5f)
+                             : (int32_t)(turns - 0.5f);
+  return calibration_zero + (float)nearest_turn * MOTOR_STATE_TWO_PI;
 }
 
 static void refresh_derived(Motor_StateTypeDef *state,
@@ -32,6 +47,7 @@ void Motor_State_Init(Motor_StateTypeDef *state, float zero_offset, float direct
   if (state == NULL) return;
   memset(state, 0, sizeof(*state));
   state->zero_rotor_position = zero_offset;
+  state->zero_reference_valid = 0U;
   state->direction = normalized_direction(direction);
   state->angle_valid = Motor_Angle_Invalid;
   state->online = Motor_Offline;
@@ -48,6 +64,12 @@ void Motor_State_SetCalibration(Motor_StateTypeDef *state,
 {
   if (state == NULL) return;
   state->zero_rotor_position = zero_offset;
+  state->zero_reference_valid = 0U;
+  if (state->angle_valid == Motor_Angle_Valid) {
+    state->zero_rotor_position = align_zero_reference(zero_offset,
+                                                       state->rotor_position);
+    state->zero_reference_valid = 1U;
+  }
   state->direction = normalized_direction(direction);
   refresh_derived(state, reduction_ratio, zero_threshold);
 }
@@ -62,6 +84,11 @@ void Motor_State_UpdateRawFeedback(Motor_StateTypeDef *state,
 {
   if (state == NULL) return;
 
+  if (!state->zero_reference_valid) {
+    state->zero_rotor_position = align_zero_reference(state->zero_rotor_position,
+                                                       rotor_position);
+    state->zero_reference_valid = 1U;
+  }
   state->rotor_position = rotor_position;
   state->raw_velocity = raw_velocity;
   state->raw_torque = raw_torque;

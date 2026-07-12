@@ -70,9 +70,8 @@ volatile int main_task_start = 0;
 /* Transport is verified with zero output; keep PC/Web telemetry enabled. */
 #define MOTOR_TRANSPORT_DIAG_ONLY 0U
 /* The ESP32 UI has priority over verbose UART6 transport diagnostics. */
-/* Temporary low-rate diagnosis: emitted only outside the telemetry guard
- * windows so angle/status telemetry remains the priority. */
-#define MOTOR_TRANSPORT_RUNTIME_LOG_ENABLED 1U
+/* Telemetry has priority over transport diagnostics on the shared USART6. */
+#define MOTOR_TRANSPORT_RUNTIME_LOG_ENABLED 0U
 #define MOTOR_TRANSPORT_LOG_GUARD_MS 30U
 
 Leg_HandlerTypeDef Left_Front_Leg;

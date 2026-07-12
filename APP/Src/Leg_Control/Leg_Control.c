@@ -87,10 +87,16 @@ float Leg_Control_NormalizedMotorDir(float direction)
   return (direction < 0.0f) ? -1.0f : 1.0f;
 }
 
-static float joint_to_rotor_angle(const Leg_HandlerTypeDef *hleg, uint8_t motor, float joint_angle)
+static float joint_to_rotor_angle(uint8_t leg, uint8_t motor, float joint_angle)
 {
+  if (leg >= 4U || motor >= 2U) return 0.0f;
+  const Leg_HandlerTypeDef *hleg = Legs[leg];
+  const Motor_RuntimeStateTypeDef *state = &hleg->motor_state[motor];
   float direction = Leg_Control_NormalizedMotorDir(hleg->motor_direction[motor]);
-  return hleg->rotor_zero_offset[motor] + direction * joint_angle * LEG_REDUCTION_RATIO;
+  float zero_reference = state->zero_reference_valid
+                             ? state->zero_rotor_position
+                             : hleg->rotor_zero_offset[motor];
+  return zero_reference + direction * joint_angle * LEG_REDUCTION_RATIO;
 }
 
 static void reset_motor_runtime_state(Motor_RuntimeStateTypeDef *state,
@@ -418,7 +424,7 @@ int Leg_Control_ComputeFootTargetOffsets(uint8_t leg, const Leg_PointTypeDef *ta
   for (uint8_t motor = 0; motor < 2; motor++) {
     Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
     if (state->online != Motor_Online || state->angle_valid != Motor_Angle_Valid) return 0;
-    float home_zero_error = Legs[leg]->p_init[motor] - Legs[leg]->rotor_zero_offset[motor];
+    float home_zero_error = Motor_State_GetZeroError(state);
     if (absf_local(home_zero_error) > LEG_ROTOR_ZERO_NEAR_RAD) return 0;
   }
 
@@ -463,7 +469,7 @@ int Leg_Control_SetDebugFootOffset(uint8_t leg, float dx_mm, float dy_mm)
     Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
     if (state->online != Motor_Online) { log_leg_nudge_reject(leg, "offline", motor, 0.0f); return 0; }
     if (state->angle_valid != Motor_Angle_Valid) { log_leg_nudge_reject(leg, "angle_invalid", motor, 0.0f); return 0; }
-    float home_zero_error = Legs[leg]->p_init[motor] - Legs[leg]->rotor_zero_offset[motor];
+    float home_zero_error = Motor_State_GetZeroError(state);
     if (absf_local(home_zero_error) > LEG_ROTOR_ZERO_NEAR_RAD) {
       log_leg_nudge_reject(leg, "home_zero_out", motor, home_zero_error);
       return 0;
@@ -1030,8 +1036,8 @@ int Leg_Control_GetJointAngles(uint8_t leg, Leg_JointAnglesTypeDef *angles, uint
 int Leg_Control_JointToRotorTargets(uint8_t leg, const Leg_JointAnglesTypeDef *angles, float rotor_targets[2])
 {
   if (leg >= 4 || angles == NULL || rotor_targets == NULL) return 0;
-  rotor_targets[LEG_MOTOR_THETA1] = joint_to_rotor_angle(Legs[leg], LEG_MOTOR_THETA1, angles->theta1);
-  rotor_targets[LEG_MOTOR_THETA2] = joint_to_rotor_angle(Legs[leg], LEG_MOTOR_THETA2, angles->theta2);
+  rotor_targets[LEG_MOTOR_THETA1] = joint_to_rotor_angle(leg, LEG_MOTOR_THETA1, angles->theta1);
+  rotor_targets[LEG_MOTOR_THETA2] = joint_to_rotor_angle(leg, LEG_MOTOR_THETA2, angles->theta2);
   return 1;
 }
 

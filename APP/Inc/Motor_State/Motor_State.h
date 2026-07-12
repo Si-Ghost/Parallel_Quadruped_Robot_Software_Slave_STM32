@@ -74,6 +74,7 @@ typedef struct
   };
   Motor_AngleValidTypeDef angle_valid;
   Motor_OnlineStateTypeDef online;
+  uint8_t zero_reference_valid;
   uint8_t zero_checked;
   uint32_t timestamp;
   uint32_t error_count;
