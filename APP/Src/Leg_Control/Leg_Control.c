@@ -87,16 +87,11 @@ float Leg_Control_NormalizedMotorDir(float direction)
   return (direction < 0.0f) ? -1.0f : 1.0f;
 }
 
-static float joint_to_rotor_angle(uint8_t leg, uint8_t motor, float joint_angle)
+static float joint_to_rotor_angle(const Leg_HandlerTypeDef *hleg, uint8_t motor, float joint_angle)
 {
-  if (leg >= 4U || motor >= 2U) return 0.0f;
-  const Leg_HandlerTypeDef *hleg = Legs[leg];
-  const Motor_RuntimeStateTypeDef *state = &hleg->motor_state[motor];
+  if (hleg == NULL || motor >= 2U) return 0.0f;
   float direction = Leg_Control_NormalizedMotorDir(hleg->motor_direction[motor]);
-  float zero_reference = state->zero_reference_valid
-                             ? state->zero_rotor_position
-                             : hleg->rotor_zero_offset[motor];
-  return zero_reference + direction * joint_angle * LEG_REDUCTION_RATIO;
+  return hleg->rotor_zero_offset[motor] + direction * joint_angle * LEG_REDUCTION_RATIO;
 }
 
 static void reset_motor_runtime_state(Motor_RuntimeStateTypeDef *state,
@@ -1036,8 +1031,8 @@ int Leg_Control_GetJointAngles(uint8_t leg, Leg_JointAnglesTypeDef *angles, uint
 int Leg_Control_JointToRotorTargets(uint8_t leg, const Leg_JointAnglesTypeDef *angles, float rotor_targets[2])
 {
   if (leg >= 4 || angles == NULL || rotor_targets == NULL) return 0;
-  rotor_targets[LEG_MOTOR_THETA1] = joint_to_rotor_angle(leg, LEG_MOTOR_THETA1, angles->theta1);
-  rotor_targets[LEG_MOTOR_THETA2] = joint_to_rotor_angle(leg, LEG_MOTOR_THETA2, angles->theta2);
+  rotor_targets[LEG_MOTOR_THETA1] = joint_to_rotor_angle(Legs[leg], LEG_MOTOR_THETA1, angles->theta1);
+  rotor_targets[LEG_MOTOR_THETA2] = joint_to_rotor_angle(Legs[leg], LEG_MOTOR_THETA2, angles->theta2);
   return 1;
 }
 

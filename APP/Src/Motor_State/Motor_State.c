@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#define MOTOR_STATE_PI      3.14159265358979323846f
 #define MOTOR_STATE_TWO_PI  6.28318530717958647692f
 
 static float normalized_direction(float direction)
@@ -14,17 +15,14 @@ static float absolute_value(float value)
   return value < 0.0f ? -value : value;
 }
 
-/* Feedback is multi-turn, while the stored assembly calibration may differ
- * from this boot's reported turn count by an integer multiple of 2*pi.  Pick
- * that one equivalent calibration reference once, then never wrap runtime
- * position deltas. */
-static float align_zero_reference(float calibration_zero, float rotor_position)
+/* Only the zero check treats a whole encoder turn as equivalent.  Position
+ * feedback and joint position remain multi-turn values everywhere else. */
+static float wrapped_zero_error(float rotor_position, float calibration_zero)
 {
-  float turns = (rotor_position - calibration_zero) / MOTOR_STATE_TWO_PI;
-  int32_t nearest_turn = (turns >= 0.0f)
-                             ? (int32_t)(turns + 0.5f)
-                             : (int32_t)(turns - 0.5f);
-  return calibration_zero + (float)nearest_turn * MOTOR_STATE_TWO_PI;
+  float error = rotor_position - calibration_zero;
+  while (error > MOTOR_STATE_PI) error -= MOTOR_STATE_TWO_PI;
+  while (error < -MOTOR_STATE_PI) error += MOTOR_STATE_TWO_PI;
+  return error;
 }
 
 static void refresh_derived(Motor_StateTypeDef *state,
@@ -33,9 +31,11 @@ static void refresh_derived(Motor_StateTypeDef *state,
 {
   if (state == NULL) return;
 
-  float zero_error = state->rotor_position - state->zero_rotor_position;
+  float joint_delta = state->rotor_position - state->zero_rotor_position;
+  float zero_error = wrapped_zero_error(state->rotor_position,
+                                        state->zero_rotor_position);
   state->joint_angle = (reduction_ratio > 0.0f)
-                           ? state->direction * zero_error / reduction_ratio
+                           ? state->direction * joint_delta / reduction_ratio
                            : 0.0f;
   state->zero_checked = (state->online == Motor_Online &&
                          state->angle_valid == Motor_Angle_Valid &&
@@ -47,7 +47,6 @@ void Motor_State_Init(Motor_StateTypeDef *state, float zero_offset, float direct
   if (state == NULL) return;
   memset(state, 0, sizeof(*state));
   state->zero_rotor_position = zero_offset;
-  state->zero_reference_valid = 0U;
   state->direction = normalized_direction(direction);
   state->angle_valid = Motor_Angle_Invalid;
   state->online = Motor_Offline;
@@ -64,12 +63,6 @@ void Motor_State_SetCalibration(Motor_StateTypeDef *state,
 {
   if (state == NULL) return;
   state->zero_rotor_position = zero_offset;
-  state->zero_reference_valid = 0U;
-  if (state->angle_valid == Motor_Angle_Valid) {
-    state->zero_rotor_position = align_zero_reference(zero_offset,
-                                                       state->rotor_position);
-    state->zero_reference_valid = 1U;
-  }
   state->direction = normalized_direction(direction);
   refresh_derived(state, reduction_ratio, zero_threshold);
 }
@@ -84,11 +77,6 @@ void Motor_State_UpdateRawFeedback(Motor_StateTypeDef *state,
 {
   if (state == NULL) return;
 
-  if (!state->zero_reference_valid) {
-    state->zero_rotor_position = align_zero_reference(state->zero_rotor_position,
-                                                       rotor_position);
-    state->zero_reference_valid = 1U;
-  }
   state->rotor_position = rotor_position;
   state->raw_velocity = raw_velocity;
   state->raw_torque = raw_torque;
@@ -115,7 +103,7 @@ void Motor_State_RecordError(Motor_StateTypeDef *state)
 float Motor_State_GetZeroError(const Motor_StateTypeDef *state)
 {
   if (state == NULL) return 0.0f;
-  return state->rotor_position - state->zero_rotor_position;
+  return wrapped_zero_error(state->rotor_position, state->zero_rotor_position);
 }
 
 void Motor_State_GetSnapshot(const Motor_StateTypeDef *state,
