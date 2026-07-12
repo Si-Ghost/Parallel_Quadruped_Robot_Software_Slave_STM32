@@ -11,8 +11,23 @@ typedef enum
   Motor_SoftwareControl_Stopped = 3,
   Motor_SoftwareControl_ActiveTorque = 4,
   Motor_SoftwareControl_CascadeDryRun = 5,
-  Motor_SoftwareControl_CascadeActiveTorque = 6
+  Motor_SoftwareControl_CascadeActiveTorque = 6,
+  Motor_SoftwareControl_StaticHoldDryRun = 7
 } Motor_SoftwareControlMode;
+
+typedef enum
+{
+  Motor_SoftwareControl_TestNone = 0,
+  Motor_SoftwareControl_TestPositionStep = 1,
+  Motor_SoftwareControl_TestStaticHold = 2
+} Motor_SoftwareControlTest;
+
+typedef enum
+{
+  Motor_SoftwareControl_LimitNone = 0,
+  Motor_SoftwareControl_LimitPositionExcursion = 1,
+  Motor_SoftwareControl_LimitRawVelocity = 2
+} Motor_SoftwareControlSafetyLimit;
 
 typedef enum
 {
@@ -25,13 +40,16 @@ typedef enum
   Motor_SoftwareControl_StopDuration = 6,
   Motor_SoftwareControl_StopSafetyLimit = 7,
   Motor_SoftwareControl_StopInvalidDt = 8,
-  Motor_SoftwareControl_StopInvalidNumber = 9
+  Motor_SoftwareControl_StopInvalidNumber = 9,
+  Motor_SoftwareControl_StopCommandLink = 10
 } Motor_SoftwareControlStopReason;
 
 typedef struct
 {
   Motor_SoftwareControlMode mode;
   Motor_SoftwareControlStopReason stop_reason;
+  Motor_SoftwareControlTest test;
+  Motor_SoftwareControlSafetyLimit safety_limit;
   int8_t motor_index;
   float arm_position;
   float raw_target;
@@ -51,11 +69,16 @@ typedef struct
   float limited_torque;
   float torque_limit;
   float target_velocity_limit;
+  float actual_velocity_limit;
+  float position_excursion_limit;
   float speed_target;
   float speed_error;
   float position_loop_kp;
+  float position_loop_ki;
+  float position_loop_kd;
   float speed_loop_kp;
   float speed_loop_ki;
+  float speed_loop_kd;
   float dt_s;
   uint32_t duration_ms;
   uint32_t elapsed_ms;
@@ -70,6 +93,8 @@ int Motor_SoftwareControl_Arm(uint8_t motor_index, float rotor_position,
 int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
                                       float kp, float kd, uint32_t duration_ms,
                                       uint32_t now_ms);
+int Motor_SoftwareControl_StartStaticHoldDryRun(uint8_t motor_index,
+                                                uint32_t now_ms);
 void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
                                   uint32_t feedback_timestamp, uint32_t now_ms);
 void Motor_SoftwareControl_Stop(Motor_SoftwareControlStopReason reason);

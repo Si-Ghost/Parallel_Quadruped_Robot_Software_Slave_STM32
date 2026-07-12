@@ -43,6 +43,8 @@ extern UART_HandleTypeDef huart8;
 #define LEG_SINGLE_MOTOR_MAX_DURATION_MS      4000U
 #define LEG_SINGLE_MOTOR_MAX_ERROR_RAD        1.20f
 #define LEG_SINGLE_MOTOR_MAX_VELOCITY_RAD_S   3.0f
+#define LEG_STATIC_HOLD_MOTOR_INDEX            2U
+#define LEG_STATIC_HOLD_DURATION_MS             10000U
 #define LEG_UART_HARD_ERROR_MASK \
   (HAL_UART_ERROR_DMA | HAL_UART_ERROR_RTO)
 #define LEG_MOTOR_THETA1            0U /* ID0 drives AB after front/rear mounting swap. */
@@ -123,6 +125,7 @@ void Leg_Control_ForceZeroOutput(Motor_ControlReasonTypeDef reason)
   else if (reason == Motor_Control_Reason_TransportError) sw_reason = Motor_SoftwareControl_StopTransport;
   else if (reason == Motor_Control_Reason_PlanTimeout) sw_reason = Motor_SoftwareControl_StopDuration;
   else if (reason == Motor_Control_Reason_SafetyLimit) sw_reason = Motor_SoftwareControl_StopSafetyLimit;
+  else if (reason == Motor_Control_Reason_CommandLink) sw_reason = Motor_SoftwareControl_StopCommandLink;
   Motor_SoftwareControl_Stop(sw_reason);
   if (primask == 0U) __enable_irq();
 }
@@ -768,6 +771,54 @@ int Leg_Control_PlanSingleMotor(uint8_t motor_index, float offset_rad,
   return 1;
 }
 
+int Leg_Control_StartStaticHoldDryRun(uint8_t motor_index)
+{
+  Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
+  if (motor_index != LEG_STATIC_HOLD_MOTOR_INDEX) {
+    single_motor_last_plan_reject_reason = "static_hold_motor_locked";
+  } else if (state == NULL || state->online != Motor_Online ||
+             state->angle_valid != Motor_Angle_Valid) {
+    single_motor_last_plan_reject_reason = "offline_or_feedback_invalid";
+  } else if (single_motor_control.mode != Motor_Control_ArmedSingleMotor) {
+    single_motor_last_plan_reject_reason = "not_armed";
+  } else if (single_motor_control.armed_motor_index != (int8_t)motor_index) {
+    single_motor_last_plan_reject_reason = "different_armed_motor";
+  } else {
+    single_motor_last_plan_reject_reason = "none";
+  }
+
+  if (strcmp(single_motor_last_plan_reject_reason, "none") != 0) {
+    Leg_Control_ForceZeroOutput(Motor_Control_Reason_InvalidCommand);
+    return 0;
+  }
+
+  if (!Motor_SoftwareControl_StartStaticHoldDryRun(motor_index,
+                                                    HAL_GetTick())) {
+    single_motor_last_plan_reject_reason =
+        Motor_SoftwareControl_GetLastRejectReason();
+    Leg_Control_ForceZeroOutput(Motor_Control_Reason_InvalidCommand);
+    return 0;
+  }
+
+  __disable_irq();
+  single_motor_control.mode = Motor_Control_StaticHoldDryRun;
+  single_motor_control.reason = Motor_Control_Reason_None;
+  single_motor_control.target_rotor_position =
+      single_motor_control.arm_rotor_position;
+  single_motor_control.kp = 0.0f;
+  single_motor_control.kw = 0.0f;
+  single_motor_control.duration_ms = LEG_STATIC_HOLD_DURATION_MS;
+  single_motor_control.plan_start_tick = HAL_GetTick();
+
+  /* The driver-side position PD stays disabled.  The software controller only
+   * calculates telemetry in this mode; Motor_Transport remains the final
+   * compile-time zero-output barrier. */
+  MOTOR_send *cmd = &Legs[motor_index / 2U]->motor_cmd[motor_index % 2U];
+  set_zero_command(cmd, motor_index % 2U);
+  __enable_irq();
+  return 1;
+}
+
 const char *Leg_Control_GetLastPlanRejectReason(void)
 {
   return single_motor_last_plan_reject_reason;
@@ -1071,11 +1122,16 @@ void Leg_Control_Service(uint32_t now_ms)
     Leg_Control_Handshake();
   }
 
-  if (single_motor_control.mode == Motor_Control_SingleMotorPosition) {
+  if (single_motor_control.mode == Motor_Control_SingleMotorPosition ||
+      single_motor_control.mode == Motor_Control_StaticHoldDryRun) {
     uint8_t motor_index = (uint8_t)single_motor_control.armed_motor_index;
     Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
     uint8_t stopped = 0U;
-    if (state == NULL || state->online != Motor_Online ||
+    if (single_motor_control.mode == Motor_Control_StaticHoldDryRun &&
+        !Communication_IsLinkAlive()) {
+      Leg_Control_ForceZeroOutput(Motor_Control_Reason_CommandLink);
+      stopped = 1U;
+    } else if (state == NULL || state->online != Motor_Online ||
         state->angle_valid != Motor_Angle_Valid) {
       Leg_Control_ForceZeroOutput(Motor_Control_Reason_Offline);
       stopped = 1U;
