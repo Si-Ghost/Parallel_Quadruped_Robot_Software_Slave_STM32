@@ -115,13 +115,14 @@ int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
     Motor_SoftwareControl_Stop(Motor_SoftwareControl_StopInvalidCommand);
     return 0;
   }
-  /* Larger-angle RF test returns to dry-run until the new target/ramp and
-   * stop boundary are reviewed. */
+  /* Exact larger-angle RF tuple is authorized for one bounded live test;
+   * every other valid plan remains calculation-only. */
   control.mode = matches_cascade_dry_run(motor_index, offset_rad, kp, kd,
                                          duration_ms)
-                     ? Motor_SoftwareControl_CascadeDryRun
+                     ? Motor_SoftwareControl_CascadeActiveTorque
                      : Motor_SoftwareControl_DryRun;
-  control.dry_run = 1U;
+  control.dry_run = (control.mode == Motor_SoftwareControl_CascadeActiveTorque)
+                        ? 0U : 1U;
   control.stop_reason = Motor_SoftwareControl_StopNone;
   control.raw_target = control.arm_position + offset_rad;
   control.ramped_target = control.arm_position;
