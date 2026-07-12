@@ -129,12 +129,11 @@ int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
   }
   uint8_t fleet_match = matches_fleet_dry_run(motor_index, offset_rad, kp, kd,
                                                duration_ms);
-  /* All eight exact +0.1 rad tuples are authorized, still mutually exclusive
-   * through the single armed motor. Negative and one-radian plans stay dry-run. */
-  if (fleet_match && offset_rad > 0.0f)
+  /* All eight exact ±0.1 rad tuples are authorized, still mutually exclusive
+   * through the single armed motor. The one-radian plan stays dry-run. */
+  if (fleet_match)
     control.mode = Motor_SoftwareControl_CascadeActiveTorque;
-  else if (fleet_match || matches_cascade_dry_run(motor_index, offset_rad, kp, kd,
-                                                   duration_ms))
+  else if (matches_cascade_dry_run(motor_index, offset_rad, kp, kd, duration_ms))
     control.mode = Motor_SoftwareControl_CascadeDryRun;
   else
     control.mode = Motor_SoftwareControl_DryRun;
