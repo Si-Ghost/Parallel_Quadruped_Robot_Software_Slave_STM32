@@ -6,7 +6,7 @@
 #define SWCTRL_MAX_OFFSET_RAD          1.001f
 #define SWCTRL_MAX_KP                  0.50f
 #define SWCTRL_MAX_KD                  0.05f
-#define SWCTRL_MAX_DURATION_MS         1500U
+#define SWCTRL_MAX_DURATION_MS         4000U
 #define SWCTRL_TARGET_SPEED_RAD_S      0.50f
 #define SWCTRL_TORQUE_LIMIT            0.02f
 #define SWCTRL_INTEGRAL_LIMIT          0.05f
