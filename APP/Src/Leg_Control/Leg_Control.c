@@ -42,7 +42,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_SINGLE_MOTOR_MAX_KW               0.05f
 #define LEG_SINGLE_MOTOR_MAX_DURATION_MS      1500U
 #define LEG_SINGLE_MOTOR_MAX_ERROR_RAD        0.05f
-#define LEG_SINGLE_MOTOR_MAX_VELOCITY_RAD_S   2.0f
+#define LEG_SINGLE_MOTOR_MAX_VELOCITY_RAD_S   3.0f
 #define LEG_UART_HARD_ERROR_MASK \
   (HAL_UART_ERROR_DMA | HAL_UART_ERROR_RTO)
 #define LEG_MOTOR_THETA1            0U /* ID0 drives AB after front/rear mounting swap. */

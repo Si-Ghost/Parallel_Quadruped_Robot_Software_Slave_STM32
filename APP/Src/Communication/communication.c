@@ -1270,6 +1270,7 @@ void Communication_SendSoftwarePidTelemetry(void)
     if (s.mode != Motor_SoftwareControl_DryRun &&
         s.mode != Motor_SoftwareControl_ActiveTorque &&
         s.mode != Motor_SoftwareControl_CascadeDryRun &&
+        s.mode != Motor_SoftwareControl_CascadeActiveTorque &&
         s.mode != Motor_SoftwareControl_Stopped) return;
 
     /* Dedicated compact JSON, separate from the human-readable command log.

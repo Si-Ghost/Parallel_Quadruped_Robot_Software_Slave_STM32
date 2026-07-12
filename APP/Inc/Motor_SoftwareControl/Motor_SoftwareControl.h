@@ -10,7 +10,8 @@ typedef enum
   Motor_SoftwareControl_DryRun = 2,
   Motor_SoftwareControl_Stopped = 3,
   Motor_SoftwareControl_ActiveTorque = 4,
-  Motor_SoftwareControl_CascadeDryRun = 5
+  Motor_SoftwareControl_CascadeDryRun = 5,
+  Motor_SoftwareControl_CascadeActiveTorque = 6
 } Motor_SoftwareControlMode;
 
 typedef enum
