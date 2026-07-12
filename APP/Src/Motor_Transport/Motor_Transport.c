@@ -312,7 +312,6 @@ HAL_StatusTypeDef Motor_Transport_Start(void)
 
   transport_running = 0U;
   transport_ticks = 0U;
-  uint32_t now = HAL_GetTick();
   for (uint8_t i = 0U; i < MOTOR_TRANSPORT_CHANNEL_COUNT; ++i) {
     Motor_TransportChannel *channel = &channels[i];
     (void)HAL_UART_Abort(channel->uart);
@@ -363,7 +362,10 @@ void Motor_Transport_Service(void)
       }
     }
     parse_rx_ring(channel);
-    update_online_timeouts(channel, now);
+    /* accept_feedback() timestamps with HAL_GetTick().  Refresh now after
+       parsing so a SysTick edge cannot make now older than last_feedback_tick
+       and turn a fresh frame into an unsigned-underflow timeout. */
+    update_online_timeouts(channel, HAL_GetTick());
   }
 
   uint32_t ticks;
