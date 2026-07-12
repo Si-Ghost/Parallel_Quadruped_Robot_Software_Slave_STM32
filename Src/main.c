@@ -91,7 +91,6 @@ RC_DataTypeDef rc_data;
 volatile uint32_t last_valid_packet_tick = 0;
 static uint32_t last_motor_angle_report_tick = 0;
 static uint32_t last_motor_status_report_tick = 0;
-static uint32_t last_motor_control_report_tick = 0;
 #if MOTOR_TRANSPORT_DIAG_ONLY || MOTOR_TRANSPORT_RUNTIME_LOG_ENABLED
 static uint32_t last_motor_transport_report_tick = 500;
 #endif
@@ -270,11 +269,6 @@ int main(void)
       {
         last_motor_status_report_tick = HAL_GetTick();
         Communication_SendMotorStatus();
-      }
-      if (HAL_GetTick() - last_motor_control_report_tick >= 250)
-      {
-        last_motor_control_report_tick = HAL_GetTick();
-        Communication_SendMotorControlStatus();
       }
 #if MOTOR_TRANSPORT_RUNTIME_LOG_ENABLED
       /* USART6 has one non-blocking TX buffer.  Leave the angle/status frame

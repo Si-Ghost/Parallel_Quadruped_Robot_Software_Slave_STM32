@@ -285,6 +285,7 @@ static void handle_motor_set_text(const char *cmd_buf)
             Communication_SendBytes((const uint8_t *)log_buf, (uint16_t)log_len);
         }
     }
+    Communication_SendMotorControlStatus();
 }
 
 static int parse_leg_nudge_mm_command(const char *cmd, int *leg, float *dx_mm, float *dy_mm)
@@ -491,6 +492,7 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         if (memcmp(&data[i], motor_stop_all_cmd, sizeof(motor_stop_all_cmd) - 1) == 0) {
             Leg_Control_StopAllDebugTargets(0);
             Communication_SendString("MOTOR_STOP_ALL ok\r\n");
+            Communication_SendMotorControlStatus();
             return;
         }
     }
@@ -518,10 +520,9 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         }
     }
 
-    /* PID bring-up intentionally exposes no leg, gait, hold, or trajectory
-       path.  The PC debug tool only uses MOTOR_SET (arm/plan), rescan, stop,
-       and snapshot during this zero-output stage. */
-    Communication_SendString("MOTOR_CONTROL rejected: pid_stage_single_motor_only\r\n");
+    /* Ignore unrelated UART payloads.  Motion/gait entries are deliberately
+       unreachable in this PID stage, but normal link traffic must not become
+       a repetitive text log. */
     return;
 
     for (uint16_t i = 0; i + sizeof(leg_all_micro_cmd) - 1 <= len; i++) {
@@ -1045,6 +1046,7 @@ static void handle_pid_control_text(const char *cmd_buf)
     }
     if (!accepted)
         Communication_SendString("MOTOR_CONTROL rejected: safety_gate\r\n");
+    Communication_SendMotorControlStatus();
 }
 
 void Communication_SendMotorControlStatus(void)
