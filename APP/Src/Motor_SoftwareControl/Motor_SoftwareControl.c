@@ -19,14 +19,22 @@
 #define SWCTRL_CASCADE_SIGNATURE_KP    0.50f
 #define SWCTRL_CASCADE_SIGNATURE_KD    0.0f
 #define SWCTRL_CASCADE_DURATION_MS     1000U
-#define SWCTRL_CASCADE_POSITION_KP     5.0f
-#define SWCTRL_CASCADE_SPEED_KP        0.05f
-#define SWCTRL_CASCADE_SPEED_KI        0.0f
+#define SWCTRL_CASCADE_POSITION_KP     35.9f
+#define SWCTRL_CASCADE_POSITION_KI     0.0f
+#define SWCTRL_CASCADE_POSITION_KD     1.0f
+#define SWCTRL_CASCADE_POSITION_MAX    10000.0f
+#define SWCTRL_CASCADE_SPEED_KP        0.01f
+#define SWCTRL_CASCADE_SPEED_KI        0.0006f
+#define SWCTRL_CASCADE_SPEED_KD        0.0015f
+#define SWCTRL_CASCADE_TORQUE_MAX      3.50f
+#define SWCTRL_CASCADE_INTEGRAL_MAX    0.20f
 
 static Motor_SoftwareControlSnapshot control;
 static uint32_t plan_start_ms;
 static uint32_t previous_feedback_timestamp;
 static const char *last_reject_reason = "none";
+static float cascade_position_error_previous;
+static float cascade_speed_error_previous;
 
 static float clampf(float value, float limit)
 {
@@ -55,6 +63,8 @@ void Motor_SoftwareControl_Init(void)
   control.target_velocity_limit = SWCTRL_TARGET_SPEED_RAD_S;
   plan_start_ms = 0U;
   previous_feedback_timestamp = 0U;
+  cascade_position_error_previous = 0.0f;
+  cascade_speed_error_previous = 0.0f;
   last_reject_reason = "none";
 }
 
@@ -122,6 +132,7 @@ int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
     control.position_loop_kp = SWCTRL_CASCADE_POSITION_KP;
     control.speed_loop_kp = SWCTRL_CASCADE_SPEED_KP;
     control.speed_loop_ki = SWCTRL_CASCADE_SPEED_KI;
+    control.torque_limit = SWCTRL_CASCADE_TORQUE_MAX;
   }
   control.duration_ms = duration_ms;
   control.elapsed_ms = 0U;
@@ -131,6 +142,8 @@ int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
    * human delay as one controller sample; the first new feedback after start
    * establishes the dry-run time base. */
   previous_feedback_timestamp = 0U;
+  cascade_position_error_previous = 0.0f;
+  cascade_speed_error_previous = 0.0f;
   return 1;
 }
 
@@ -176,11 +189,17 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
   control.filtered_velocity += alpha * (rotor_velocity - control.filtered_velocity);
   control.position_error = control.ramped_target - rotor_position;
   if (control.mode == Motor_SoftwareControl_CascadeDryRun) {
-    control.speed_target = clampf(control.position_loop_kp * control.position_error,
-                                  control.target_velocity_limit);
+    float position_delta = control.position_error - cascade_position_error_previous;
+    cascade_position_error_previous = control.position_error;
+    control.speed_target = clampf(SWCTRL_CASCADE_POSITION_KP * control.position_error +
+                                  SWCTRL_CASCADE_POSITION_KI * 0.0f +
+                                  SWCTRL_CASCADE_POSITION_KD * position_delta,
+                                  SWCTRL_CASCADE_POSITION_MAX);
     control.speed_error = control.speed_target - rotor_velocity;
-    control.p_term = control.speed_loop_kp * control.speed_error;
-    control.d_term = 0.0f;
+    float speed_delta = control.speed_error - cascade_speed_error_previous;
+    cascade_speed_error_previous = control.speed_error;
+    control.p_term = SWCTRL_CASCADE_SPEED_KP * control.speed_error;
+    control.d_term = SWCTRL_CASCADE_SPEED_KD * speed_delta;
   } else {
     control.p_term = control.kp * control.position_error;
     control.d_term = -control.kd * control.filtered_velocity;
@@ -190,11 +209,14 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
                              ? control.speed_error : control.position_error;
   float integral_gain = (control.mode == Motor_SoftwareControl_CascadeDryRun)
                             ? control.speed_loop_ki : control.ki;
-  float i_candidate = clampf(control.i_term + integral_gain * integral_error * dt,
-                             SWCTRL_INTEGRAL_LIMIT);
+  float integral_step = integral_gain * integral_error;
+  if (control.mode != Motor_SoftwareControl_CascadeDryRun) integral_step *= dt;
+  float integral_limit = (control.mode == Motor_SoftwareControl_CascadeDryRun)
+                             ? SWCTRL_CASCADE_INTEGRAL_MAX : SWCTRL_INTEGRAL_LIMIT;
+  float i_candidate = clampf(control.i_term + integral_step, integral_limit);
   float unsaturated = control.p_term + i_candidate + control.d_term;
   float limited = clampf(unsaturated, control.torque_limit);
-  if (limited == unsaturated || (control.position_error * unsaturated) < 0.0f)
+  if (limited == unsaturated || (integral_error * unsaturated) < 0.0f)
     control.i_term = i_candidate;
   control.calculated_torque = control.p_term + control.i_term + control.d_term;
   control.limited_torque = clampf(control.calculated_torque, control.torque_limit);
