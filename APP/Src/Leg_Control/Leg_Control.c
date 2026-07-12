@@ -1086,23 +1086,25 @@ void Leg_Control_Service(uint32_t now_ms)
                single_motor_control.duration_ms) {
       Leg_Control_ForceZeroOutput(Motor_Control_Reason_PlanTimeout);
       stopped = 1U;
-    } else if (absf_local(single_motor_control.target_rotor_position -
-                          state->rotor_position) > LEG_SINGLE_MOTOR_MAX_ERROR_RAD ||
-               absf_local(state->raw_velocity) > LEG_SINGLE_MOTOR_MAX_VELOCITY_RAD_S) {
-      Leg_Control_ForceZeroOutput(Motor_Control_Reason_SafetyLimit);
-      stopped = 1U;
     } else {
-      Motor_SoftwareControl_Update(state->rotor_position, state->raw_velocity,
-                                   state->timestamp, now_ms);
-      Motor_SoftwareControlSnapshot sw;
-      Motor_SoftwareControl_GetSnapshot(&sw);
-      if (sw.mode == Motor_SoftwareControl_Stopped) {
-        Motor_ControlReasonTypeDef reason = Motor_Control_Reason_SafetyLimit;
-        if (sw.stop_reason == Motor_SoftwareControl_StopInvalidDt ||
-            sw.stop_reason == Motor_SoftwareControl_StopInvalidNumber)
-          reason = Motor_Control_Reason_SafetyLimit;
-        Leg_Control_ForceZeroOutput(reason);
+      float plan_offset = absf_local(single_motor_control.target_rotor_position -
+                                     single_motor_control.arm_rotor_position);
+      float error_limit = (plan_offset <= 0.101f) ? 0.150f
+                                                  : LEG_SINGLE_MOTOR_MAX_ERROR_RAD;
+      if (absf_local(single_motor_control.target_rotor_position -
+                     state->rotor_position) > error_limit ||
+               absf_local(state->raw_velocity) > LEG_SINGLE_MOTOR_MAX_VELOCITY_RAD_S) {
+        Leg_Control_ForceZeroOutput(Motor_Control_Reason_SafetyLimit);
         stopped = 1U;
+      } else {
+        Motor_SoftwareControl_Update(state->rotor_position, state->raw_velocity,
+                                     state->timestamp, now_ms);
+        Motor_SoftwareControlSnapshot sw;
+        Motor_SoftwareControl_GetSnapshot(&sw);
+        if (sw.mode == Motor_SoftwareControl_Stopped) {
+          Leg_Control_ForceZeroOutput(Motor_Control_Reason_SafetyLimit);
+          stopped = 1U;
+        }
       }
     }
     if (stopped) {

@@ -127,15 +127,19 @@ int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
     Motor_SoftwareControl_Stop(Motor_SoftwareControl_StopInvalidCommand);
     return 0;
   }
-  /* Stage-2 fleet validation is calculation-only. Both the prior one-radian
-   * plan and all eight ±0.1 rad tuples remain behind the transport zero gate. */
-  control.mode = (matches_cascade_dry_run(motor_index, offset_rad, kp, kd,
-                                          duration_ms) ||
-                  matches_fleet_dry_run(motor_index, offset_rad, kp, kd,
-                                        duration_ms))
-                     ? Motor_SoftwareControl_CascadeDryRun
-                     : Motor_SoftwareControl_DryRun;
-  control.dry_run = 1U;
+  uint8_t fleet_match = matches_fleet_dry_run(motor_index, offset_rad, kp, kd,
+                                               duration_ms);
+  /* All eight exact +0.1 rad tuples are authorized, still mutually exclusive
+   * through the single armed motor. Negative and one-radian plans stay dry-run. */
+  if (fleet_match && offset_rad > 0.0f)
+    control.mode = Motor_SoftwareControl_CascadeActiveTorque;
+  else if (fleet_match || matches_cascade_dry_run(motor_index, offset_rad, kp, kd,
+                                                   duration_ms))
+    control.mode = Motor_SoftwareControl_CascadeDryRun;
+  else
+    control.mode = Motor_SoftwareControl_DryRun;
+  control.dry_run = (control.mode == Motor_SoftwareControl_CascadeActiveTorque)
+                        ? 0U : 1U;
   control.stop_reason = Motor_SoftwareControl_StopNone;
   control.raw_target = control.arm_position + offset_rad;
   control.ramped_target = control.arm_position;
