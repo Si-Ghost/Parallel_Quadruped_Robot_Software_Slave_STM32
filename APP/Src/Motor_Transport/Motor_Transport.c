@@ -11,8 +11,8 @@
 #define MOTOR_TRANSPORT_OFFLINE_TIMEOUT_MS 100U
 #define MOTOR_TRANSPORT_QUIESCE_TIMEOUT_MS 5U
 
-/* Live output remains restricted by the exact single-motor software signature. */
-#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 0U
+/* Re-lock after the approved positive fleet test batch completed. */
+#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 1U
 
 _Static_assert((MOTOR_TRANSPORT_RING_SIZE & (MOTOR_TRANSPORT_RING_SIZE - 1U)) == 0U,
                "motor RX ring size must be a power of two");
