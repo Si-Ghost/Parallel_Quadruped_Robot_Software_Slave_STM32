@@ -473,8 +473,9 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
     for (uint16_t i = 0; i + sizeof(pid_plan_cmd) - 1 <= len; i++) {
         if (memcmp(&data[i], pid_plan_cmd, sizeof(pid_plan_cmd) - 1) == 0) {
             char cmd_buf[96];
-            uint16_t copy_len = (len < sizeof(cmd_buf) - 1U) ? len : sizeof(cmd_buf) - 1U;
-            memcpy(cmd_buf, data, copy_len);
+            uint16_t copy_len = len - i;
+            if (copy_len >= sizeof(cmd_buf)) copy_len = sizeof(cmd_buf) - 1U;
+            memcpy(cmd_buf, &data[i], copy_len);
             cmd_buf[copy_len] = '\0';
             handle_pid_control_text(cmd_buf);
             return;
@@ -483,8 +484,9 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
     for (uint16_t i = 0; i + sizeof(pid_arm_cmd) - 1 <= len; i++) {
         if (memcmp(&data[i], pid_arm_cmd, sizeof(pid_arm_cmd) - 1) == 0) {
             char cmd_buf[32];
-            uint16_t copy_len = (len < sizeof(cmd_buf) - 1U) ? len : sizeof(cmd_buf) - 1U;
-            memcpy(cmd_buf, data, copy_len);
+            uint16_t copy_len = len - i;
+            if (copy_len >= sizeof(cmd_buf)) copy_len = sizeof(cmd_buf) - 1U;
+            memcpy(cmd_buf, &data[i], copy_len);
             cmd_buf[copy_len] = '\0';
             handle_pid_control_text(cmd_buf);
             return;
@@ -1054,34 +1056,52 @@ static int parse_pid_arm_command(const char *cmd, int *motor)
 }
 
 static int parse_pid_plan_command(const char *cmd, int *motor, int *offset_mrad,
-                                  int *kp_milli, int *kw_milli, int *duration_ms)
+                                  int *kp_milli, int *kw_milli, int *duration_ms,
+                                  const char **reason)
 {
     const char *p = cmd;
+    *reason = "prefix";
     if (memcmp(p, pid_plan_cmd, sizeof(pid_plan_cmd) - 1) != 0) return 0;
     p += sizeof(pid_plan_cmd) - 1;
+    *reason = "separator";
     if (*p != ' ' && *p != '\t') return 0;
-    if (!parse_int_value(&p, motor) || !parse_int_value(&p, offset_mrad) ||
-        !parse_int_value(&p, kp_milli) || !parse_int_value(&p, kw_milli) ||
-        !parse_int_value(&p, duration_ms)) return 0;
+    *reason = "motor";
+    if (!parse_int_value(&p, motor)) return 0;
+    *reason = "offset_mrad";
+    if (!parse_int_value(&p, offset_mrad)) return 0;
+    *reason = "kp_milli";
+    if (!parse_int_value(&p, kp_milli)) return 0;
+    *reason = "kw_milli";
+    if (!parse_int_value(&p, kw_milli)) return 0;
+    *reason = "duration_ms";
+    if (!parse_int_value(&p, duration_ms)) return 0;
     p = skip_spaces(p);
-    return *p == '\0';
+    *reason = "trailing";
+    if (*p != '\0') return 0;
+    *reason = "ok";
+    return 1;
 }
 
 static void handle_pid_control_text(const char *cmd_buf)
 {
     int motor = -1, offset_mrad = 0, kp_milli = 0, kw_milli = 0, duration_ms = 0;
     int accepted = 0;
+    const char *parse_reason = "arm_or_plan";
     if (parse_pid_arm_command(cmd_buf, &motor)) {
         if (motor >= 0 && motor < 8)
             accepted = Leg_Control_ArmSingleMotor((uint8_t)motor);
     } else if (parse_pid_plan_command(cmd_buf, &motor, &offset_mrad, &kp_milli,
-                                      &kw_milli, &duration_ms)) {
+                                      &kw_milli, &duration_ms, &parse_reason)) {
         if (motor >= 0 && motor < 8)
             accepted = Leg_Control_PlanSingleMotor((uint8_t)motor,
                         (float)offset_mrad / 1000.0f, (float)kp_milli / 1000.0f,
                         (float)kw_milli / 1000.0f, (uint32_t)duration_ms);
     } else {
-        Communication_SendString("MOTOR_CONTROL rejected: parse\r\n");
+        char buf[144];
+        int len = snprintf(buf, sizeof(buf), "PID_RX rejected reason=%s raw=%s\r\n",
+                           parse_reason, cmd_buf);
+        if (len > 0 && len < (int)sizeof(buf))
+            Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
         return;
     }
     if (!accepted)
