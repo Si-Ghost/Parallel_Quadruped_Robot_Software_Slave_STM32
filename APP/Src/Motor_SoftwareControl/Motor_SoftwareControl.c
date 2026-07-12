@@ -3,7 +3,7 @@
 #include <math.h>
 #include <string.h>
 
-#define SWCTRL_MAX_OFFSET_RAD          0.30f
+#define SWCTRL_MAX_OFFSET_RAD          1.001f
 #define SWCTRL_MAX_KP                  0.50f
 #define SWCTRL_MAX_KD                  0.05f
 #define SWCTRL_MAX_DURATION_MS         1500U
