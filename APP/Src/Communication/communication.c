@@ -32,6 +32,9 @@ typedef struct
 } Communication_ContextTypeDef;
 
 static Communication_ContextTypeDef comm_ctx = {0};
+/* A control state reply is operator-facing telemetry.  Unlike periodic logs,
+ * retain one pending reply when USART6 is occupied by angle/status telemetry. */
+static volatile uint8_t motor_control_status_pending = 0U;
 
 static const char esp32_hello[] = "ESP32_HELLO";
 static const char stm32_ack[] = "STM32_ACK\n";
@@ -823,6 +826,11 @@ void Communication_Task(void)
     if (comm_ctx.handshake_done && !Communication_IsLinkAlive()) {
         Communication_SetSafeRCData();
     }
+
+    if (motor_control_status_pending && !comm_ctx.tx_busy) {
+        motor_control_status_pending = 0U;
+        Communication_SendMotorControlStatus();
+    }
 }
 
 void Communication_NotifyTxComplete(void)
@@ -1083,6 +1091,11 @@ static void handle_pid_control_text(const char *cmd_buf)
 
 void Communication_SendMotorControlStatus(void)
 {
+    if (!comm_ctx.uart || comm_ctx.tx_busy) {
+        motor_control_status_pending = 1U;
+        return;
+    }
+
     Motor_ControlSnapshotTypeDef control;
     Leg_Control_GetControlSnapshot(&control);
 
