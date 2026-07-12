@@ -12,6 +12,7 @@ extern volatile uint32_t last_valid_packet_tick;
 #define RX_BUF_SIZE 128
 #define TX_IT_BUF_SIZE 256
 #define RX_SNAPSHOT_SIZE 16
+#define TEXT_COMMAND_BUF_SIZE 128
 
 typedef struct
 {
@@ -35,6 +36,11 @@ static Communication_ContextTypeDef comm_ctx = {0};
 /* A control state reply is operator-facing telemetry.  Unlike periodic logs,
  * retain one pending reply when USART6 is occupied by angle/status telemetry. */
 static volatile uint8_t motor_control_status_pending = 0U;
+/* Receive-to-idle can split one UART text command across callbacks.  Keep a
+ * foreground line accumulator so command recognition never depends on the
+ * callback boundary chosen by the UART idle detector. */
+static char text_command_buf[TEXT_COMMAND_BUF_SIZE];
+static uint16_t text_command_len = 0U;
 
 static const char esp32_hello[] = "ESP32_HELLO";
 static const char stm32_ack[] = "STM32_ACK\n";
@@ -781,6 +787,39 @@ void Communication_Init(UART_HandleTypeDef *huart)
     restart_esp32_rx();
 }
 
+static void consume_text_command_stream(const uint8_t *data, uint16_t len)
+{
+    if (data == NULL) return;
+
+    for (uint16_t i = 0U; i < len; ++i) {
+        uint8_t byte = data[i];
+        if (byte == '\r' || byte == '\n') {
+            if (text_command_len > 0U) {
+                text_command_buf[text_command_len] = '\0';
+                handle_motor_debug_command((const uint8_t *)text_command_buf,
+                                           text_command_len);
+                text_command_len = 0U;
+            }
+            continue;
+        }
+
+        if (byte < 0x20U || byte > 0x7EU) {
+            /* A binary RC frame cannot be part of a text command. */
+            text_command_len = 0U;
+            continue;
+        }
+
+        if (text_command_len == 0U && byte != 'M' && byte != 'P' && byte != 'L')
+            continue;
+
+        if (text_command_len >= TEXT_COMMAND_BUF_SIZE - 1U) {
+            text_command_len = 0U;
+            continue;
+        }
+        text_command_buf[text_command_len++] = (char)byte;
+    }
+}
+
 void Communication_RxCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
     /* USART6 承载来自 ESP32 的遥控帧和文本调试指令。 */
@@ -796,7 +835,7 @@ void Communication_RxCallback(UART_HandleTypeDef *huart, uint16_t Size)
     memcpy((void *)comm_ctx.rx_snapshot, comm_ctx.rx_buf, snap_len);
 
     handle_hello(comm_ctx.rx_buf, Size);
-    handle_motor_debug_command(comm_ctx.rx_buf, Size);
+    consume_text_command_stream(comm_ctx.rx_buf, Size);
     int parsed_len = parse_frame(comm_ctx.rx_buf, Size);
     send_esp32_rx_echo(Size, parsed_len > 0);
     restart_esp32_rx();
