@@ -27,6 +27,7 @@
 #define SWCTRL_CASCADE_SPEED_KI        0.00006f
 #define SWCTRL_CASCADE_SPEED_KD        0.0015f
 #define SWCTRL_CASCADE_TORQUE_MAX      0.10f
+#define SWCTRL_RF_ID0_LIVE_TORQUE_MAX  0.05f
 #define SWCTRL_CASCADE_INTEGRAL_MAX    0.20f
 #define SWCTRL_FLEET_OFFSET_RAD        0.100f
 #define SWCTRL_FLEET_DURATION_MS       1500U
@@ -50,6 +51,17 @@ static uint8_t matches_cascade_dry_run(uint8_t motor_index, float offset_rad,
 {
   return motor_index < 8U &&
          fabsf(fabsf(offset_rad) - SWCTRL_CASCADE_OFFSET_RAD) <= SWCTRL_MATCH_EPSILON &&
+         fabsf(kp - SWCTRL_CASCADE_SIGNATURE_KP) <= SWCTRL_MATCH_EPSILON &&
+         fabsf(kd - SWCTRL_CASCADE_SIGNATURE_KD) <= SWCTRL_MATCH_EPSILON &&
+         duration_ms == SWCTRL_CASCADE_DURATION_MS;
+}
+
+static uint8_t matches_rf_id0_safe_live(uint8_t motor_index, float offset_rad,
+                                        float kp, float kd,
+                                        uint32_t duration_ms)
+{
+  return motor_index == SWCTRL_CASCADE_MOTOR_INDEX &&
+         fabsf(offset_rad - SWCTRL_CASCADE_OFFSET_RAD) <= SWCTRL_MATCH_EPSILON &&
          fabsf(kp - SWCTRL_CASCADE_SIGNATURE_KP) <= SWCTRL_MATCH_EPSILON &&
          fabsf(kd - SWCTRL_CASCADE_SIGNATURE_KD) <= SWCTRL_MATCH_EPSILON &&
          duration_ms == SWCTRL_CASCADE_DURATION_MS;
@@ -129,10 +141,11 @@ int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
   }
   uint8_t fleet_match = matches_fleet_dry_run(motor_index, offset_rad, kp, kd,
                                                duration_ms);
-  /* The revised speed envelope is calculation-only until a fresh dry-run has
-   * been reviewed. */
-  if (fleet_match || matches_cascade_dry_run(motor_index, offset_rad, kp, kd,
-                                              duration_ms))
+  /* Only the reviewed RF ID0 positive safe-envelope signature is live. */
+  if (matches_rf_id0_safe_live(motor_index, offset_rad, kp, kd, duration_ms))
+    control.mode = Motor_SoftwareControl_CascadeActiveTorque;
+  else if (fleet_match || matches_cascade_dry_run(motor_index, offset_rad, kp,
+                                                   kd, duration_ms))
     control.mode = Motor_SoftwareControl_CascadeDryRun;
   else
     control.mode = Motor_SoftwareControl_DryRun;
@@ -149,7 +162,10 @@ int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
     control.position_loop_kp = SWCTRL_CASCADE_POSITION_KP;
     control.speed_loop_kp = SWCTRL_CASCADE_SPEED_KP;
     control.speed_loop_ki = SWCTRL_CASCADE_SPEED_KI;
-    control.torque_limit = SWCTRL_CASCADE_TORQUE_MAX;
+    control.torque_limit =
+        (control.mode == Motor_SoftwareControl_CascadeActiveTorque)
+            ? SWCTRL_RF_ID0_LIVE_TORQUE_MAX
+            : SWCTRL_CASCADE_TORQUE_MAX;
   }
   control.duration_ms = duration_ms;
   control.elapsed_ms = 0U;
