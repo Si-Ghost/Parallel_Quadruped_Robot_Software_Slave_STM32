@@ -129,10 +129,12 @@ int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
   }
   uint8_t fleet_match = matches_fleet_dry_run(motor_index, offset_rad, kp, kd,
                                                duration_ms);
-  /* Eight-motor ±1 rad validation is dry-run only. Revoke prior fleet live
-   * authorizations while expanded motion is audited. */
-  if (fleet_match || matches_cascade_dry_run(motor_index, offset_rad, kp, kd,
-                                              duration_ms))
+  /* The eight-motor +/-1 rad cascade plan has completed dry-run review and is
+   * the only live software-torque signature. Keep the former +/-0.1 rad fleet
+   * plan dry-run-only so an old UI request cannot regain live authority. */
+  if (matches_cascade_dry_run(motor_index, offset_rad, kp, kd, duration_ms))
+    control.mode = Motor_SoftwareControl_CascadeActiveTorque;
+  else if (fleet_match)
     control.mode = Motor_SoftwareControl_CascadeDryRun;
   else
     control.mode = Motor_SoftwareControl_DryRun;
