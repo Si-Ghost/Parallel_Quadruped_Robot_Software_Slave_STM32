@@ -35,7 +35,6 @@ extern UART_HandleTypeDef huart8;
 #define LEG_IO_ERROR_OFFLINE_COUNT  5U
 #define LEG_IO_RETRY_COUNT          1U
 #define LEG_ROTOR_ZERO_NEAR_RAD     1.50f
-#define LEG_SINGLE_MOTOR_LIVE_INDEX            0U /* LF ID0 only in first live test. */
 #define LEG_SINGLE_MOTOR_MAX_ROTOR_OFFSET_RAD 0.30f
 #define LEG_SINGLE_MOTOR_MAX_KP               0.50f
 #define LEG_SINGLE_MOTOR_MAX_KW               0.05f
@@ -662,11 +661,6 @@ int Leg_Control_SetDebugFootOffset(uint8_t leg, float dx_mm, float dy_mm)
 
 int Leg_Control_ArmSingleMotor(uint8_t motor_index)
 {
-  if (motor_index != LEG_SINGLE_MOTOR_LIVE_INDEX) {
-    single_motor_last_plan_reject_reason = "live_motor_not_lf_id0";
-    Leg_Control_ForceZeroOutput(Motor_Control_Reason_InvalidCommand);
-    return 0;
-  }
   Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
   if (state == NULL || state->online != Motor_Online ||
       state->angle_valid != Motor_Angle_Valid) {
@@ -691,9 +685,7 @@ int Leg_Control_PlanSingleMotor(uint8_t motor_index, float offset_rad,
                                 float kp, float kw, uint32_t duration_ms)
 {
   Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
-  if (motor_index != LEG_SINGLE_MOTOR_LIVE_INDEX) {
-    single_motor_last_plan_reject_reason = "live_motor_not_lf_id0";
-  } else if (state == NULL || state->online != Motor_Online ||
+  if (state == NULL || state->online != Motor_Online ||
       state->angle_valid != Motor_Angle_Valid) {
     single_motor_last_plan_reject_reason = "offline_or_feedback_invalid";
   } else if (offset_rad <= 0.0f) {
@@ -734,7 +726,7 @@ int Leg_Control_PlanSingleMotor(uint8_t motor_index, float offset_rad,
   single_motor_control.duration_ms = duration_ms;
   single_motor_control.plan_start_tick = HAL_GetTick();
 
-  /* First live path: only the armed LF ID0 holds this bounded driver PD frame;
+  /* Live path: only the currently armed global motor holds this bounded PD frame;
    * Leg_Control_ForceZeroOutput keeps the remaining seven command slots zero. */
   MOTOR_send *cmd = &Legs[motor_index / 2U]->motor_cmd[motor_index % 2U];
   cmd->mode = 1U;
