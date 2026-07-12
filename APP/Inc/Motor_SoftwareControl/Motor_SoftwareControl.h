@@ -12,7 +12,8 @@ typedef enum
   Motor_SoftwareControl_ActiveTorque = 4,
   Motor_SoftwareControl_CascadeDryRun = 5,
   Motor_SoftwareControl_CascadeActiveTorque = 6,
-  Motor_SoftwareControl_StaticHoldDryRun = 7
+  Motor_SoftwareControl_StaticHoldDryRun = 7,
+  Motor_SoftwareControl_StaticHoldActiveTorque = 8
 } Motor_SoftwareControlMode;
 
 typedef enum
@@ -59,6 +60,7 @@ typedef struct
   float position_error;
   float raw_velocity;
   float filtered_velocity;
+  float feedback_torque;
   float kp;
   float ki;
   float kd;
@@ -95,7 +97,10 @@ int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
                                       uint32_t now_ms);
 int Motor_SoftwareControl_StartStaticHoldDryRun(uint8_t motor_index,
                                                 uint32_t now_ms);
+int Motor_SoftwareControl_StartStaticHoldActive(uint8_t motor_index,
+                                                uint32_t now_ms);
 void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
+                                  float feedback_torque,
                                   uint32_t feedback_timestamp, uint32_t now_ms);
 void Motor_SoftwareControl_Stop(Motor_SoftwareControlStopReason reason);
 void Motor_SoftwareControl_GetSnapshot(Motor_SoftwareControlSnapshot *snapshot);

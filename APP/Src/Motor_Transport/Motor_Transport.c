@@ -11,8 +11,11 @@
 #define MOTOR_TRANSPORT_OFFLINE_TIMEOUT_MS 100U
 #define MOTOR_TRANSPORT_QUIESCE_TIMEOUT_MS 5U
 
-/* Re-lock after the approved positive fleet test batch completed. */
-#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 1U
+/* Approved 2026-07-13: one RF ID0 static-hold test.  The callback and the
+ * final frame builder both restrict live torque to global index 2. */
+#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 0U
+#define MOTOR_TRANSPORT_LIVE_LEG         1U
+#define MOTOR_TRANSPORT_LIVE_MOTOR       0U
 
 _Static_assert((MOTOR_TRANSPORT_RING_SIZE & (MOTOR_TRANSPORT_RING_SIZE - 1U)) == 0U,
                "motor RX ring size must be a power of two");
@@ -116,13 +119,18 @@ static void prepare_tx_frame(Motor_TransportChannel *channel, uint8_t motor)
   if (transport_callbacks.load_command != NULL)
     (void)transport_callbacks.load_command(channel->leg_index, motor, &command);
 
-#if MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY
+  /* Driver-side position/velocity PD is never part of the approved test. */
   command.mode = 1U;
-  command.T = 0.0f;
   command.W = 0.0f;
   command.Pos = 0.0f;
   command.K_P = 0.0f;
   command.K_W = 0.0f;
+  if (channel->leg_index != MOTOR_TRANSPORT_LIVE_LEG ||
+      motor != MOTOR_TRANSPORT_LIVE_MOTOR)
+    command.T = 0.0f;
+
+#if MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY
+  command.T = 0.0f;
 #endif
 
   command.id = motor;

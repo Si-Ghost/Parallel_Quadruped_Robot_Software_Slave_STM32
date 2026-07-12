@@ -819,6 +819,55 @@ int Leg_Control_StartStaticHoldDryRun(uint8_t motor_index)
   return 1;
 }
 
+int Leg_Control_StartStaticHoldActive(uint8_t motor_index)
+{
+  Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
+  if (motor_index != LEG_STATIC_HOLD_MOTOR_INDEX) {
+    single_motor_last_plan_reject_reason = "static_hold_motor_locked";
+  } else if (Motor_Transport_IsZeroOutputOnly() != 0U) {
+    single_motor_last_plan_reject_reason = "transport_zero_guard";
+  } else if (state == NULL || state->online != Motor_Online ||
+             state->angle_valid != Motor_Angle_Valid) {
+    single_motor_last_plan_reject_reason = "offline_or_feedback_invalid";
+  } else if (single_motor_control.mode != Motor_Control_ArmedSingleMotor) {
+    single_motor_last_plan_reject_reason = "not_armed";
+  } else if (single_motor_control.armed_motor_index != (int8_t)motor_index) {
+    single_motor_last_plan_reject_reason = "different_armed_motor";
+  } else {
+    single_motor_last_plan_reject_reason = "none";
+  }
+
+  if (strcmp(single_motor_last_plan_reject_reason, "none") != 0) {
+    Leg_Control_ForceZeroOutput(Motor_Control_Reason_InvalidCommand);
+    return 0;
+  }
+
+  if (!Motor_SoftwareControl_StartStaticHoldActive(motor_index,
+                                                    HAL_GetTick())) {
+    single_motor_last_plan_reject_reason =
+        Motor_SoftwareControl_GetLastRejectReason();
+    Leg_Control_ForceZeroOutput(Motor_Control_Reason_InvalidCommand);
+    return 0;
+  }
+
+  __disable_irq();
+  single_motor_control.mode = Motor_Control_StaticHoldActive;
+  single_motor_control.reason = Motor_Control_Reason_None;
+  single_motor_control.target_rotor_position =
+      single_motor_control.arm_rotor_position;
+  single_motor_control.kp = 0.0f;
+  single_motor_control.kw = 0.0f;
+  single_motor_control.duration_ms = LEG_STATIC_HOLD_DURATION_MS;
+  single_motor_control.plan_start_tick = HAL_GetTick();
+
+  /* Driver-side PD remains disabled.  Motor_Transport accepts only the
+   * software torque for RF ID0 and hard-clamps every other motor to zero. */
+  MOTOR_send *cmd = &Legs[motor_index / 2U]->motor_cmd[motor_index % 2U];
+  set_zero_command(cmd, motor_index % 2U);
+  __enable_irq();
+  return 1;
+}
+
 const char *Leg_Control_GetLastPlanRejectReason(void)
 {
   return single_motor_last_plan_reject_reason;
@@ -1123,11 +1172,13 @@ void Leg_Control_Service(uint32_t now_ms)
   }
 
   if (single_motor_control.mode == Motor_Control_SingleMotorPosition ||
-      single_motor_control.mode == Motor_Control_StaticHoldDryRun) {
+      single_motor_control.mode == Motor_Control_StaticHoldDryRun ||
+      single_motor_control.mode == Motor_Control_StaticHoldActive) {
     uint8_t motor_index = (uint8_t)single_motor_control.armed_motor_index;
     Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
     uint8_t stopped = 0U;
-    if (single_motor_control.mode == Motor_Control_StaticHoldDryRun &&
+    if ((single_motor_control.mode == Motor_Control_StaticHoldDryRun ||
+         single_motor_control.mode == Motor_Control_StaticHoldActive) &&
         !Communication_IsLinkAlive()) {
       Leg_Control_ForceZeroOutput(Motor_Control_Reason_CommandLink);
       stopped = 1U;
@@ -1154,6 +1205,7 @@ void Leg_Control_Service(uint32_t now_ms)
         stopped = 1U;
       } else {
         Motor_SoftwareControl_Update(state->rotor_position, state->raw_velocity,
+                                     state->raw_torque,
                                      state->timestamp, now_ms);
         Motor_SoftwareControlSnapshot sw;
         Motor_SoftwareControl_GetSnapshot(&sw);

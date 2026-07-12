@@ -64,6 +64,7 @@ static const char motor_hold_current_cmd[] = "MOTOR_HOLD_CURRENT";
 static const char pid_arm_cmd[] = "PID_ARM";
 static const char pid_plan_cmd[] = "PID_PLAN";
 static const char pid_hold_dryrun_cmd[] = "PID_HOLD_DRYRUN";
+static const char pid_hold_active_cmd[] = "PID_HOLD_ACTIVE";
 static const char leg_nudge_mm_cmd[] = "LEG_NUDGE_MM";
 static const char leg_trace_cmd[] = "LEG_TRACE";
 static const char leg_snapshot_cmd[] = "LEG_SNAPSHOT";
@@ -488,6 +489,7 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         len < sizeof(pid_arm_cmd) - 1 &&
         len < sizeof(pid_plan_cmd) - 1 &&
         len < sizeof(pid_hold_dryrun_cmd) - 1 &&
+        len < sizeof(pid_hold_active_cmd) - 1 &&
         len < sizeof(leg_nudge_mm_cmd) - 1 &&
         len < sizeof(leg_trace_cmd) - 1 &&
         len < sizeof(leg_snapshot_cmd) - 1 &&
@@ -500,6 +502,18 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         len < sizeof(leg_loaded_step_cmd) - 1)
         return;
 
+    for (uint16_t i = 0; i + sizeof(pid_hold_active_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], pid_hold_active_cmd,
+                   sizeof(pid_hold_active_cmd) - 1) == 0) {
+            char cmd_buf[40];
+            uint16_t copy_len = len - i;
+            if (copy_len >= sizeof(cmd_buf)) copy_len = sizeof(cmd_buf) - 1U;
+            memcpy(cmd_buf, &data[i], copy_len);
+            cmd_buf[copy_len] = '\0';
+            handle_pid_control_text(cmd_buf);
+            return;
+        }
+    }
     for (uint16_t i = 0; i + sizeof(pid_hold_dryrun_cmd) - 1 <= len; i++) {
         if (memcmp(&data[i], pid_hold_dryrun_cmd,
                    sizeof(pid_hold_dryrun_cmd) - 1) == 0) {
@@ -1180,6 +1194,18 @@ static int parse_pid_hold_dryrun_command(const char *cmd, int *motor)
     return *p == '\0';
 }
 
+static int parse_pid_hold_active_command(const char *cmd, int *motor)
+{
+    const char *p = cmd;
+    if (memcmp(p, pid_hold_active_cmd,
+               sizeof(pid_hold_active_cmd) - 1) != 0) return 0;
+    p += sizeof(pid_hold_active_cmd) - 1;
+    if (*p != ' ' && *p != '\t') return 0;
+    if (!parse_int_value(&p, motor)) return 0;
+    p = skip_spaces(p);
+    return *p == '\0';
+}
+
 static void send_static_hold_plan(void)
 {
     Motor_SoftwareControlSnapshot s;
@@ -1191,7 +1217,7 @@ static void send_static_hold_plan(void)
         "\"skp\":%ld,\"ski\":%ld,\"skd\":%ld,"
         "\"tmax\":%ld,\"vtmax\":%ld,\"vmax\":%ld,"
         "\"dropmax\":%ld,\"dur\":%lu,\"drvkp\":0,\"drvkw\":0,"
-        "\"guard\":%u}\n",
+        "\"liveonce\":1,\"livei\":2,\"guard\":%u}\n",
         (unsigned int)s.dry_run, (int)s.motor_index,
         (long)(s.position_loop_kp * 1000000.0f),
         (long)(s.position_loop_ki * 1000000.0f),
@@ -1252,6 +1278,9 @@ static void handle_pid_control_text(const char *cmd_buf)
     } else if (parse_pid_hold_dryrun_command(cmd_buf, &motor)) {
         if (motor >= 0 && motor < 8)
             accepted = Leg_Control_StartStaticHoldDryRun((uint8_t)motor);
+    } else if (parse_pid_hold_active_command(cmd_buf, &motor)) {
+        if (motor >= 0 && motor < 8)
+            accepted = Leg_Control_StartStaticHoldActive((uint8_t)motor);
     } else if (parse_pid_plan_command(cmd_buf, &motor, &offset_mrad, &kp_milli,
                                       &kw_milli, &duration_ms, &parse_reason)) {
         if (motor >= 0 && motor < 8)
@@ -1284,7 +1313,8 @@ static void handle_pid_control_text(const char *cmd_buf)
         if (len > 0 && len < (int)sizeof(buf))
             Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
     }
-    if (accepted && parse_pid_hold_dryrun_command(cmd_buf, &motor))
+    if (accepted && (parse_pid_hold_dryrun_command(cmd_buf, &motor) ||
+                     parse_pid_hold_active_command(cmd_buf, &motor)))
         send_static_hold_plan();
     Communication_SendMotorControlStatus();
 }
@@ -1335,6 +1365,7 @@ void Communication_SendSoftwarePidTelemetry(void)
         s.mode != Motor_SoftwareControl_CascadeDryRun &&
         s.mode != Motor_SoftwareControl_CascadeActiveTorque &&
         s.mode != Motor_SoftwareControl_StaticHoldDryRun &&
+        s.mode != Motor_SoftwareControl_StaticHoldActiveTorque &&
         s.mode != Motor_SoftwareControl_Stopped) return;
 
     /* Alternate two bounded records. Each remains comfortably below the
@@ -1346,7 +1377,7 @@ void Communication_SendSoftwarePidTelemetry(void)
         float excursion = deviation >= 0.0f ? deviation : -deviation;
         len = snprintf(buf, sizeof(buf),
             "SW_HOLD_STATE {\"m\":%u,\"i\":%d,\"a\":%ld,\"p\":%ld,"
-            "\"dev\":%ld,\"x\":%ld,\"e\":%ld,\"v\":%ld,\"fv\":%ld,"
+            "\"dev\":%ld,\"x\":%ld,\"e\":%ld,\"v\":%ld,\"fv\":%ld,\"ft\":%ld,"
             "\"dt\":%lu,\"el\":%lu,\"stop\":%u,\"sl\":%u}\n",
             (unsigned int)s.mode, (int)s.motor_index,
             (long)(s.arm_position * 1000000.0f),
@@ -1356,6 +1387,7 @@ void Communication_SendSoftwarePidTelemetry(void)
             (long)(s.position_error * 1000000.0f),
             (long)(s.raw_velocity * 1000000.0f),
             (long)(s.filtered_velocity * 1000000.0f),
+            (long)(s.feedback_torque * 1000000.0f),
             (unsigned long)(s.dt_s * 1000000.0f),
             (unsigned long)s.elapsed_ms, (unsigned int)s.stop_reason,
             (unsigned int)s.safety_limit);
