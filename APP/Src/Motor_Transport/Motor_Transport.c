@@ -312,6 +312,7 @@ HAL_StatusTypeDef Motor_Transport_Start(void)
 
   transport_running = 0U;
   transport_ticks = 0U;
+  uint32_t now = HAL_GetTick();
   for (uint8_t i = 0U; i < MOTOR_TRANSPORT_CHANNEL_COUNT; ++i) {
     Motor_TransportChannel *channel = &channels[i];
     (void)HAL_UART_Abort(channel->uart);
@@ -342,7 +343,6 @@ void Motor_Transport_Service(void)
 {
   if (!transport_running) return;
 
-  uint32_t now = HAL_GetTick();
   for (uint8_t i = 0U; i < MOTOR_TRANSPORT_CHANNEL_COUNT; ++i) {
     Motor_TransportChannel *channel = &channels[i];
     if (!channel->restart_rx && !rx_ring_is_armed(channel)) {
