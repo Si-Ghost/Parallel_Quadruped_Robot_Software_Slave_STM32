@@ -26,7 +26,7 @@
 #define SWCTRL_CASCADE_SPEED_KP        0.01f
 #define SWCTRL_CASCADE_SPEED_KI        0.00006f
 #define SWCTRL_CASCADE_SPEED_KD        0.0015f
-#define SWCTRL_CASCADE_TORQUE_MAX      0.05f
+#define SWCTRL_CASCADE_TORQUE_MAX      0.10f
 #define SWCTRL_CASCADE_INTEGRAL_MAX    0.20f
 
 static Motor_SoftwareControlSnapshot control;
@@ -115,14 +115,12 @@ int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
     Motor_SoftwareControl_Stop(Motor_SoftwareControl_StopInvalidCommand);
     return 0;
   }
-  /* Exact extended-duration RF tuple is authorized for one bounded live test;
-   * every other valid plan remains calculation-only. */
+  /* Higher-torque RF boundary returns to dry-run before any live output. */
   control.mode = matches_cascade_dry_run(motor_index, offset_rad, kp, kd,
                                          duration_ms)
-                     ? Motor_SoftwareControl_CascadeActiveTorque
+                     ? Motor_SoftwareControl_CascadeDryRun
                      : Motor_SoftwareControl_DryRun;
-  control.dry_run = (control.mode == Motor_SoftwareControl_CascadeActiveTorque)
-                        ? 0U : 1U;
+  control.dry_run = 1U;
   control.stop_reason = Motor_SoftwareControl_StopNone;
   control.raw_target = control.arm_position + offset_rad;
   control.ramped_target = control.arm_position;

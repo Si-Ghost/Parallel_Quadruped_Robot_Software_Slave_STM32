@@ -11,8 +11,8 @@
 #define MOTOR_TRANSPORT_OFFLINE_TIMEOUT_MS 100U
 #define MOTOR_TRANSPORT_QUIESCE_TIMEOUT_MS 5U
 
-/* Open only for the approved extended-duration RF ID0 cascade test. */
-#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 0U
+/* Higher-torque RF boundary is dry-run only pending telemetry review. */
+#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 1U
 
 _Static_assert((MOTOR_TRANSPORT_RING_SIZE & (MOTOR_TRANSPORT_RING_SIZE - 1U)) == 0U,
                "motor RX ring size must be a power of two");
