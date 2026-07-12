@@ -520,6 +520,38 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         }
     }
 
+    /* Keep the already deployed MOTOR_SET bridge compatible: it is the
+       zero-offset arm command used by the PC tool before PID_PLAN is used. */
+    for (uint16_t i = 0; i + sizeof(motor_set_mrad_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], motor_set_mrad_cmd, sizeof(motor_set_mrad_cmd) - 1) == 0) {
+            char cmd_buf[48];
+            uint16_t copy_len = len - i;
+            if (copy_len >= sizeof(cmd_buf)) copy_len = sizeof(cmd_buf) - 1U;
+            memcpy(cmd_buf, &data[i], copy_len);
+            cmd_buf[copy_len] = '\0';
+            for (uint16_t j = 0; j < copy_len; ++j) {
+                if (cmd_buf[j] == '\r' || cmd_buf[j] == '\n') { cmd_buf[j] = '\0'; break; }
+            }
+            handle_motor_set_text(cmd_buf);
+            return;
+        }
+    }
+
+    for (uint16_t i = 0; i + sizeof(motor_set_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], motor_set_cmd, sizeof(motor_set_cmd) - 1) == 0) {
+            char cmd_buf[48];
+            uint16_t copy_len = len - i;
+            if (copy_len >= sizeof(cmd_buf)) copy_len = sizeof(cmd_buf) - 1U;
+            memcpy(cmd_buf, &data[i], copy_len);
+            cmd_buf[copy_len] = '\0';
+            for (uint16_t j = 0; j < copy_len; ++j) {
+                if (cmd_buf[j] == '\r' || cmd_buf[j] == '\n') { cmd_buf[j] = '\0'; break; }
+            }
+            handle_motor_set_text(cmd_buf);
+            return;
+        }
+    }
+
     /* Ignore unrelated UART payloads.  Motion/gait entries are deliberately
        unreachable in this PID stage, but normal link traffic must not become
        a repetitive text log. */
