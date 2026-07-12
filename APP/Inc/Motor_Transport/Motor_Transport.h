@@ -38,6 +38,7 @@ HAL_StatusTypeDef Motor_Transport_Start(void);
 HAL_StatusTypeDef Motor_Transport_Stop(void);
 void Motor_Transport_Tick(void);
 void Motor_Transport_Service(void);
+uint8_t Motor_Transport_IsZeroOutputOnly(void);
 
 typedef struct
 {

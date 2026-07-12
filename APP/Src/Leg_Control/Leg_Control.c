@@ -35,10 +35,13 @@ extern UART_HandleTypeDef huart8;
 #define LEG_IO_ERROR_OFFLINE_COUNT  5U
 #define LEG_IO_RETRY_COUNT          1U
 #define LEG_ROTOR_ZERO_NEAR_RAD     1.50f
-#define LEG_SINGLE_MOTOR_MAX_ROTOR_OFFSET_RAD 0.50f
-#define LEG_SINGLE_MOTOR_MAX_KP               3.00f
-#define LEG_SINGLE_MOTOR_MAX_KW               0.30f
-#define LEG_SINGLE_MOTOR_MAX_DURATION_MS      3000U
+#define LEG_SINGLE_MOTOR_LIVE_INDEX            0U /* LF ID0 only in first live test. */
+#define LEG_SINGLE_MOTOR_MAX_ROTOR_OFFSET_RAD 0.10f
+#define LEG_SINGLE_MOTOR_MAX_KP               0.50f
+#define LEG_SINGLE_MOTOR_MAX_KW               0.05f
+#define LEG_SINGLE_MOTOR_MAX_DURATION_MS      1000U
+#define LEG_SINGLE_MOTOR_MAX_ERROR_RAD        0.30f
+#define LEG_SINGLE_MOTOR_MAX_VELOCITY_RAD_S   20.0f
 #define LEG_UART_HARD_ERROR_MASK \
   (HAL_UART_ERROR_DMA | HAL_UART_ERROR_RTO)
 #define LEG_MOTOR_THETA1            0U /* ID0 drives AB after front/rear mounting swap. */
@@ -64,6 +67,7 @@ typedef struct
   float kp;
   float kw;
   uint32_t duration_ms;
+  uint32_t plan_start_tick;
 } SingleMotorControlContextTypeDef;
 
 static SingleMotorControlContextTypeDef single_motor_control = {
@@ -109,6 +113,7 @@ void Leg_Control_ForceZeroOutput(Motor_ControlReasonTypeDef reason)
   single_motor_control.kp = 0.0f;
   single_motor_control.kw = 0.0f;
   single_motor_control.duration_ms = 0U;
+  single_motor_control.plan_start_tick = 0U;
   if (primask == 0U) __enable_irq();
 }
 
@@ -124,7 +129,7 @@ void Leg_Control_GetControlSnapshot(Motor_ControlSnapshotTypeDef *snapshot)
   snapshot->kp = single_motor_control.kp;
   snapshot->kw = single_motor_control.kw;
   snapshot->duration_ms = single_motor_control.duration_ms;
-  snapshot->zero_output_guard = 1U;
+  snapshot->zero_output_guard = Motor_Transport_IsZeroOutputOnly();
   snapshot->actual_rotor_position = 0.0f;
   snapshot->target_joint_position = 0.0f;
   snapshot->actual_joint_position = 0.0f;
@@ -657,6 +662,11 @@ int Leg_Control_SetDebugFootOffset(uint8_t leg, float dx_mm, float dy_mm)
 
 int Leg_Control_ArmSingleMotor(uint8_t motor_index)
 {
+  if (motor_index != LEG_SINGLE_MOTOR_LIVE_INDEX) {
+    single_motor_last_plan_reject_reason = "live_motor_not_lf_id0";
+    Leg_Control_ForceZeroOutput(Motor_Control_Reason_InvalidCommand);
+    return 0;
+  }
   Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
   if (state == NULL || state->online != Motor_Online ||
       state->angle_valid != Motor_Angle_Valid) {
@@ -681,11 +691,13 @@ int Leg_Control_PlanSingleMotor(uint8_t motor_index, float offset_rad,
                                 float kp, float kw, uint32_t duration_ms)
 {
   Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
-  if (state == NULL || state->online != Motor_Online ||
+  if (motor_index != LEG_SINGLE_MOTOR_LIVE_INDEX) {
+    single_motor_last_plan_reject_reason = "live_motor_not_lf_id0";
+  } else if (state == NULL || state->online != Motor_Online ||
       state->angle_valid != Motor_Angle_Valid) {
     single_motor_last_plan_reject_reason = "offline_or_feedback_invalid";
-  } else if (offset_rad == 0.0f) {
-    single_motor_last_plan_reject_reason = "offset_zero";
+  } else if (offset_rad <= 0.0f) {
+    single_motor_last_plan_reject_reason = "offset_must_be_positive";
   } else if (offset_rad < -LEG_SINGLE_MOTOR_MAX_ROTOR_OFFSET_RAD ||
              offset_rad > LEG_SINGLE_MOTOR_MAX_ROTOR_OFFSET_RAD) {
     single_motor_last_plan_reject_reason = "offset_limit";
@@ -720,10 +732,10 @@ int Leg_Control_PlanSingleMotor(uint8_t motor_index, float offset_rad,
   single_motor_control.kp = kp;
   single_motor_control.kw = kw;
   single_motor_control.duration_ms = duration_ms;
+  single_motor_control.plan_start_tick = HAL_GetTick();
 
-  /* Dry-run command path: only the armed motor holds the planned PD frame.
-   * Motor_Transport still overrides every output field to zero at its final
-   * frame boundary while MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY is 1. */
+  /* First live path: only the armed LF ID0 holds this bounded driver PD frame;
+   * Leg_Control_ForceZeroOutput keeps the remaining seven command slots zero. */
   MOTOR_send *cmd = &Legs[motor_index / 2U]->motor_cmd[motor_index % 2U];
   cmd->mode = 1U;
   cmd->T = 0.0f;
@@ -1035,6 +1047,22 @@ void Leg_Control_Service(uint32_t now_ms)
   if (handshake_requested) {
     handshake_requested = 0;
     Leg_Control_Handshake();
+  }
+
+  if (single_motor_control.mode == Motor_Control_SingleMotorPosition) {
+    uint8_t motor_index = (uint8_t)single_motor_control.armed_motor_index;
+    Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
+    if (state == NULL || state->online != Motor_Online ||
+        state->angle_valid != Motor_Angle_Valid) {
+      Leg_Control_ForceZeroOutput(Motor_Control_Reason_Offline);
+    } else if ((now_ms - single_motor_control.plan_start_tick) >=
+               single_motor_control.duration_ms) {
+      Leg_Control_ForceZeroOutput(Motor_Control_Reason_PlanTimeout);
+    } else if (absf_local(single_motor_control.target_rotor_position -
+                          state->rotor_position) > LEG_SINGLE_MOTOR_MAX_ERROR_RAD ||
+               absf_local(state->raw_velocity) > LEG_SINGLE_MOTOR_MAX_VELOCITY_RAD_S) {
+      Leg_Control_ForceZeroOutput(Motor_Control_Reason_SafetyLimit);
+    }
   }
 
   if ((now_ms - last_service_tick) < LEG_SERVICE_PERIOD_MS) return;

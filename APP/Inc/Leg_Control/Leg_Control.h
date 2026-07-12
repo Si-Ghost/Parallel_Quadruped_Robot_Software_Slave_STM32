@@ -31,8 +31,7 @@ typedef struct
   Motor_OnlineStateTypeDef has_online_motor;
 } Leg_HandlerTypeDef;
 
-/* PID bring-up safety state.  Position mode is only a planned target while
- * MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY remains enabled in Motor_Transport.c. */
+/* PID bring-up safety state.  Motor_Transport owns the final output gate. */
 typedef enum
 {
   Motor_Control_ZeroOutput = 0,
@@ -49,7 +48,9 @@ typedef enum
   Motor_Control_Reason_Rescan = 2,
   Motor_Control_Reason_Offline = 3,
   Motor_Control_Reason_TransportError = 4,
-  Motor_Control_Reason_InvalidCommand = 5
+  Motor_Control_Reason_InvalidCommand = 5,
+  Motor_Control_Reason_PlanTimeout = 6,
+  Motor_Control_Reason_SafetyLimit = 7
 } Motor_ControlReasonTypeDef;
 
 typedef struct
