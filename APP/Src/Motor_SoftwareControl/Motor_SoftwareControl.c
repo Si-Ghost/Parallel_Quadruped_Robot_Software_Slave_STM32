@@ -24,7 +24,7 @@
 #define SWCTRL_CASCADE_POSITION_KD     1.0f
 #define SWCTRL_CASCADE_POSITION_MAX    10000.0f
 #define SWCTRL_CASCADE_SPEED_KP        0.01f
-#define SWCTRL_CASCADE_SPEED_KI        0.0006f
+#define SWCTRL_CASCADE_SPEED_KI        0.00006f
 #define SWCTRL_CASCADE_SPEED_KD        0.0015f
 #define SWCTRL_CASCADE_TORQUE_MAX      0.05f
 #define SWCTRL_CASCADE_INTEGRAL_MAX    0.20f
@@ -115,14 +115,13 @@ int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
     Motor_SoftwareControl_Stop(Motor_SoftwareControl_StopInvalidCommand);
     return 0;
   }
-  /* Only the exact RF ID0 parameter tuple approved after dry-run may enter the
-   * cascade active state. Every other valid plan remains calculation-only. */
+  /* Retuned cascade controller returns to dry-run until its reduced integral
+   * and zero-crossing behavior are reviewed. */
   control.mode = matches_cascade_dry_run(motor_index, offset_rad, kp, kd,
                                          duration_ms)
-                     ? Motor_SoftwareControl_CascadeActiveTorque
+                     ? Motor_SoftwareControl_CascadeDryRun
                      : Motor_SoftwareControl_DryRun;
-  control.dry_run = (control.mode == Motor_SoftwareControl_CascadeActiveTorque)
-                        ? 0U : 1U;
+  control.dry_run = 1U;
   control.stop_reason = Motor_SoftwareControl_StopNone;
   control.raw_target = control.arm_position + offset_rad;
   control.ramped_target = control.arm_position;
@@ -193,8 +192,12 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
   control.position_error = control.ramped_target - rotor_position;
   if (control.mode == Motor_SoftwareControl_CascadeDryRun ||
       control.mode == Motor_SoftwareControl_CascadeActiveTorque) {
-    float position_delta = control.position_error - cascade_position_error_previous;
+    float previous_position_error = cascade_position_error_previous;
+    float position_delta = control.position_error - previous_position_error;
     cascade_position_error_previous = control.position_error;
+    if (previous_position_error != 0.0f &&
+        (control.position_error * previous_position_error) < 0.0f)
+      control.i_term = 0.0f;
     control.speed_target = clampf(SWCTRL_CASCADE_POSITION_KP * control.position_error +
                                   SWCTRL_CASCADE_POSITION_KI * 0.0f +
                                   SWCTRL_CASCADE_POSITION_KD * position_delta,
@@ -215,6 +218,8 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
                              ? control.speed_error : control.position_error;
   float integral_gain = cascade_mode
                             ? control.speed_loop_ki : control.ki;
+  if (cascade_mode && (control.i_term * integral_error) < 0.0f)
+    control.i_term = 0.0f;
   float integral_step = integral_gain * integral_error;
   if (!cascade_mode) integral_step *= dt;
   float integral_limit = cascade_mode
