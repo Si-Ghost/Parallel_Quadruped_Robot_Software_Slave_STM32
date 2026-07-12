@@ -11,8 +11,9 @@
 #define MOTOR_TRANSPORT_OFFLINE_TIMEOUT_MS 100U
 #define MOTOR_TRANSPORT_QUIESCE_TIMEOUT_MS 5U
 
-/* Retuned RF cascade controller is back in dry-run pending telemetry review. */
-#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 1U
+/* Open only for the approved RF ID0 retuned cascade test. Leg_Control rebuilds
+ * every frame from zero and the controller getter gates the exact tuple. */
+#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 0U
 
 _Static_assert((MOTOR_TRANSPORT_RING_SIZE & (MOTOR_TRANSPORT_RING_SIZE - 1U)) == 0U,
                "motor RX ring size must be a power of two");
