@@ -1088,14 +1088,24 @@ void Communication_SendMotorControlStatus(void)
 
     char buf[TX_IT_BUF_SIZE];
     int len = snprintf(buf, sizeof(buf),
-        "MOTOR_CONTROL mode=%u reason=%u guard=%u armed=%d target=%.4f actual=%.4f "
-        "target_joint=%.4f actual_joint=%.4f error=%.4f kp=%.4f kw=%.4f duration=%lu\n",
+        "MOTOR_CONTROL mode=%u reason=%u guard=%u armed=%d target=",
         (unsigned int)control.mode, (unsigned int)control.reason,
-        (unsigned int)control.zero_output_guard, (int)control.armed_motor_index,
-        (double)control.target_rotor_position, (double)control.actual_rotor_position,
-        (double)control.target_joint_position, (double)control.actual_joint_position,
-        (double)control.position_error, (double)control.kp, (double)control.kw,
-        (unsigned long)control.duration_ms);
+        (unsigned int)control.zero_output_guard, (int)control.armed_motor_index);
+    len = append_fixed4(buf, sizeof(buf), len, control.target_rotor_position);
+    if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " actual=");
+    len = append_fixed4(buf, sizeof(buf), len, control.actual_rotor_position);
+    if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " target_joint=");
+    len = append_fixed4(buf, sizeof(buf), len, control.target_joint_position);
+    if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " actual_joint=");
+    len = append_fixed4(buf, sizeof(buf), len, control.actual_joint_position);
+    if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " error=");
+    len = append_fixed4(buf, sizeof(buf), len, control.position_error);
+    if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " kp=");
+    len = append_fixed4(buf, sizeof(buf), len, control.kp);
+    if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " kw=");
+    len = append_fixed4(buf, sizeof(buf), len, control.kw);
+    if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len,
+                                 " duration=%lu\n", (unsigned long)control.duration_ms);
     if (len > 0 && len < (int)sizeof(buf)) {
         Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
     }
