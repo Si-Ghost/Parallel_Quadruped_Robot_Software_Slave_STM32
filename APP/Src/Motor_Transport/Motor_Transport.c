@@ -11,9 +11,9 @@
 #define MOTOR_TRANSPORT_OFFLINE_TIMEOUT_MS 100U
 #define MOTOR_TRANSPORT_QUIESCE_TIMEOUT_MS 5U
 
-/* Stage-2 authorization: a single, firmware-limited LF ID0 position test may
- * reach the driver.  Leg_Control remains the second safety gate. */
-#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 0U
+/* Software-controller development guard: all driver control fields remain zero
+ * until dry-run evidence is reviewed and a non-zero test is separately approved. */
+#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 1U
 
 _Static_assert((MOTOR_TRANSPORT_RING_SIZE & (MOTOR_TRANSPORT_RING_SIZE - 1U)) == 0U,
                "motor RX ring size must be a power of two");

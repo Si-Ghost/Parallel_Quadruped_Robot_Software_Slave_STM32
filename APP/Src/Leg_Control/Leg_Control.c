@@ -1,5 +1,6 @@
 #include "Leg_Control.h"
 #include "Motor_Transport.h"
+#include "Motor_SoftwareControl.h"
 #include "Leg_Gait.h"
 #include "communication.h"
 #include <math.h>
@@ -113,6 +114,15 @@ void Leg_Control_ForceZeroOutput(Motor_ControlReasonTypeDef reason)
   single_motor_control.kw = 0.0f;
   single_motor_control.duration_ms = 0U;
   single_motor_control.plan_start_tick = 0U;
+  Motor_SoftwareControlStopReason sw_reason = Motor_SoftwareControl_StopInvalidCommand;
+  if (reason == Motor_Control_Reason_None) sw_reason = Motor_SoftwareControl_StopNone;
+  else if (reason == Motor_Control_Reason_OperatorStop) sw_reason = Motor_SoftwareControl_StopOperator;
+  else if (reason == Motor_Control_Reason_Rescan) sw_reason = Motor_SoftwareControl_StopRescan;
+  else if (reason == Motor_Control_Reason_Offline) sw_reason = Motor_SoftwareControl_StopOffline;
+  else if (reason == Motor_Control_Reason_TransportError) sw_reason = Motor_SoftwareControl_StopTransport;
+  else if (reason == Motor_Control_Reason_PlanTimeout) sw_reason = Motor_SoftwareControl_StopDuration;
+  else if (reason == Motor_Control_Reason_SafetyLimit) sw_reason = Motor_SoftwareControl_StopSafetyLimit;
+  Motor_SoftwareControl_Stop(sw_reason);
   if (primask == 0U) __enable_irq();
 }
 
@@ -678,7 +688,7 @@ int Leg_Control_ArmSingleMotor(uint8_t motor_index)
   single_motor_control.target_rotor_position = state->rotor_position;
   single_motor_last_plan_reject_reason = "none";
   __enable_irq();
-  return 1;
+  return Motor_SoftwareControl_Arm(motor_index, state->rotor_position, state->timestamp);
 }
 
 int Leg_Control_PlanSingleMotor(uint8_t motor_index, float offset_rad,
@@ -716,6 +726,13 @@ int Leg_Control_PlanSingleMotor(uint8_t motor_index, float offset_rad,
     return 0;
   }
 
+  if (!Motor_SoftwareControl_StartDryRun(motor_index, offset_rad, kp, kw,
+                                         duration_ms, HAL_GetTick())) {
+    single_motor_last_plan_reject_reason = Motor_SoftwareControl_GetLastRejectReason();
+    Leg_Control_ForceZeroOutput(Motor_Control_Reason_InvalidCommand);
+    return 0;
+  }
+
   __disable_irq();
   single_motor_control.mode = Motor_Control_SingleMotorPosition;
   single_motor_control.reason = Motor_Control_Reason_None;
@@ -726,15 +743,15 @@ int Leg_Control_PlanSingleMotor(uint8_t motor_index, float offset_rad,
   single_motor_control.duration_ms = duration_ms;
   single_motor_control.plan_start_tick = HAL_GetTick();
 
-  /* Live path: only the currently armed global motor holds this bounded PD frame;
-   * Leg_Control_ForceZeroOutput keeps the remaining seven command slots zero. */
+  /* Software PID dry-run: calculate internally, but keep every driver control
+   * field zero. Motor_Transport provides a second compile-time zero gate. */
   MOTOR_send *cmd = &Legs[motor_index / 2U]->motor_cmd[motor_index % 2U];
   cmd->mode = 1U;
   cmd->T = 0.0f;
   cmd->W = 0.0f;
-  cmd->Pos = single_motor_control.target_rotor_position;
-  cmd->K_P = kp;
-  cmd->K_W = kw;
+  cmd->Pos = 0.0f;
+  cmd->K_P = 0.0f;
+  cmd->K_W = 0.0f;
   modify_data(cmd);
   __enable_irq();
   return 1;
@@ -827,6 +844,7 @@ static uint8_t motor_feedback_is_valid(HAL_StatusTypeDef ret, MOTOR_recv *fbk, u
 
 void Leg_Control_InitSafe(void)
 {
+  Motor_SoftwareControl_Init();
   Left_Front_Leg.GPIOx = Left_Front_Leg_Control_GPIO_Port;
   Left_Front_Leg.GPIO_Pin = Left_Front_Leg_Control_Pin;
   Left_Front_Leg.huartx = &huart2;
@@ -1005,6 +1023,7 @@ void Leg_Control_Start(void)
 
 void Leg_Control_Service(uint32_t now_ms)
 {
+  static uint32_t last_sw_pid_telemetry_ms = 0U;
   for (uint8_t leg = 0U; leg < 4U; ++leg) {
     uint32_t sequence = transport_uart_error_sequence[leg];
     if (sequence == transport_uart_error_reported[leg]) continue;
@@ -1049,6 +1068,9 @@ void Leg_Control_Service(uint32_t now_ms)
         state->angle_valid != Motor_Angle_Valid) {
       Leg_Control_ForceZeroOutput(Motor_Control_Reason_Offline);
       stopped = 1U;
+    } else if ((now_ms - state->timestamp) > 10U) {
+      Leg_Control_ForceZeroOutput(Motor_Control_Reason_Offline);
+      stopped = 1U;
     } else if ((now_ms - single_motor_control.plan_start_tick) >=
                single_motor_control.duration_ms) {
       Leg_Control_ForceZeroOutput(Motor_Control_Reason_PlanTimeout);
@@ -1058,8 +1080,28 @@ void Leg_Control_Service(uint32_t now_ms)
                absf_local(state->raw_velocity) > LEG_SINGLE_MOTOR_MAX_VELOCITY_RAD_S) {
       Leg_Control_ForceZeroOutput(Motor_Control_Reason_SafetyLimit);
       stopped = 1U;
+    } else {
+      Motor_SoftwareControl_Update(state->rotor_position, state->raw_velocity,
+                                   state->timestamp, now_ms);
+      Motor_SoftwareControlSnapshot sw;
+      Motor_SoftwareControl_GetSnapshot(&sw);
+      if (sw.mode == Motor_SoftwareControl_Stopped) {
+        Motor_ControlReasonTypeDef reason = Motor_Control_Reason_SafetyLimit;
+        if (sw.stop_reason == Motor_SoftwareControl_StopInvalidDt ||
+            sw.stop_reason == Motor_SoftwareControl_StopInvalidNumber)
+          reason = Motor_Control_Reason_SafetyLimit;
+        Leg_Control_ForceZeroOutput(reason);
+        stopped = 1U;
+      }
     }
-    if (stopped) Communication_SendMotorControlStatus();
+    if (stopped) {
+      Communication_SendSoftwarePidTelemetry();
+      Communication_SendMotorControlStatus();
+    }
+    else if ((now_ms - last_sw_pid_telemetry_ms) >= 100U) {
+      last_sw_pid_telemetry_ms = now_ms;
+      Communication_SendSoftwarePidTelemetry();
+    }
   }
 
   if ((now_ms - last_service_tick) < LEG_SERVICE_PERIOD_MS) return;

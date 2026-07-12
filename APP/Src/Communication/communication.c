@@ -1262,6 +1262,36 @@ void Communication_SendMotorControlStatus(void)
     }
 }
 
+void Communication_SendSoftwarePidTelemetry(void)
+{
+    if (!comm_ctx.uart || comm_ctx.tx_busy) return;
+    Motor_SoftwareControlSnapshot s;
+    Motor_SoftwareControl_GetSnapshot(&s);
+    if (s.mode != Motor_SoftwareControl_DryRun &&
+        s.mode != Motor_SoftwareControl_Stopped) return;
+
+    /* Dedicated compact JSON, separate from the human-readable command log.
+       Angular/torque values use micro-units; gains use 1e-6 scaling. */
+    char buf[TX_IT_BUF_SIZE];
+    int len = snprintf(buf, sizeof(buf),
+        "SW_PID_JSON {\"m\":%u,\"i\":%d,\"rt\":%ld,\"sp\":%ld,\"p\":%ld,"
+        "\"e\":%ld,\"v\":%ld,\"kp\":%ld,\"ki\":%ld,\"kd\":%ld,"
+        "\"P\":%ld,\"I\":%ld,\"D\":%ld,\"T\":%ld,\"lim\":%u,"
+        "\"dt\":%lu,\"dur\":%lu,\"el\":%lu,\"stop\":%u}\n",
+        (unsigned int)s.mode, (int)s.motor_index,
+        (long)(s.raw_target * 1000000.0f), (long)(s.ramped_target * 1000000.0f),
+        (long)(s.actual_position * 1000000.0f), (long)(s.position_error * 1000000.0f),
+        (long)(s.raw_velocity * 1000000.0f), (long)(s.kp * 1000000.0f),
+        (long)(s.ki * 1000000.0f), (long)(s.kd * 1000000.0f),
+        (long)(s.p_term * 1000000.0f), (long)(s.i_term * 1000000.0f),
+        (long)(s.d_term * 1000000.0f), (long)(s.limited_torque * 1000000.0f),
+        (unsigned int)s.torque_limited, (unsigned long)(s.dt_s * 1000000.0f),
+        (unsigned long)s.duration_ms, (unsigned long)s.elapsed_ms,
+        (unsigned int)s.stop_reason);
+    if (len > 0 && len < (int)sizeof(buf))
+        Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
+}
+
 void Communication_SendMotorTransportStatus(void)
 {
     static uint8_t channel_index = 0;

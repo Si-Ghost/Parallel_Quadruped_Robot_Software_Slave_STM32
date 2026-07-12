@@ -4,6 +4,7 @@
 #include "GO-M8010-6.h"
 #include "Leg_Kinematics.h"
 #include "Motor_State.h"
+#include "Motor_SoftwareControl.h"
 #include "main.h"
 
 typedef enum
