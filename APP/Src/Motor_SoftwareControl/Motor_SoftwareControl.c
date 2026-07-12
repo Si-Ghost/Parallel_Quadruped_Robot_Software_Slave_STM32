@@ -97,6 +97,10 @@ int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
   control.elapsed_ms = 0U;
   control.i_term = 0.0f;
   plan_start_ms = now_ms;
+  /* Arming and starting are separate operator actions. Do not interpret that
+   * human delay as one controller sample; the first new feedback after start
+   * establishes the dry-run time base. */
+  previous_feedback_timestamp = 0U;
   return 1;
 }
 
@@ -106,6 +110,14 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
   if (control.mode != Motor_SoftwareControl_DryRun) return;
   if (!isfinite(rotor_position) || !isfinite(rotor_velocity)) {
     Motor_SoftwareControl_Stop(Motor_SoftwareControl_StopInvalidNumber);
+    return;
+  }
+  if (previous_feedback_timestamp == 0U) {
+    previous_feedback_timestamp = feedback_timestamp;
+    control.actual_position = rotor_position;
+    control.raw_velocity = rotor_velocity;
+    control.feedback_timestamp = feedback_timestamp;
+    control.elapsed_ms = now_ms - plan_start_ms;
     return;
   }
   if (feedback_timestamp == previous_feedback_timestamp) return;
