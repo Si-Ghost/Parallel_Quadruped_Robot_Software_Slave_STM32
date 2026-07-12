@@ -28,6 +28,8 @@
 #define SWCTRL_CASCADE_SPEED_KD        0.0015f
 #define SWCTRL_CASCADE_TORQUE_MAX      0.10f
 #define SWCTRL_CASCADE_INTEGRAL_MAX    0.20f
+#define SWCTRL_FLEET_OFFSET_RAD        0.100f
+#define SWCTRL_FLEET_DURATION_MS       1500U
 
 static Motor_SoftwareControlSnapshot control;
 static uint32_t plan_start_ms;
@@ -51,6 +53,16 @@ static uint8_t matches_cascade_dry_run(uint8_t motor_index, float offset_rad,
          fabsf(kp - SWCTRL_CASCADE_SIGNATURE_KP) <= SWCTRL_MATCH_EPSILON &&
          fabsf(kd - SWCTRL_CASCADE_SIGNATURE_KD) <= SWCTRL_MATCH_EPSILON &&
          duration_ms == SWCTRL_CASCADE_DURATION_MS;
+}
+
+static uint8_t matches_fleet_dry_run(uint8_t motor_index, float offset_rad,
+                                     float kp, float kd, uint32_t duration_ms)
+{
+  return motor_index < 8U &&
+         fabsf(fabsf(offset_rad) - SWCTRL_FLEET_OFFSET_RAD) <= SWCTRL_MATCH_EPSILON &&
+         fabsf(kp - SWCTRL_CASCADE_SIGNATURE_KP) <= SWCTRL_MATCH_EPSILON &&
+         fabsf(kd - SWCTRL_CASCADE_SIGNATURE_KD) <= SWCTRL_MATCH_EPSILON &&
+         duration_ms == SWCTRL_FLEET_DURATION_MS;
 }
 
 void Motor_SoftwareControl_Init(void)
@@ -115,14 +127,15 @@ int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
     Motor_SoftwareControl_Stop(Motor_SoftwareControl_StopInvalidCommand);
     return 0;
   }
-  /* Exact one-radian RF tuple is authorized for one bounded live test;
-   * every other valid plan remains calculation-only. */
-  control.mode = matches_cascade_dry_run(motor_index, offset_rad, kp, kd,
-                                         duration_ms)
-                     ? Motor_SoftwareControl_CascadeActiveTorque
+  /* Stage-2 fleet validation is calculation-only. Both the prior one-radian
+   * plan and all eight ±0.1 rad tuples remain behind the transport zero gate. */
+  control.mode = (matches_cascade_dry_run(motor_index, offset_rad, kp, kd,
+                                          duration_ms) ||
+                  matches_fleet_dry_run(motor_index, offset_rad, kp, kd,
+                                        duration_ms))
+                     ? Motor_SoftwareControl_CascadeDryRun
                      : Motor_SoftwareControl_DryRun;
-  control.dry_run = (control.mode == Motor_SoftwareControl_CascadeActiveTorque)
-                        ? 0U : 1U;
+  control.dry_run = 1U;
   control.stop_reason = Motor_SoftwareControl_StopNone;
   control.raw_target = control.arm_position + offset_rad;
   control.ramped_target = control.arm_position;
