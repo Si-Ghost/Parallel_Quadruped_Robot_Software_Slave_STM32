@@ -688,8 +688,8 @@ int Leg_Control_PlanSingleMotor(uint8_t motor_index, float offset_rad,
   if (state == NULL || state->online != Motor_Online ||
       state->angle_valid != Motor_Angle_Valid) {
     single_motor_last_plan_reject_reason = "offline_or_feedback_invalid";
-  } else if (offset_rad <= 0.0f) {
-    single_motor_last_plan_reject_reason = "offset_must_be_positive";
+  } else if (offset_rad == 0.0f) {
+    single_motor_last_plan_reject_reason = "offset_zero";
   } else if (offset_rad < -LEG_SINGLE_MOTOR_MAX_ROTOR_OFFSET_RAD ||
              offset_rad > LEG_SINGLE_MOTOR_MAX_ROTOR_OFFSET_RAD) {
     single_motor_last_plan_reject_reason = "offset_limit";
