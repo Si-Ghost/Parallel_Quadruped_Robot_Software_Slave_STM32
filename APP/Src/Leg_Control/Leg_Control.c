@@ -31,6 +31,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_HANDSHAKE_RETRY         2U
 #define LEG_DEBUG_LOG_PERIOD_MS     500U
 #define LEG_IO_ERROR_LOG_PERIOD_MS  1000U
+#define LEG_UART_ERROR_LOG_PERIOD_MS 10000U
 #define LEG_IO_ERROR_OFFLINE_COUNT  5U
 #define LEG_IO_RETRY_COUNT          1U
 #define LEG_ROTOR_ZERO_NEAR_RAD     1.50f
@@ -38,6 +39,8 @@ extern UART_HandleTypeDef huart8;
 #define LEG_SINGLE_MOTOR_MAX_KP               3.00f
 #define LEG_SINGLE_MOTOR_MAX_KW               0.30f
 #define LEG_SINGLE_MOTOR_MAX_DURATION_MS      3000U
+#define LEG_UART_HARD_ERROR_MASK \
+  (HAL_UART_ERROR_ORE | HAL_UART_ERROR_DMA | HAL_UART_ERROR_RTO)
 #define LEG_MOTOR_THETA1            0U /* ID0 drives AB after front/rear mounting swap. */
 #define LEG_MOTOR_THETA2            1U /* ID1 drives AD after front/rear mounting swap. */
 
@@ -267,12 +270,22 @@ static void transport_uart_error(uint8_t leg, uint32_t error_bits, uint32_t time
   if (leg >= 4U) return;
   transport_uart_error_bits[leg] = error_bits;
   ++transport_uart_error_sequence[leg];
-  for (uint8_t motor = 0U; motor < 2U; ++motor) {
-    Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
-    Motor_State_RecordError(state);
-    state->handshake_status = Motor_Handshake_UartError;
+
+  /* A 4 Mbaud half-duplex direction transition can raise an isolated PE/NE/FE
+   * while the permanent RX ring is active.  Motor_Transport discards the bad
+   * byte, restarts RX, and only publishes feedback after frame CRC and ID
+   * validation.  Do not revoke an arm solely for that recoverable line event;
+   * loss of valid feedback is independently fail-safe through the offline
+   * timeout.  Receiver overrun, DMA failure, or receiver timeout means the
+   * transport itself is no longer trustworthy and must revoke immediately. */
+  if ((error_bits & LEG_UART_HARD_ERROR_MASK) != 0U) {
+    for (uint8_t motor = 0U; motor < 2U; ++motor) {
+      Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
+      Motor_State_RecordError(state);
+      state->handshake_status = Motor_Handshake_UartError;
+    }
+    Leg_Control_ForceZeroOutput(Motor_Control_Reason_TransportError);
   }
-  Leg_Control_ForceZeroOutput(Motor_Control_Reason_TransportError);
 }
 
 static const Motor_TransportCallbacks motor_transport_callbacks = {
@@ -991,19 +1004,20 @@ void Leg_Control_Service(uint32_t now_ms)
     uint32_t sequence = transport_uart_error_sequence[leg];
     if (sequence == transport_uart_error_reported[leg]) continue;
     if (transport_uart_error_reported[leg] != 0U &&
-        (now_ms - transport_uart_error_report_tick[leg]) < LEG_IO_ERROR_LOG_PERIOD_MS) {
+        (now_ms - transport_uart_error_report_tick[leg]) < LEG_UART_ERROR_LOG_PERIOD_MS) {
       continue;
     }
 
     uint32_t bits = transport_uart_error_bits[leg];
     transport_uart_error_reported[leg] = sequence;
     transport_uart_error_report_tick[leg] = now_ms;
-    char buf[112];
+    char buf[144];
     int len = snprintf(buf, sizeof(buf),
-                       "MOTOR_UART_ERROR leg=%u bits=0x%08lX count=%lu "
+                       "MOTOR_UART_ERROR leg=%u bits=0x%08lX count=%lu class=%s "
                        "[PE=%u NE=%u FE=%u ORE=%u DMA=%u RTO=%u]\r\n",
                        (unsigned int)leg, (unsigned long)bits,
                        (unsigned long)sequence,
+                       ((bits & LEG_UART_HARD_ERROR_MASK) != 0U) ? "hard" : "soft",
                        (unsigned int)((bits & HAL_UART_ERROR_PE) != 0U),
                        (unsigned int)((bits & HAL_UART_ERROR_NE) != 0U),
                        (unsigned int)((bits & HAL_UART_ERROR_FE) != 0U),
