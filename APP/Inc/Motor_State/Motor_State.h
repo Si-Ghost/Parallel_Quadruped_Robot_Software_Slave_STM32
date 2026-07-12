@@ -40,32 +40,38 @@ typedef enum
 } Motor_TargetResultTypeDef;
 
 /*
- * Canonical motor feedback state.  The anonymous unions keep the previously
- * published Leg_Control field names source-compatible while making the raw,
- * single-turn, accumulated and joint domains explicit.
+ * Canonical motor feedback state.  The anonymous union keeps the previously
+ * published Leg_Control field names source-compatible while making the
+ * multi-turn rotor and joint domains explicit.
+ *
+ * GO-M8010 feedback pos is a signed int32 Q15 multi-turn rotor position.
+ * Do not wrap it to [-pi, pi]: one rotor revolution is a real 2*pi / 6.33
+ * joint displacement, not an equivalent mechanical pose.
  *
  * The target/debug fields remain here only as a compatibility tail during the
  * staged refactor.  Motor_State.c never reads or writes that command state.
  */
 typedef struct
 {
-  float raw_position;
+  union {
+    float rotor_position;
+    float raw_position;
+    float angle;
+  };
   union {
     float raw_velocity;
     float speed;
   };
   float raw_torque;
   union {
-    float single_turn_angle;
-    float angle;
+    float zero_rotor_position;
+    float zero_offset;
   };
-  union {
-    float accumulated_angle;
-    float display_angle;
-  };
-  float zero_offset;
   float direction;
-  float joint_angle;
+  union {
+    float joint_position;
+    float joint_angle;
+  };
   Motor_AngleValidTypeDef angle_valid;
   Motor_OnlineStateTypeDef online;
   uint8_t zero_checked;
@@ -97,14 +103,12 @@ typedef Motor_StateTypeDef Motor_RuntimeStateTypeDef;
 
 typedef struct
 {
-  float raw_position;
+  float rotor_position;
   float raw_velocity;
   float raw_torque;
-  float single_turn_angle;
-  float accumulated_angle;
-  float zero_offset;
+  float zero_rotor_position;
   float direction;
-  float joint_angle;
+  float joint_position;
   uint8_t online;
   uint8_t angle_valid;
   uint8_t zero_checked;
@@ -119,7 +123,7 @@ void Motor_State_SetCalibration(Motor_StateTypeDef *state,
                                 float reduction_ratio,
                                 float zero_threshold);
 void Motor_State_UpdateRawFeedback(Motor_StateTypeDef *state,
-                                   float raw_position,
+                                   float rotor_position,
                                    float raw_velocity,
                                    float raw_torque,
                                    uint32_t timestamp,
@@ -128,7 +132,6 @@ void Motor_State_UpdateRawFeedback(Motor_StateTypeDef *state,
 void Motor_State_MarkOffline(Motor_StateTypeDef *state);
 void Motor_State_RecordError(Motor_StateTypeDef *state);
 float Motor_State_GetZeroError(const Motor_StateTypeDef *state);
-float Motor_State_WrapDelta(float angle, float reference);
 void Motor_State_GetSnapshot(const Motor_StateTypeDef *state,
                              Motor_StateSnapshotTypeDef *snapshot);
 

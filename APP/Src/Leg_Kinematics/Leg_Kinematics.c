@@ -13,16 +13,6 @@ float absf_local(float value)
   return value < 0.0f ? -value : value;
 }
 
-float rotor_wrap_delta(float angle, float reference)
-{
-  float delta = angle - reference;
-  while (delta > LEG_PI)
-    delta -= LEG_TWO_PI;
-  while (delta < -LEG_PI)
-    delta += LEG_TWO_PI;
-  return delta;
-}
-
 int Leg_Kinematics_Forward(const Leg_JointAnglesTypeDef *angles, Leg_PointTypeDef *foot)
 {
   if (angles == NULL || foot == NULL)

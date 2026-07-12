@@ -798,11 +798,11 @@ static int append_fixed4(char *buf, size_t size, int pos, float value)
     if (pos < 0 || (size_t)pos >= size)
         return -1;
 
-    int32_t scaled;
+    int64_t scaled;
     if (value >= 0.0f)
-        scaled = (int32_t)(value * 10000.0f + 0.5f);
+        scaled = (int64_t)(value * 10000.0f + 0.5f);
     else
-        scaled = (int32_t)(value * 10000.0f - 0.5f);
+        scaled = (int64_t)(value * 10000.0f - 0.5f);
 
     const char *sign = "";
     if (scaled < 0) {
@@ -810,10 +810,10 @@ static int append_fixed4(char *buf, size_t size, int pos, float value)
         scaled = -scaled;
     }
 
-    int written = snprintf(&buf[pos], size - (size_t)pos, "%s%ld.%04ld",
+    int written = snprintf(&buf[pos], size - (size_t)pos, "%s%lld.%04lld",
                            sign,
-                           (long)(scaled / 10000),
-                           (long)(scaled % 10000));
+                           (long long)(scaled / 10000),
+                           (long long)(scaled % 10000));
     if (written < 0 || written >= (int)(size - (size_t)pos))
         return -1;
 
@@ -830,7 +830,7 @@ void Communication_SendMotorAngles(void)
     if (!Leg_Control_GetMotorStateSnapshot(detail_motor, &state))
         return;
 
-    char buf[192];
+    char buf[224];
     int len = snprintf(buf, sizeof(buf), "MOTOR_ANGLES ");
     for (uint8_t i = 0; i < 8 && len > 0; i++) {
         len = append_fixed4(buf, sizeof(buf), len, angles[i]);
@@ -855,13 +855,13 @@ void Communication_SendMotorAngles(void)
             len += written;
     }
 
-    /* Stable compatibility suffix: raw, single-turn, accumulated, joint.
-       The current ESP32 parser consumes the legacy prefix and ignores this. */
+    /* Compatibility prefix contains eight multi-turn rotor positions.  The
+       optional S suffix is self-describing diagnostics for one motor. */
     const float detail[4] = {
-        state.raw_position,
-        state.single_turn_angle,
-        state.accumulated_angle,
-        state.joint_angle,
+        state.rotor_position,
+        state.zero_rotor_position,
+        state.joint_position,
+        state.direction,
     };
     for (uint8_t i = 0U; i < 4U && len > 0; ++i) {
         len = append_fixed4(buf, sizeof(buf), len, detail[i]);

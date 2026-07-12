@@ -474,11 +474,11 @@ void Leg_Gait_ServiceSine(void)
   }
 
   float rotor_targets[2];
-  for (uint8_t motor = 0; motor < 2; motor++)
+  if (!Leg_Control_JointToRotorTargets(leg, &target_angles, rotor_targets))
   {
-    float direction = Leg_Control_NormalizedMotorDir(Legs[leg]->motor_direction[motor]);
-    float joint_angle = (motor == 1U) ? target_angles.theta1 : target_angles.theta2;
-    rotor_targets[motor] = Legs[leg]->rotor_zero_offset[motor] + direction * joint_angle * LEG_REDUCTION_RATIO;
+    Communication_SendString("LEG_SINE abort rotor_target_fail\r\n");
+    sine_test.active = 0U;
+    return;
   }
 
   for (uint8_t motor = 0; motor < 2; motor++)
@@ -575,12 +575,13 @@ void Leg_Gait_ServiceTrot(void)
     if (!Leg_Kinematics_Inverse(&target, &target_angles))
       continue;
 
+    float rotor_targets[2];
+    if (!Leg_Control_JointToRotorTargets(leg, &target_angles, rotor_targets))
+      continue;
+
     for (uint8_t motor = 0; motor < 2; motor++)
     {
-      float direction = Leg_Control_NormalizedMotorDir(Legs[leg]->motor_direction[motor]);
-      float joint_angle = (motor == 1U) ? target_angles.theta1 : target_angles.theta2;
-      float rotor_target = Legs[leg]->rotor_zero_offset[motor] + direction * joint_angle * LEG_REDUCTION_RATIO;
-
+      float rotor_target = rotor_targets[motor];
       MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
       cmd->mode = 1;
       cmd->T = 0.0f;

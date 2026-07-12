@@ -22,7 +22,6 @@ typedef struct
 
 float clampf(float value, float min_value, float max_value);
 float absf_local(float value);
-float rotor_wrap_delta(float angle, float reference);
 int   Leg_Kinematics_Forward(const Leg_JointAnglesTypeDef *angles, Leg_PointTypeDef *foot);
 int   Leg_Kinematics_Inverse(const Leg_PointTypeDef *foot, Leg_JointAnglesTypeDef *angles);
 
