@@ -1280,19 +1280,18 @@ void Communication_SendSoftwarePidTelemetry(void)
     char buf[TX_IT_BUF_SIZE];
     int len = snprintf(buf, sizeof(buf),
         "SW_PID_JSON {\"m\":%u,\"i\":%d,\"rt\":%ld,\"sp\":%ld,\"p\":%ld,"
-        "\"e\":%ld,\"v\":%ld,\"kp\":%ld,\"ki\":%ld,\"kd\":%ld,"
+        "\"e\":%ld,\"v\":%ld,"
         "\"P\":%ld,\"I\":%ld,\"D\":%ld,\"T\":%ld,\"lim\":%u,"
-        "\"st\":%ld,\"se\":%ld,\"dt\":%lu,\"dur\":%lu,\"el\":%lu,\"stop\":%u}\n",
+        "\"st\":%ld,\"se\":%ld,\"dt\":%lu,\"el\":%lu,\"stop\":%u}\n",
         (unsigned int)s.mode, (int)s.motor_index,
         (long)(s.raw_target * 1000000.0f), (long)(s.ramped_target * 1000000.0f),
         (long)(s.actual_position * 1000000.0f), (long)(s.position_error * 1000000.0f),
-        (long)(s.raw_velocity * 1000000.0f), (long)(s.kp * 1000000.0f),
-        (long)(s.ki * 1000000.0f), (long)(s.kd * 1000000.0f),
+        (long)(s.raw_velocity * 1000000.0f),
         (long)(s.p_term * 1000000.0f), (long)(s.i_term * 1000000.0f),
         (long)(s.d_term * 1000000.0f), (long)(s.limited_torque * 1000000.0f),
         (unsigned int)s.torque_limited, (long)(s.speed_target * 1000000.0f),
         (long)(s.speed_error * 1000000.0f), (unsigned long)(s.dt_s * 1000000.0f),
-        (unsigned long)s.duration_ms, (unsigned long)s.elapsed_ms,
+        (unsigned long)s.elapsed_ms,
         (unsigned int)s.stop_reason);
     if (len > 0 && len < (int)sizeof(buf))
         Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
