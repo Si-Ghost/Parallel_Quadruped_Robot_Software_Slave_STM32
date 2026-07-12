@@ -18,7 +18,7 @@
 #define SWCTRL_CASCADE_OFFSET_RAD      0.100f
 #define SWCTRL_CASCADE_SIGNATURE_KP    0.50f
 #define SWCTRL_CASCADE_SIGNATURE_KD    0.0f
-#define SWCTRL_CASCADE_DURATION_MS     600U
+#define SWCTRL_CASCADE_DURATION_MS     1500U
 #define SWCTRL_CASCADE_POSITION_KP     35.9f
 #define SWCTRL_CASCADE_POSITION_KI     0.0f
 #define SWCTRL_CASCADE_POSITION_KD     1.0f
@@ -115,14 +115,13 @@ int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
     Motor_SoftwareControl_Stop(Motor_SoftwareControl_StopInvalidCommand);
     return 0;
   }
-  /* Exact larger-angle RF tuple is authorized for one bounded live test;
-   * every other valid plan remains calculation-only. */
+  /* Extended-duration RF tuple returns to dry-run until its full approach,
+   * zero-crossing, and braking behavior are reviewed. */
   control.mode = matches_cascade_dry_run(motor_index, offset_rad, kp, kd,
                                          duration_ms)
-                     ? Motor_SoftwareControl_CascadeActiveTorque
+                     ? Motor_SoftwareControl_CascadeDryRun
                      : Motor_SoftwareControl_DryRun;
-  control.dry_run = (control.mode == Motor_SoftwareControl_CascadeActiveTorque)
-                        ? 0U : 1U;
+  control.dry_run = 1U;
   control.stop_reason = Motor_SoftwareControl_StopNone;
   control.raw_target = control.arm_position + offset_rad;
   control.ramped_target = control.arm_position;
