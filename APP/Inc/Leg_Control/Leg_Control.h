@@ -31,6 +31,42 @@ typedef struct
   Motor_OnlineStateTypeDef has_online_motor;
 } Leg_HandlerTypeDef;
 
+/* PID bring-up safety state.  Position mode is only a planned target while
+ * MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY remains enabled in Motor_Transport.c. */
+typedef enum
+{
+  Motor_Control_ZeroOutput = 0,
+  Motor_Control_Observe = 1,
+  Motor_Control_ArmedSingleMotor = 2,
+  Motor_Control_SingleMotorPosition = 3,
+  Motor_Control_SingleLegPosition = 4
+} Motor_ControlModeTypeDef;
+
+typedef enum
+{
+  Motor_Control_Reason_None = 0,
+  Motor_Control_Reason_OperatorStop = 1,
+  Motor_Control_Reason_Rescan = 2,
+  Motor_Control_Reason_Offline = 3,
+  Motor_Control_Reason_TransportError = 4,
+  Motor_Control_Reason_InvalidCommand = 5
+} Motor_ControlReasonTypeDef;
+
+typedef struct
+{
+  Motor_ControlModeTypeDef mode;
+  Motor_ControlReasonTypeDef reason;
+  int8_t armed_motor_index;
+  float target_rotor_position;
+  float actual_rotor_position;
+  float target_joint_position;
+  float actual_joint_position;
+  float position_error;
+  float kp;
+  float kw;
+  uint8_t zero_output_guard;
+} Motor_ControlSnapshotTypeDef;
+
 #define LEG_WEB_KP                  2.0f
 #define LEG_WEB_KW                  0.15f
 #define LEG_HOLD_KP                 1.0f
@@ -45,6 +81,8 @@ void Leg_Control_Handshake(void);
 void Leg_Control_RequestHandshake(void);
 void Leg_Control_Service(uint32_t now_ms);
 int  Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad);
+void Leg_Control_ForceZeroOutput(Motor_ControlReasonTypeDef reason);
+void Leg_Control_GetControlSnapshot(Motor_ControlSnapshotTypeDef *snapshot);
 void Leg_Control_LogFootSnapshot(void);
 int  Leg_Control_HoldCurrentPosition(void);
 void Leg_Control_StopAllDebugTargets(uint8_t reason);

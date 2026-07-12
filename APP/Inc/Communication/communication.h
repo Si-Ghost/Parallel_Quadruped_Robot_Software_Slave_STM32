@@ -39,6 +39,7 @@ void Communication_SendString(const char *str);
 void Communication_NotifyTxComplete(void);
 void Communication_SendMotorAngles(void);
 void Communication_SendMotorStatus(void);
+void Communication_SendMotorControlStatus(void);
 void Communication_SendMotorTransportStatus(void);
 void Communication_SendMotorTransportSummaryBlocking(void);
 

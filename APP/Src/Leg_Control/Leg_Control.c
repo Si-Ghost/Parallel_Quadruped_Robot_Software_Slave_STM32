@@ -34,13 +34,95 @@ extern UART_HandleTypeDef huart8;
 #define LEG_IO_ERROR_OFFLINE_COUNT  5U
 #define LEG_IO_RETRY_COUNT          1U
 #define LEG_ROTOR_ZERO_NEAR_RAD     1.50f
+#define LEG_SINGLE_MOTOR_MAX_ROTOR_OFFSET_RAD 0.50f
 #define LEG_MOTOR_THETA1            0U /* ID0 drives AB after front/rear mounting swap. */
 #define LEG_MOTOR_THETA2            1U /* ID1 drives AD after front/rear mounting swap. */
 
 static uint32_t last_service_tick = 0;
 static volatile uint8_t handshake_requested = 0;
 
+typedef struct
+{
+  Motor_ControlModeTypeDef mode;
+  Motor_ControlReasonTypeDef reason;
+  int8_t armed_motor_index;
+  float arm_rotor_position;
+  float target_rotor_position;
+} SingleMotorControlContextTypeDef;
+
+static SingleMotorControlContextTypeDef single_motor_control = {
+  .mode = Motor_Control_ZeroOutput,
+  .reason = Motor_Control_Reason_None,
+  .armed_motor_index = -1,
+};
+
 static void refresh_leg_online_state(uint8_t leg);
+
+static void set_zero_command(MOTOR_send *cmd, uint8_t motor)
+{
+  if (cmd == NULL) return;
+  cmd->id = motor;
+  cmd->mode = 1U;
+  cmd->T = 0.0f;
+  cmd->W = 0.0f;
+  cmd->Pos = 0.0f;
+  cmd->K_P = 0.0f;
+  cmd->K_W = 0.0f;
+  modify_data(cmd);
+}
+
+void Leg_Control_ForceZeroOutput(Motor_ControlReasonTypeDef reason)
+{
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  for (uint8_t leg = 0U; leg < 4U; ++leg) {
+    for (uint8_t motor = 0U; motor < 2U; ++motor) {
+      Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
+      state->target_active = Motor_Target_Inactive;
+      state->target_result = Motor_Target_Stopped;
+      state->target_offset = 0.0f;
+      set_zero_command(&Legs[leg]->motor_cmd[motor], motor);
+    }
+  }
+  single_motor_control.mode = Motor_Control_ZeroOutput;
+  single_motor_control.reason = reason;
+  single_motor_control.armed_motor_index = -1;
+  single_motor_control.arm_rotor_position = 0.0f;
+  single_motor_control.target_rotor_position = 0.0f;
+  if (primask == 0U) __enable_irq();
+}
+
+void Leg_Control_GetControlSnapshot(Motor_ControlSnapshotTypeDef *snapshot)
+{
+  if (snapshot == NULL) return;
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  snapshot->mode = single_motor_control.mode;
+  snapshot->reason = single_motor_control.reason;
+  snapshot->armed_motor_index = single_motor_control.armed_motor_index;
+  snapshot->target_rotor_position = single_motor_control.target_rotor_position;
+  snapshot->kp = 0.0f;
+  snapshot->kw = 0.0f;
+  snapshot->zero_output_guard = 1U;
+  snapshot->actual_rotor_position = 0.0f;
+  snapshot->target_joint_position = 0.0f;
+  snapshot->actual_joint_position = 0.0f;
+  snapshot->position_error = 0.0f;
+
+  if (single_motor_control.armed_motor_index >= 0 &&
+      single_motor_control.armed_motor_index < 8) {
+    Motor_RuntimeStateTypeDef *state =
+        Leg_Control_MotorState((uint8_t)single_motor_control.armed_motor_index);
+    snapshot->actual_rotor_position = state->rotor_position;
+    snapshot->actual_joint_position = state->joint_position;
+    snapshot->target_joint_position =
+        state->direction * (single_motor_control.target_rotor_position -
+                            state->zero_rotor_position) / LEG_REDUCTION_RATIO;
+    snapshot->position_error = single_motor_control.target_rotor_position -
+                               state->rotor_position;
+  }
+  if (primask == 0U) __enable_irq();
+}
 
 static const float default_rotor_zero_offset[4][2] = {
   /* LF: ID0, ID1 */ { 4.4221f, 5.5321f},
@@ -147,6 +229,7 @@ static void transport_feedback_timeout(uint8_t leg, uint8_t motor, uint32_t time
   Motor_State_MarkOffline(state);
   state->handshake_status = Motor_Handshake_Timeout;
   refresh_leg_online_state(leg);
+  Leg_Control_ForceZeroOutput(Motor_Control_Reason_Offline);
 }
 
 static void transport_uart_error(uint8_t leg, uint32_t error_bits, uint32_t timestamp)
@@ -159,6 +242,7 @@ static void transport_uart_error(uint8_t leg, uint32_t error_bits, uint32_t time
     Motor_State_RecordError(state);
     state->handshake_status = Motor_Handshake_UartError;
   }
+  Leg_Control_ForceZeroOutput(Motor_Control_Reason_TransportError);
 }
 
 static const Motor_TransportCallbacks motor_transport_callbacks = {
@@ -529,19 +613,44 @@ int Leg_Control_SetDebugFootOffset(uint8_t leg, float dx_mm, float dy_mm)
 
 int Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad)
 {
-  if (Leg_Gait_AnyActive()) return 0;
   Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
-  if (state == NULL || !state->online) return 0;
-  state->target_offset = clampf(angle_rad, LEG_WEB_ANGLE_MIN_RAD, LEG_WEB_ANGLE_MAX_RAD);
-  state->target_active = Motor_Target_Active;
-  state->target_result = Motor_Target_Running;
-  state->target_start_angle = state->angle;
-  state->target_start_tick = HAL_GetTick();
-  state->target_progress_tick = state->target_start_tick;
-  state->target_last_abs_error =
-      absf_local((Legs[motor_index / 2]->p_init[motor_index % 2] + state->target_offset) - state->angle);
-  state->target_stop_error = LEG_WEB_STOP_ERROR_RAD;
-  return Leg_Control_ApplyDebugTarget(motor_index, 1);
+  if (state == NULL || state->online != Motor_Online ||
+      state->angle_valid != Motor_Angle_Valid) {
+    Leg_Control_ForceZeroOutput(Motor_Control_Reason_Offline);
+    return 0;
+  }
+
+  /* The existing ESP32 bridge can only forward MOTOR_SET.  During the PID
+   * staging phase, a zero offset is an explicit arm operation; a later
+   * non-zero offset plans a target for that same one motor.  Neither path
+   * writes a non-zero motor command. */
+  if (angle_rad == 0.0f) {
+    Leg_Control_ForceZeroOutput(Motor_Control_Reason_None);
+    __disable_irq();
+    single_motor_control.mode = Motor_Control_ArmedSingleMotor;
+    single_motor_control.reason = Motor_Control_Reason_None;
+    single_motor_control.armed_motor_index = (int8_t)motor_index;
+    single_motor_control.arm_rotor_position = state->rotor_position;
+    single_motor_control.target_rotor_position = state->rotor_position;
+    __enable_irq();
+    return 1;
+  }
+
+  if (angle_rad < -LEG_SINGLE_MOTOR_MAX_ROTOR_OFFSET_RAD ||
+      angle_rad > LEG_SINGLE_MOTOR_MAX_ROTOR_OFFSET_RAD ||
+      single_motor_control.mode != Motor_Control_ArmedSingleMotor ||
+      single_motor_control.armed_motor_index != (int8_t)motor_index) {
+    Leg_Control_ForceZeroOutput(Motor_Control_Reason_InvalidCommand);
+    return 0;
+  }
+
+  __disable_irq();
+  single_motor_control.mode = Motor_Control_SingleMotorPosition;
+  single_motor_control.reason = Motor_Control_Reason_None;
+  single_motor_control.target_rotor_position =
+      single_motor_control.arm_rotor_position + angle_rad;
+  __enable_irq();
+  return 1;
 }
 
 /* ---- IO error handling ---- */
@@ -660,10 +769,12 @@ void Leg_Control_InitSafe(void)
   }
 
   if (Motor_Transport_Init(&motor_transport_callbacks) != HAL_OK) Error_Handler();
+  Leg_Control_ForceZeroOutput(Motor_Control_Reason_None);
 }
 
 void Leg_Control_Handshake(void)
 {
+  Leg_Control_ForceZeroOutput(Motor_Control_Reason_Rescan);
   if (Motor_Transport_Stop() != HAL_OK) {
     Communication_SendString("MOTOR_TRANSPORT stop_fail\r\n");
     return;
@@ -729,11 +840,32 @@ void Leg_Control_Handshake(void)
       }
     }
     Communication_SendString("MOTOR_TRANSPORT start_fail\r\n");
+    Leg_Control_ForceZeroOutput(Motor_Control_Reason_TransportError);
+  } else {
+    uint8_t all_online = 1U;
+    for (uint8_t idx = 0U; idx < 8U; ++idx) {
+      Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(idx);
+      if (state == NULL || state->online != Motor_Online ||
+          state->angle_valid != Motor_Angle_Valid) {
+        all_online = 0U;
+        break;
+      }
+    }
+    if (!all_online) {
+      Leg_Control_ForceZeroOutput(Motor_Control_Reason_Offline);
+    } else {
+      single_motor_control.mode = Motor_Control_Observe;
+      single_motor_control.reason = Motor_Control_Reason_None;
+      single_motor_control.armed_motor_index = -1;
+      single_motor_control.arm_rotor_position = 0.0f;
+      single_motor_control.target_rotor_position = 0.0f;
+    }
   }
 }
 
 void Leg_Control_RequestHandshake(void)
 {
+  Leg_Control_ForceZeroOutput(Motor_Control_Reason_Rescan);
   handshake_requested = 1;
 }
 
@@ -789,49 +921,15 @@ void Leg_Control_Service(uint32_t now_ms)
 
 int Leg_Control_HoldCurrentPosition(void)
 {
-  Leg_Gait_StopAll();
-
-  for (uint8_t idx = 0; idx < 8; idx++) {
-    Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(idx);
-    if (state == NULL || state->online != Motor_Online || state->angle_valid != Motor_Angle_Valid)
-      return 0;
-  }
-
-  for (uint8_t leg = 0; leg < 4; leg++) {
-    for (uint8_t motor = 0; motor < 2; motor++) {
-      Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
-      MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
-
-      state->target_offset = state->angle - Legs[leg]->p_init[motor];
-      state->target_active = Motor_Target_Inactive;
-      state->target_result = Motor_Target_Done;
-      state->target_start_angle = state->angle;
-      state->target_start_tick = 0;
-      state->target_progress_tick = 0;
-      state->target_last_abs_error = 0.0f;
-      state->target_stop_error = LEG_WEB_STOP_ERROR_RAD;
-
-      cmd->mode = 1;
-      cmd->T = 0.0f;
-      cmd->W = 0.0f;
-      cmd->Pos = state->angle;
-      cmd->K_P = LEG_HOLD_KP;
-      cmd->K_W = LEG_HOLD_KW;
-      modify_data(cmd);
-    }
-  }
-
-  Communication_SendString("MOTOR_HOLD_CURRENT ok\r\n");
-  return 1;
+  Leg_Control_ForceZeroOutput(Motor_Control_Reason_InvalidCommand);
+  Communication_SendString("MOTOR_HOLD_CURRENT rejected: pid_stage_zero_output\r\n");
+  return 0;
 }
 
 void Leg_Control_StopAllDebugTargets(uint8_t reason)
 {
-  Motor_TargetResultTypeDef result = (reason == 0U) ? Motor_Target_Stopped : (Motor_TargetResultTypeDef)reason;
-  Leg_Gait_StopAll();
-
-  for (uint8_t idx = 0; idx < 8; idx++)
-    Leg_Control_StopDebugTarget(idx, result);
+  (void)reason;
+  Leg_Control_ForceZeroOutput(Motor_Control_Reason_OperatorStop);
 }
 
 /* ---- snapshot ---- */

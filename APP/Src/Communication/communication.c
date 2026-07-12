@@ -492,6 +492,12 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         }
     }
 
+    /* PID bring-up intentionally exposes no leg, gait, hold, or trajectory
+       path.  The PC debug tool only uses MOTOR_SET (arm/plan), rescan, stop,
+       and snapshot during this zero-output stage. */
+    Communication_SendString("MOTOR_CONTROL rejected: pid_stage_single_motor_only\r\n");
+    return;
+
     for (uint16_t i = 0; i + sizeof(leg_all_micro_cmd) - 1 <= len; i++) {
         if (memcmp(&data[i], leg_all_micro_cmd, sizeof(leg_all_micro_cmd) - 1) == 0) {
             if (!Leg_Gait_StartAllMicroTest()) {
@@ -964,6 +970,25 @@ void Communication_SendMotorStatus(void)
         len = append_motor_zero(buf, sizeof(buf), len);
     }
 
+    if (len > 0 && len < (int)sizeof(buf)) {
+        Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
+    }
+}
+
+void Communication_SendMotorControlStatus(void)
+{
+    Motor_ControlSnapshotTypeDef control;
+    Leg_Control_GetControlSnapshot(&control);
+
+    char buf[TX_IT_BUF_SIZE];
+    int len = snprintf(buf, sizeof(buf),
+        "MOTOR_CONTROL mode=%u reason=%u guard=%u armed=%d target=%.4f actual=%.4f "
+        "target_joint=%.4f actual_joint=%.4f error=%.4f kp=%.4f kw=%.4f\n",
+        (unsigned int)control.mode, (unsigned int)control.reason,
+        (unsigned int)control.zero_output_guard, (int)control.armed_motor_index,
+        (double)control.target_rotor_position, (double)control.actual_rotor_position,
+        (double)control.target_joint_position, (double)control.actual_joint_position,
+        (double)control.position_error, (double)control.kp, (double)control.kw);
     if (len > 0 && len < (int)sizeof(buf)) {
         Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
     }
