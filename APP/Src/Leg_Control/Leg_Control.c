@@ -61,6 +61,7 @@ static SingleMotorControlContextTypeDef single_motor_control = {
   .reason = Motor_Control_Reason_None,
   .armed_motor_index = -1,
 };
+static const char *single_motor_last_plan_reject_reason = "none";
 
 static void refresh_leg_online_state(uint8_t leg);
 
@@ -626,6 +627,7 @@ int Leg_Control_ArmSingleMotor(uint8_t motor_index)
   Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
   if (state == NULL || state->online != Motor_Online ||
       state->angle_valid != Motor_Angle_Valid) {
+    single_motor_last_plan_reject_reason = "offline_or_feedback_invalid";
     Leg_Control_ForceZeroOutput(Motor_Control_Reason_Offline);
     return 0;
   }
@@ -637,6 +639,7 @@ int Leg_Control_ArmSingleMotor(uint8_t motor_index)
   single_motor_control.armed_motor_index = (int8_t)motor_index;
   single_motor_control.arm_rotor_position = state->rotor_position;
   single_motor_control.target_rotor_position = state->rotor_position;
+  single_motor_last_plan_reject_reason = "none";
   __enable_irq();
   return 1;
 }
@@ -646,15 +649,32 @@ int Leg_Control_PlanSingleMotor(uint8_t motor_index, float offset_rad,
 {
   Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
   if (state == NULL || state->online != Motor_Online ||
-      state->angle_valid != Motor_Angle_Valid ||
-      offset_rad == 0.0f ||
-      offset_rad < -LEG_SINGLE_MOTOR_MAX_ROTOR_OFFSET_RAD ||
-      offset_rad > LEG_SINGLE_MOTOR_MAX_ROTOR_OFFSET_RAD ||
-      kp < 0.0f || kp > LEG_SINGLE_MOTOR_MAX_KP ||
-      kw < 0.0f || kw > LEG_SINGLE_MOTOR_MAX_KW ||
-      duration_ms == 0U || duration_ms > LEG_SINGLE_MOTOR_MAX_DURATION_MS ||
-      single_motor_control.mode != Motor_Control_ArmedSingleMotor ||
-      single_motor_control.armed_motor_index != (int8_t)motor_index) {
+      state->angle_valid != Motor_Angle_Valid) {
+    single_motor_last_plan_reject_reason = "offline_or_feedback_invalid";
+  } else if (offset_rad == 0.0f) {
+    single_motor_last_plan_reject_reason = "offset_zero";
+  } else if (offset_rad < -LEG_SINGLE_MOTOR_MAX_ROTOR_OFFSET_RAD ||
+             offset_rad > LEG_SINGLE_MOTOR_MAX_ROTOR_OFFSET_RAD) {
+    single_motor_last_plan_reject_reason = "offset_limit";
+  } else if (kp < 0.0f || kp > LEG_SINGLE_MOTOR_MAX_KP) {
+    single_motor_last_plan_reject_reason = "kp_limit";
+  } else if (kw < 0.0f || kw > LEG_SINGLE_MOTOR_MAX_KW) {
+    single_motor_last_plan_reject_reason = "kw_limit";
+  } else if (duration_ms == 0U || duration_ms > LEG_SINGLE_MOTOR_MAX_DURATION_MS) {
+    single_motor_last_plan_reject_reason = "duration_limit";
+  } else if (single_motor_control.mode != Motor_Control_ArmedSingleMotor) {
+    single_motor_last_plan_reject_reason = "not_armed";
+  } else if (single_motor_control.armed_motor_index != (int8_t)motor_index) {
+    single_motor_last_plan_reject_reason = "different_armed_motor";
+  } else {
+    single_motor_last_plan_reject_reason = "none";
+  }
+
+  if (single_motor_last_plan_reject_reason[0] != 'n' ||
+      single_motor_last_plan_reject_reason[1] != 'o' ||
+      single_motor_last_plan_reject_reason[2] != 'n' ||
+      single_motor_last_plan_reject_reason[3] != 'e' ||
+      single_motor_last_plan_reject_reason[4] != '\0') {
     Leg_Control_ForceZeroOutput(Motor_Control_Reason_InvalidCommand);
     return 0;
   }
@@ -681,6 +701,11 @@ int Leg_Control_PlanSingleMotor(uint8_t motor_index, float offset_rad,
   modify_data(cmd);
   __enable_irq();
   return 1;
+}
+
+const char *Leg_Control_GetLastPlanRejectReason(void)
+{
+  return single_motor_last_plan_reject_reason;
 }
 
 int Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad)

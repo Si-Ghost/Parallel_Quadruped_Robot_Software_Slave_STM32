@@ -85,6 +85,7 @@ int  Leg_Control_SetDebugAngle(uint8_t motor_index, float angle_rad);
 int  Leg_Control_ArmSingleMotor(uint8_t motor_index);
 int  Leg_Control_PlanSingleMotor(uint8_t motor_index, float offset_rad,
                                   float kp, float kw, uint32_t duration_ms);
+const char *Leg_Control_GetLastPlanRejectReason(void);
 void Leg_Control_ForceZeroOutput(Motor_ControlReasonTypeDef reason);
 void Leg_Control_GetControlSnapshot(Motor_ControlSnapshotTypeDef *snapshot);
 void Leg_Control_LogFootSnapshot(void);

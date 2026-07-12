@@ -1104,8 +1104,13 @@ static void handle_pid_control_text(const char *cmd_buf)
             Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
         return;
     }
-    if (!accepted)
-        Communication_SendString("MOTOR_CONTROL rejected: safety_gate\r\n");
+    if (!accepted) {
+        char buf[96];
+        int len = snprintf(buf, sizeof(buf), "PID_PLAN rejected gate=%s\r\n",
+                           Leg_Control_GetLastPlanRejectReason());
+        if (len > 0 && len < (int)sizeof(buf))
+            Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
+    }
     Communication_SendMotorControlStatus();
 }
 
