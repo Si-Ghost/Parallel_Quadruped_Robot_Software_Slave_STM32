@@ -384,9 +384,6 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
   update_static_hold_velocity_bias(rotor_velocity);
   control.position_error = control.ramped_target -
                            (rotor_position + control.simulated_position_offset);
-  uint8_t static_hold_mode =
-      (control.mode == Motor_SoftwareControl_StaticHoldDryRun ||
-       control.mode == Motor_SoftwareControl_StaticHoldActiveTorque) ? 1U : 0U;
   if (control.mode == Motor_SoftwareControl_CascadeDryRun ||
       control.mode == Motor_SoftwareControl_CascadeActiveTorque ||
       control.mode == Motor_SoftwareControl_StaticHoldDryRun ||
