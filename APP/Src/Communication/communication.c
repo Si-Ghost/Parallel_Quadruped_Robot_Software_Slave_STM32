@@ -1015,6 +1015,11 @@ int Communication_IsLinkAlive(void)
     return comm_ctx.handshake_done && (HAL_GetTick() - last_valid_packet_tick) < ESP32_WATCHDOG_TIMEOUT_MS;
 }
 
+uint32_t Communication_GetLinkAgeMs(void)
+{
+    return HAL_GetTick() - last_valid_packet_tick;
+}
+
 void Communication_ResetWatchdog(void)
 {
     last_valid_packet_tick = HAL_GetTick();
@@ -1086,6 +1091,21 @@ void Communication_SendString(const char *str)
     if (!str)
         return;
     Communication_SendBytes((const uint8_t *)str, strlen(str));
+}
+
+int Communication_TrySendString(const char *str)
+{
+    if (!str || !comm_ctx.uart || comm_ctx.tx_busy)
+        return 0;
+    size_t len = strlen(str);
+    if (len == 0U || len > TX_IT_BUF_SIZE)
+        return 0;
+    memcpy(comm_ctx.tx_buf, str, len);
+    if (HAL_UART_Transmit_IT(comm_ctx.uart, comm_ctx.tx_buf,
+                             (uint16_t)len) != HAL_OK)
+        return 0;
+    comm_ctx.tx_busy = 1U;
+    return 1;
 }
 
 static int append_fixed4(char *buf, size_t size, int pos, float value)

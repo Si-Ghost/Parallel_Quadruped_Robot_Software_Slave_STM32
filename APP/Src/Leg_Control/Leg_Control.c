@@ -284,9 +284,13 @@ static void transport_feedback_received(uint8_t leg,
                                 LEG_ROTOR_ZERO_NEAR_RAD);
   uint8_t motor_index = Leg_Control_MotorIndex(leg, motor);
   if (Motor_GroupControl_IsActive() && feedback->MError != 0U)
-    Motor_GroupControl_Stop(Motor_Group_StopMotorFault);
+    Motor_GroupControl_StopWithContext(Motor_Group_StopMotorFault,
+                                       (int8_t)motor_index,
+                                       (float)feedback->MError);
   else if (Motor_GroupControl_IsActive() && feedback->Temp >= 40)
-    Motor_GroupControl_Stop(Motor_Group_StopTemperature);
+    Motor_GroupControl_StopWithContext(Motor_Group_StopTemperature,
+                                       (int8_t)motor_index,
+                                       (float)feedback->Temp);
   else
     Motor_GroupControl_Update(motor_index, feedback->Pos, feedback->W, timestamp);
   state->handshake_status = Motor_Handshake_Ok;
@@ -1165,6 +1169,9 @@ void Leg_Control_Start(void)
 void Leg_Control_Service(uint32_t now_ms)
 {
   static uint32_t last_sw_pid_telemetry_ms = 0U;
+  static uint32_t last_group_stop_log_sequence = 0U;
+  static uint32_t pending_group_stop_log_sequence = 0U;
+  static char pending_group_stop_log[256];
   for (uint8_t leg = 0U; leg < 4U; ++leg) {
     uint32_t sequence = transport_uart_error_sequence[leg];
     if (sequence == transport_uart_error_reported[leg]) continue;
@@ -1203,35 +1210,113 @@ void Leg_Control_Service(uint32_t now_ms)
 
   if (Motor_GroupControl_IsArmed() || Motor_GroupControl_IsActive()) {
     Motor_GroupStopReason group_stop = Motor_Group_StopNone;
+    int8_t group_stop_motor = -1;
+    float group_stop_detail = 0.0f;
     if (!Communication_IsLinkAlive()) {
       group_stop = Motor_Group_StopCommandLink;
+      group_stop_detail = (float)Communication_GetLinkAgeMs();
     } else {
       for (uint8_t idx = 0U; idx < 8U; ++idx) {
         Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(idx);
         if (state == NULL || state->online != Motor_Online ||
             state->angle_valid != Motor_Angle_Valid ||
-            (now_ms - state->timestamp) > 10U) {
+            (now_ms - state->timestamp) >
+                MOTOR_GROUP_ACTIVE_FEEDBACK_TIMEOUT_MS) {
           group_stop = Motor_Group_StopOffline;
+          group_stop_motor = (int8_t)idx;
+          group_stop_detail = state == NULL
+                                  ? -1.0f
+                                  : (float)(now_ms - state->timestamp);
           break;
         }
         if (state->motor_error != 0U) {
           group_stop = Motor_Group_StopMotorFault;
+          group_stop_motor = (int8_t)idx;
+          group_stop_detail = (float)state->motor_error;
           break;
         }
         if (state->temperature_c >= 40) {
           group_stop = Motor_Group_StopTemperature;
+          group_stop_motor = (int8_t)idx;
+          group_stop_detail = (float)state->temperature_c;
           break;
         }
       }
     }
     if (group_stop != Motor_Group_StopNone) {
+      Motor_GroupControl_StopWithContext(group_stop, group_stop_motor,
+                                         group_stop_detail);
       Leg_Control_ForceZeroOutput(group_stop == Motor_Group_StopCommandLink
                                       ? Motor_Control_Reason_CommandLink
                                       : group_stop == Motor_Group_StopOffline
                                             ? Motor_Control_Reason_Offline
                                             : Motor_Control_Reason_SafetyLimit);
-      Motor_GroupControl_Stop(group_stop);
     }
+  }
+
+  Motor_GroupSnapshot stopped_group;
+  Leg_Control_GetGroupSnapshot(&stopped_group);
+  if (stopped_group.mode == Motor_Group_Stopped &&
+      stopped_group.stop_sequence != 0U &&
+      stopped_group.stop_sequence != last_group_stop_log_sequence &&
+      stopped_group.stop_sequence != pending_group_stop_log_sequence) {
+    static const char *const reason_name[] = {
+        "none", "operator", "invalid", "offline", "link", "temperature",
+        "motor_fault", "position", "controller", "stall", "rescan",
+        "transport"};
+    const char *name = (unsigned int)stopped_group.reason <
+                               (sizeof(reason_name) / sizeof(reason_name[0]))
+                           ? reason_name[stopped_group.reason]
+                           : "unknown";
+    int len = snprintf(
+        pending_group_stop_log, sizeof(pending_group_stop_log),
+        "[GROUP_STOP] seq=%lu reason=%u(%s) idx=%d detail=",
+        (unsigned long)stopped_group.stop_sequence,
+        (unsigned int)stopped_group.reason, name,
+        (int)stopped_group.stop_motor_index);
+    len = Leg_Control_AppendFixed4(pending_group_stop_log,
+                                   sizeof(pending_group_stop_log), len,
+                                   stopped_group.stop_detail);
+    if (len > 0) {
+      int written = snprintf(
+          &pending_group_stop_log[len],
+          sizeof(pending_group_stop_log) - (size_t)len,
+          " link_age=%lu age=",
+          (unsigned long)Communication_GetLinkAgeMs());
+      if (written < 0 || written >=
+              (int)(sizeof(pending_group_stop_log) - (size_t)len))
+        len = -1;
+      else
+        len += written;
+    }
+    for (uint8_t idx = 0U; idx < 8U && len > 0 &&
+                           len < (int)sizeof(pending_group_stop_log); ++idx) {
+      Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(idx);
+      uint32_t age = state == NULL ? 9999U : now_ms - state->timestamp;
+      if (age > 9999U) age = 9999U;
+      int written = snprintf(&pending_group_stop_log[len],
+                             sizeof(pending_group_stop_log) - (size_t)len,
+                             "%lu%c", (unsigned long)age,
+                             idx == 7U ? '\r' : ',');
+      if (written < 0 || written >=
+              (int)(sizeof(pending_group_stop_log) - (size_t)len)) {
+        len = -1;
+      } else {
+        len += written;
+      }
+    }
+    if (len > 0 && len < (int)sizeof(pending_group_stop_log) - 1) {
+      pending_group_stop_log[len++] = '\n';
+      pending_group_stop_log[len] = '\0';
+      pending_group_stop_log_sequence = stopped_group.stop_sequence;
+    } else {
+      pending_group_stop_log[0] = '\0';
+    }
+  }
+  if (pending_group_stop_log_sequence != 0U &&
+      Communication_TrySendString(pending_group_stop_log)) {
+    last_group_stop_log_sequence = pending_group_stop_log_sequence;
+    pending_group_stop_log_sequence = 0U;
   }
 
   if (single_motor_control.mode == Motor_Control_SingleMotorPosition ||
@@ -1381,7 +1466,10 @@ int Leg_Control_StartAllZero(void)
         (HAL_GetTick() - state->timestamp) > 10U ||
         state->motor_error != 0U || state->temperature_c >= 40 ||
         absf_local(state->rotor_position - group.arm_position[idx]) > 0.10f) {
-      Motor_GroupControl_Stop(Motor_Group_StopInvalidState);
+      Motor_GroupControl_StopWithContext(
+          Motor_Group_StopInvalidState, (int8_t)idx,
+          state == NULL ? -1.0f
+                        : (float)(HAL_GetTick() - state->timestamp));
       return 0;
     }
   }
@@ -1390,7 +1478,10 @@ int Leg_Control_StartAllZero(void)
 
 void Leg_Control_GetGroupSnapshot(Motor_GroupSnapshot *snapshot)
 {
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
   Motor_GroupControl_GetSnapshot(snapshot);
+  if (primask == 0U) __enable_irq();
 }
 
 void Leg_Control_GetGroupDiagnostics(Motor_GroupDiagnostics *diagnostics,

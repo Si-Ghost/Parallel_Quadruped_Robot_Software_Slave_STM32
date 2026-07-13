@@ -5,6 +5,12 @@
 
 #include <stdint.h>
 
+/* A load-bearing group must not release all eight motors because of one
+ * isolated scheduler/feedback jitter.  Thirty milliseconds still means that
+ * roughly thirty expected 1 kHz samples were missed and remains well below
+ * the transport layer's 100 ms hard offline timeout. */
+#define MOTOR_GROUP_ACTIVE_FEEDBACK_TIMEOUT_MS 30U
+
 typedef enum
 {
   Motor_Group_Disabled = 0,
@@ -42,6 +48,9 @@ typedef struct
   Motor_GroupStopReason reason;
   uint8_t ready;
   uint8_t all_at_zero;
+  int8_t stop_motor_index;
+  float stop_detail;
+  uint32_t stop_sequence;
   float target_offset;
   float arm_position[8];
   float target_position[8];
@@ -71,6 +80,9 @@ void Motor_GroupControl_Update(uint8_t motor_index,
                                float rotor_velocity,
                                uint32_t feedback_timestamp);
 void Motor_GroupControl_Stop(Motor_GroupStopReason reason);
+void Motor_GroupControl_StopWithContext(Motor_GroupStopReason reason,
+                                        int8_t motor_index,
+                                        float detail);
 uint8_t Motor_GroupControl_IsArmed(void);
 uint8_t Motor_GroupControl_IsActive(void);
 int Motor_GroupControl_GetAuthorizedTorque(uint8_t motor_index, float *torque);

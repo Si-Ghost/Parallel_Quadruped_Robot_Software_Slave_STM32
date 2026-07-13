@@ -29,6 +29,7 @@ void Communication_RxCallback(UART_HandleTypeDef *huart, uint16_t Size);
 void Communication_HandleUartError(UART_HandleTypeDef *huart);
 int  Communication_IsHandshakeDone(void);
 int  Communication_IsLinkAlive(void);
+uint32_t Communication_GetLinkAgeMs(void);
 void Communication_SetSafeRCData(void);
 void Communication_ResetWatchdog(void);
 void Communication_Task(void);
@@ -36,6 +37,7 @@ void Communication_Task(void);
 void Communication_SendByte(uint8_t byte);
 void Communication_SendBytes(const uint8_t *data, uint16_t len);
 void Communication_SendString(const char *str);
+int  Communication_TrySendString(const char *str);
 
 void Communication_NotifyTxComplete(void);
 void Communication_SendMotorAngles(void);

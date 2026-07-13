@@ -13,7 +13,8 @@
 #define GROUP_STAND_TARGET_SPEED_RAD_S    0.125f
 #define GROUP_TARGET_ERROR_RAD            0.08f
 #define GROUP_MIN_DT_S                    0.0002f
-#define GROUP_MAX_DT_S                    0.0100f
+#define GROUP_MAX_DT_S                    \
+  ((float)MOTOR_GROUP_ACTIVE_FEEDBACK_TIMEOUT_MS * 0.001f)
 #define GROUP_POSITION_KP                 35.9f
 #define GROUP_POSITION_KD                 1.0f
 /* Keep the cautious group target ramp above, but use the already validated
@@ -51,6 +52,9 @@ static Motor_GroupProfile group_profile;
 static Motor_GroupStopReason stop_reason;
 static uint8_t group_ready;
 static float group_target_offset;
+static int8_t stop_motor_index;
+static float stop_detail;
+static uint32_t stop_sequence;
 
 static float clamp_symmetric(float value, float limit)
 {
@@ -73,16 +77,39 @@ void Motor_GroupControl_Init(void)
   stop_reason = Motor_Group_StopNone;
   group_ready = 0U;
   group_target_offset = 0.0f;
+  stop_motor_index = -1;
+  stop_detail = 0.0f;
 }
 
 void Motor_GroupControl_Stop(Motor_GroupStopReason reason)
 {
+  Motor_GroupControl_StopWithContext(reason, -1, 0.0f);
+}
+
+void Motor_GroupControl_StopWithContext(Motor_GroupStopReason reason,
+                                        int8_t motor_index,
+                                        float detail)
+{
+  /* Preserve the first non-zero stop.  Leg_Control_ForceZeroOutput() also
+   * calls the generic stop path while clearing every command; without this
+   * guard it overwrote the actual temperature/offline/controller cause. */
+  if (reason != Motor_Group_StopNone && group_mode == Motor_Group_Stopped)
+    return;
+
   for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i) {
     channels[i].torque = 0.0f;
     channels[i].integral = 0.0f;
   }
-  group_mode = reason == Motor_Group_StopNone ? Motor_Group_Disabled
-                                               : Motor_Group_Stopped;
+  if (reason == Motor_Group_StopNone) {
+    group_mode = Motor_Group_Disabled;
+    stop_motor_index = -1;
+    stop_detail = 0.0f;
+  } else {
+    stop_motor_index = motor_index;
+    stop_detail = isfinite(detail) ? detail : 0.0f;
+    ++stop_sequence;
+    group_mode = Motor_Group_Stopped;
+  }
   stop_reason = reason;
   group_ready = 0U;
 }
@@ -121,18 +148,25 @@ int Motor_GroupControl_ArmOffsets(const Motor_StateSnapshotTypeDef states[8],
     float target_offset = target_offsets[i];
     if (!isfinite(target_offset) ||
         fabsf(target_offset) > GROUP_MAX_TARGET_OFFSET_RAD) {
-      Motor_GroupControl_Stop(Motor_Group_StopPositionLimit);
+      Motor_GroupControl_StopWithContext(Motor_Group_StopPositionLimit,
+                                         (int8_t)i, target_offset);
       return 0;
     }
     const Motor_StateSnapshotTypeDef *state = &states[i];
     if (!state->online || !state->angle_valid || state->timestamp == 0U ||
         (now_ms - state->timestamp) > 10U || !isfinite(state->rotor_position) ||
         state->motor_error != 0U || state->temperature_c >= 40) {
-      Motor_GroupControl_Stop(state->motor_error != 0U
-                                  ? Motor_Group_StopMotorFault
-                                  : state->temperature_c >= 40
-                                        ? Motor_Group_StopTemperature
-                                        : Motor_Group_StopInvalidState);
+      Motor_GroupStopReason reason = state->motor_error != 0U
+                                         ? Motor_Group_StopMotorFault
+                                         : state->temperature_c >= 40
+                                               ? Motor_Group_StopTemperature
+                                               : Motor_Group_StopInvalidState;
+      float detail = state->motor_error != 0U
+                         ? (float)state->motor_error
+                         : state->temperature_c >= 40
+                               ? (float)state->temperature_c
+                               : (float)(now_ms - state->timestamp);
+      Motor_GroupControl_StopWithContext(reason, (int8_t)i, detail);
       return 0;
     }
 
@@ -145,14 +179,17 @@ int Motor_GroupControl_ArmOffsets(const Motor_StateSnapshotTypeDef states[8],
     if (fabsf(target_offset) > 0.0001f &&
         fabsf(zero_position - channel->arm_position) >
             GROUP_OFFSET_START_ZERO_RAD) {
-      Motor_GroupControl_Stop(Motor_Group_StopInvalidState);
+      Motor_GroupControl_StopWithContext(Motor_Group_StopInvalidState,
+                                         (int8_t)i,
+                                         zero_position - channel->arm_position);
       return 0;
     }
     channel->target_position = zero_position + target_offset;
     float delta = channel->target_position - channel->arm_position;
     if (!isfinite(channel->target_position) ||
         fabsf(delta) > GROUP_MAX_TARGET_DELTA_RAD) {
-      Motor_GroupControl_Stop(Motor_Group_StopPositionLimit);
+      Motor_GroupControl_StopWithContext(Motor_Group_StopPositionLimit,
+                                         (int8_t)i, delta);
       return 0;
     }
     channel->ramped_target = channel->arm_position;
@@ -197,7 +234,8 @@ void Motor_GroupControl_Update(uint8_t motor_index,
     return;
   if (!isfinite(rotor_position) || !isfinite(rotor_velocity) ||
       feedback_timestamp == 0U) {
-    Motor_GroupControl_Stop(Motor_Group_StopController);
+    Motor_GroupControl_StopWithContext(Motor_Group_StopController,
+                                       (int8_t)motor_index, 0.0f);
     return;
   }
 
@@ -211,7 +249,9 @@ void Motor_GroupControl_Update(uint8_t motor_index,
     channel->diagnostic_max_abs_velocity = fabsf(rotor_velocity);
   if (fabsf(rotor_position - channel->arm_position) >
       GROUP_MAX_ARM_EXCURSION_RAD) {
-    Motor_GroupControl_Stop(Motor_Group_StopPositionLimit);
+    Motor_GroupControl_StopWithContext(
+        Motor_Group_StopPositionLimit, (int8_t)motor_index,
+        rotor_position - channel->arm_position);
     return;
   }
 
@@ -225,7 +265,8 @@ void Motor_GroupControl_Update(uint8_t motor_index,
              0.001f;
   channel->previous_feedback_timestamp = feedback_timestamp;
   if (!isfinite(dt) || dt < GROUP_MIN_DT_S || dt > GROUP_MAX_DT_S) {
-    Motor_GroupControl_Stop(Motor_Group_StopController);
+    Motor_GroupControl_StopWithContext(Motor_Group_StopController,
+                                       (int8_t)motor_index, dt * 1000.0f);
     return;
   }
 
@@ -292,7 +333,9 @@ int Motor_GroupControl_GetAuthorizedTorque(uint8_t motor_index, float *torque)
     return 0;
   if (!isfinite(channels[motor_index].torque) ||
       fabsf(channels[motor_index].torque) > GROUP_TORQUE_MAX_NM) {
-    Motor_GroupControl_Stop(Motor_Group_StopController);
+    Motor_GroupControl_StopWithContext(Motor_Group_StopController,
+                                       (int8_t)motor_index,
+                                       channels[motor_index].torque);
     return 0;
   }
   *torque = channels[motor_index].torque;
@@ -308,6 +351,9 @@ void Motor_GroupControl_GetSnapshot(Motor_GroupSnapshot *snapshot)
   snapshot->reason = stop_reason;
   snapshot->ready = group_ready;
   snapshot->all_at_zero = group_mode == Motor_Group_Active ? 1U : 0U;
+  snapshot->stop_motor_index = stop_motor_index;
+  snapshot->stop_detail = stop_detail;
+  snapshot->stop_sequence = stop_sequence;
   snapshot->target_offset = group_target_offset;
   for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i) {
     snapshot->arm_position[i] = channels[i].arm_position;
