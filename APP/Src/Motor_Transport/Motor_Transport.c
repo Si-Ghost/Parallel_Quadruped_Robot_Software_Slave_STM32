@@ -11,8 +11,9 @@
 #define MOTOR_TRANSPORT_OFFLINE_TIMEOUT_MS 100U
 #define MOTOR_TRANSPORT_QUIESCE_TIMEOUT_MS 5U
 
-/* Approved sequential static-hold tests: indices 1, 3, 4 and 6. */
-#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 0U
+/* Re-lock after simplifying static hold to the direct reference cascade PID.
+ * The revised controller must complete a zero-output dry-run before ACTIVE. */
+#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 1U
 
 _Static_assert((MOTOR_TRANSPORT_RING_SIZE & (MOTOR_TRANSPORT_RING_SIZE - 1U)) == 0U,
                "motor RX ring size must be a power of two");

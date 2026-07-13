@@ -1217,7 +1217,7 @@ static void send_static_hold_plan(void)
         "\"skp\":%ld,\"ski\":%ld,\"skd\":%ld,"
         "\"tmax\":%ld,\"vt\":%ld,\"vm\":%ld,"
         "\"xm\":%ld,\"dur\":%lu,\"dkp\":0,\"dkw\":0,"
-        "\"vf\":%ld,\"ig\":%ld,\"cal\":2000,\"sa\":383,\"od\":5,\"guard\":%u}\n",
+        "\"vf\":%ld,\"ig\":%ld,\"cal\":0,\"sa\":383,\"od\":5,\"guard\":%u}\n",
         (unsigned int)s.dry_run, (int)s.motor_index,
         (long)(s.position_loop_kp * 1000000.0f),
         (long)(s.position_loop_ki * 1000000.0f),
