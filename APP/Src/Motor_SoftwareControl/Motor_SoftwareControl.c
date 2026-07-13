@@ -39,6 +39,7 @@
 #define SWCTRL_STATIC_HOLD_INTEGRAL_GATE_RAD 0.0010f
 #define SWCTRL_STATIC_HOLD_SIM_OFFSET_RAD 0.0100f
 #define SWCTRL_STATIC_HOLD_BIAS_CAL_MS 2000U
+#define SWCTRL_STATIC_HOLD_RAW_OVERSPEED_SAMPLES 5U
 
 static Motor_SoftwareControlSnapshot control;
 static uint32_t plan_start_ms;
@@ -46,6 +47,7 @@ static uint32_t previous_feedback_timestamp;
 static const char *last_reject_reason = "none";
 static float cascade_position_error_previous;
 static float cascade_speed_error_previous;
+static float previous_rotor_position;
 /* The approved live static-hold action is consumable only once per MCU boot.
  * Arming and stopping do not restore it. */
 static uint8_t static_hold_active_consumed;
@@ -92,6 +94,7 @@ void Motor_SoftwareControl_Init(void)
   previous_feedback_timestamp = 0U;
   cascade_position_error_previous = 0.0f;
   cascade_speed_error_previous = 0.0f;
+  previous_rotor_position = 0.0f;
   last_reject_reason = "none";
 }
 
@@ -213,6 +216,8 @@ static void configure_static_hold(Motor_SoftwareControlMode mode,
   control.corrected_velocity = 0.0f;
   control.velocity_bias_samples = 0U;
   control.velocity_bias_valid = 0U;
+  control.position_velocity = 0.0f;
+  control.raw_overspeed_count = 0U;
   control.duration_ms = SWCTRL_STATIC_HOLD_DURATION_MS;
   control.elapsed_ms = 0U;
   control.position_error = 0.0f;
@@ -232,6 +237,7 @@ static void configure_static_hold(Motor_SoftwareControlMode mode,
   previous_feedback_timestamp = 0U;
   cascade_position_error_previous = 0.0f;
   cascade_speed_error_previous = 0.0f;
+  previous_rotor_position = 0.0f;
 }
 
 int Motor_SoftwareControl_StartStaticHoldDryRun(uint8_t motor_index,
@@ -281,7 +287,8 @@ int Motor_SoftwareControl_StartStaticHoldActive(uint8_t motor_index,
 }
 
 static uint8_t static_hold_safety_exceeded(float rotor_position,
-                                           float rotor_velocity)
+                                           float rotor_velocity,
+                                           uint8_t position_velocity_valid)
 {
   if (control.mode != Motor_SoftwareControl_StaticHoldDryRun &&
       control.mode != Motor_SoftwareControl_StaticHoldActiveTorque) return 0U;
@@ -290,7 +297,19 @@ static uint8_t static_hold_safety_exceeded(float rotor_position,
     control.safety_limit = Motor_SoftwareControl_LimitPositionExcursion;
     return 1U;
   }
+  if (position_velocity_valid != 0U &&
+      fabsf(control.position_velocity) > control.actual_velocity_limit) {
+    control.safety_limit = Motor_SoftwareControl_LimitPositionVelocity;
+    return 1U;
+  }
   if (fabsf(rotor_velocity) > control.actual_velocity_limit) {
+    if (control.raw_overspeed_count < UINT8_MAX)
+      ++control.raw_overspeed_count;
+  } else {
+    control.raw_overspeed_count = 0U;
+  }
+  if (control.raw_overspeed_count >=
+      SWCTRL_STATIC_HOLD_RAW_OVERSPEED_SAMPLES) {
     control.safety_limit = Motor_SoftwareControl_LimitRawVelocity;
     return 1U;
   }
@@ -360,6 +379,8 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
     control.actual_position = rotor_position;
     control.raw_velocity = rotor_velocity;
     control.filtered_velocity = rotor_velocity;
+    control.position_velocity = 0.0f;
+    previous_rotor_position = rotor_position;
     control.feedback_torque = feedback_torque;
     control.position_error = control.raw_target - rotor_position;
     control.feedback_timestamp = feedback_timestamp;
@@ -368,7 +389,7 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
     update_static_hold_velocity_bias(rotor_velocity);
     control.position_error = control.raw_target -
                              (rotor_position + control.simulated_position_offset);
-    if (static_hold_safety_exceeded(rotor_position, rotor_velocity))
+    if (static_hold_safety_exceeded(rotor_position, rotor_velocity, 0U))
       Motor_SoftwareControl_Stop(Motor_SoftwareControl_StopSafetyLimit);
     return;
   }
@@ -393,8 +414,10 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
   control.feedback_timestamp = feedback_timestamp;
   control.elapsed_ms = now_ms - plan_start_ms;
   update_static_hold_dry_run_simulation();
+  control.position_velocity = (rotor_position - previous_rotor_position) / dt;
+  previous_rotor_position = rotor_position;
 
-  if (static_hold_safety_exceeded(rotor_position, rotor_velocity)) {
+  if (static_hold_safety_exceeded(rotor_position, rotor_velocity, 1U)) {
     control.position_error = control.raw_target - rotor_position;
     Motor_SoftwareControl_Stop(Motor_SoftwareControl_StopSafetyLimit);
     return;

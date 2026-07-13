@@ -1215,9 +1215,9 @@ static void send_static_hold_plan(void)
         "SW_HOLD_PLAN {\"dry\":%u,\"i\":%d,\"rel\":0,"
         "\"pkp\":%ld,\"pki\":%ld,\"pkd\":%ld,"
         "\"skp\":%ld,\"ski\":%ld,\"skd\":%ld,"
-        "\"tmax\":%ld,\"vtmax\":%ld,\"vmax\":%ld,"
-        "\"xmax\":%ld,\"dur\":%lu,\"dkp\":0,\"dkw\":0,"
-        "\"vf\":%ld,\"ig\":%ld,\"cal\":2000,\"sa\":10000,\"guard\":%u}\n",
+        "\"tmax\":%ld,\"vt\":%ld,\"vm\":%ld,"
+        "\"xm\":%ld,\"dur\":%lu,\"dkp\":0,\"dkw\":0,"
+        "\"vf\":%ld,\"ig\":%ld,\"cal\":2000,\"sa\":10000,\"od\":5,\"guard\":%u}\n",
         (unsigned int)s.dry_run, (int)s.motor_index,
         (long)(s.position_loop_kp * 1000000.0f),
         (long)(s.position_loop_ki * 1000000.0f),
@@ -1380,8 +1380,8 @@ void Communication_SendSoftwarePidTelemetry(void)
         len = snprintf(buf, sizeof(buf),
             "SW_HOLD_STATE {\"m\":%u,\"i\":%d,\"a\":%ld,\"p\":%ld,"
             "\"dev\":%ld,\"x\":%ld,\"sim\":%ld,\"ph\":%u,\"e\":%ld,"
-            "\"v\":%ld,\"fv\":%ld,\"vb\":%ld,\"cv\":%ld,\"bv\":%u,"
-            "\"ft\":%ld,\"dt\":%lu,"
+            "\"v\":%ld,\"fv\":%ld,\"vb\":%ld,\"cv\":%ld,\"pv\":%ld,"
+            "\"bv\":%u,\"oc\":%u,\"ft\":%ld,\"dt\":%lu,"
             "\"el\":%lu,\"stop\":%u,\"sl\":%u}\n",
             (unsigned int)s.mode, (int)s.motor_index,
             (long)(s.arm_position * 1000000.0f),
@@ -1395,7 +1395,9 @@ void Communication_SendSoftwarePidTelemetry(void)
             (long)(s.filtered_velocity * 1000000.0f),
             (long)(s.velocity_bias * 1000000.0f),
             (long)(s.corrected_velocity * 1000000.0f),
+            (long)(s.position_velocity * 1000000.0f),
             (unsigned int)s.velocity_bias_valid,
+            (unsigned int)s.raw_overspeed_count,
             (long)(s.feedback_torque * 1000000.0f),
             (unsigned long)(s.dt_s * 1000000.0f),
             (unsigned long)s.elapsed_ms, (unsigned int)s.stop_reason,

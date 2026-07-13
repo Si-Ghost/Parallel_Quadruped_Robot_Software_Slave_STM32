@@ -27,7 +27,8 @@ typedef enum
 {
   Motor_SoftwareControl_LimitNone = 0,
   Motor_SoftwareControl_LimitPositionExcursion = 1,
-  Motor_SoftwareControl_LimitRawVelocity = 2
+  Motor_SoftwareControl_LimitRawVelocity = 2,
+  Motor_SoftwareControl_LimitPositionVelocity = 3
 } Motor_SoftwareControlSafetyLimit;
 
 typedef enum
@@ -65,6 +66,7 @@ typedef struct
   float integral_position_gate;
   float velocity_bias;
   float corrected_velocity;
+  float position_velocity;
   float simulated_position_offset;
   float kp;
   float ki;
@@ -96,6 +98,7 @@ typedef struct
   uint8_t integral_enabled;
   uint8_t simulation_phase;
   uint8_t velocity_bias_valid;
+  uint8_t raw_overspeed_count;
 } Motor_SoftwareControlSnapshot;
 
 void Motor_SoftwareControl_Init(void);
