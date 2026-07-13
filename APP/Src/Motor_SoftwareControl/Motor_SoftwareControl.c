@@ -107,10 +107,10 @@ int Motor_SoftwareControl_Arm(uint8_t motor_index, float rotor_position,
   return 1;
 }
 
-int Motor_SoftwareControl_StartCascadeMoveActive(uint8_t motor_index,
-                                                 float offset_rad,
-                                                 uint32_t duration_ms,
-                                                 uint32_t now_ms)
+int Motor_SoftwareControl_StartMoveHoldActive(uint8_t motor_index,
+                                              float offset_rad,
+                                              uint32_t duration_ms,
+                                              uint32_t now_ms)
 {
   if (control.mode != Motor_SoftwareControl_Armed) last_reject_reason = "not_armed";
   else if (control.motor_index != (int8_t)motor_index) last_reject_reason = "different_armed_motor";
@@ -122,9 +122,9 @@ int Motor_SoftwareControl_StartCascadeMoveActive(uint8_t motor_index,
     Motor_SoftwareControl_Stop(Motor_SoftwareControl_StopInvalidCommand);
     return 0;
   }
-  /* Debug movement uses the same cascade PID as the reference project.
-   * Motor_Transport remains the final global output guard. */
-  control.mode = Motor_SoftwareControl_CascadeActiveTorque;
+  /* Use the already validated infinite-hold controller for the entire move.
+   * Only the target is ramped; reaching it naturally becomes static hold. */
+  control.mode = Motor_SoftwareControl_StaticHoldActiveTorque;
   control.dry_run = 0U;
   control.test = Motor_SoftwareControl_TestPositionStep;
   control.safety_limit = Motor_SoftwareControl_LimitNone;
@@ -140,8 +140,18 @@ int Motor_SoftwareControl_StartCascadeMoveActive(uint8_t motor_index,
   control.speed_loop_kp = SWCTRL_CASCADE_SPEED_KP;
   control.speed_loop_ki = SWCTRL_CASCADE_SPEED_KI;
   control.speed_loop_kd = SWCTRL_CASCADE_SPEED_KD;
-  control.torque_limit = SWCTRL_CASCADE_TORQUE_MAX;
-  control.duration_ms = duration_ms;
+  control.torque_limit = SWCTRL_STATIC_HOLD_TORQUE_MAX;
+  control.target_velocity_limit = SWCTRL_STATIC_HOLD_TARGET_SPEED_MAX;
+  control.actual_velocity_limit = SWCTRL_STATIC_HOLD_ACTUAL_SPEED_MAX;
+  control.position_excursion_limit = SWCTRL_STATIC_HOLD_POSITION_MAX;
+  control.velocity_filter_hz = SWCTRL_STATIC_HOLD_VELOCITY_FILTER_HZ;
+  control.integral_position_gate = SWCTRL_STATIC_HOLD_INTEGRAL_GATE_RAD;
+  control.velocity_bias = 0.0f;
+  control.corrected_velocity = 0.0f;
+  control.velocity_bias_samples = 0U;
+  control.velocity_bias_valid = 1U;
+  control.raw_overspeed_count = 0U;
+  control.duration_ms = SWCTRL_STATIC_HOLD_ACTIVE_DURATION_MS;
   control.elapsed_ms = 0U;
   control.i_term = 0.0f;
   plan_start_ms = now_ms;
@@ -151,47 +161,6 @@ int Motor_SoftwareControl_StartCascadeMoveActive(uint8_t motor_index,
   previous_feedback_timestamp = 0U;
   cascade_position_error_previous = 0.0f;
   cascade_speed_error_previous = 0.0f;
-  return 1;
-}
-
-int Motor_SoftwareControl_TransitionCascadeToHold(uint32_t now_ms)
-{
-  if (control.mode != Motor_SoftwareControl_CascadeActiveTorque ||
-      control.dry_run != 0U) {
-    last_reject_reason = "not_active_cascade";
-    return 0;
-  }
-
-  /* Keep the final multi-turn target and controller state.  Only switch the
-   * tuning/limits to the already validated reference-style static hold, so
-   * the move ends without a zero-torque gap or a return to the arm position. */
-  control.mode = Motor_SoftwareControl_StaticHoldActiveTorque;
-  control.test = Motor_SoftwareControl_TestStaticHold;
-  control.safety_limit = Motor_SoftwareControl_LimitNone;
-  control.stop_reason = Motor_SoftwareControl_StopNone;
-  control.arm_position = control.raw_target;
-  control.ramped_target = control.raw_target;
-  control.ramp_velocity = 0.0f;
-  control.torque_limit = SWCTRL_STATIC_HOLD_TORQUE_MAX;
-  control.target_velocity_limit = SWCTRL_STATIC_HOLD_TARGET_SPEED_MAX;
-  control.actual_velocity_limit = SWCTRL_STATIC_HOLD_ACTUAL_SPEED_MAX;
-  control.position_excursion_limit = SWCTRL_STATIC_HOLD_POSITION_MAX;
-  control.velocity_filter_hz = SWCTRL_STATIC_HOLD_VELOCITY_FILTER_HZ;
-  control.integral_position_gate = SWCTRL_STATIC_HOLD_INTEGRAL_GATE_RAD;
-  control.i_term = clampf(control.i_term, SWCTRL_STATIC_HOLD_INTEGRAL_MAX);
-  control.duration_ms = SWCTRL_STATIC_HOLD_ACTIVE_DURATION_MS;
-  control.elapsed_ms = 0U;
-  control.simulated_position_offset = 0.0f;
-  control.simulation_phase = 0U;
-  control.velocity_bias = 0.0f;
-  control.corrected_velocity = control.raw_velocity;
-  control.velocity_bias_samples = 0U;
-  control.velocity_bias_valid = 1U;
-  control.raw_overspeed_count = 0U;
-  plan_start_ms = now_ms;
-  cascade_position_error_previous = control.position_error;
-  cascade_speed_error_previous = control.speed_target - control.raw_velocity;
-  last_reject_reason = "none";
   return 1;
 }
 
@@ -376,7 +345,10 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
   }
 
   float remaining = control.raw_target - control.ramped_target;
-  float max_step = control.target_velocity_limit * dt;
+  float ramp_speed_limit =
+      (control.test == Motor_SoftwareControl_TestPositionStep)
+          ? SWCTRL_TARGET_SPEED_RAD_S : control.target_velocity_limit;
+  float max_step = ramp_speed_limit * dt;
   float target_step = clampf(remaining, max_step);
   control.ramped_target += target_step;
   control.ramp_velocity = target_step / dt;
@@ -479,8 +451,7 @@ int Motor_SoftwareControl_GetAuthorizedTorque(uint8_t motor_index, float *torque
 {
   if (torque == NULL) return 0;
   *torque = 0.0f;
-  if ((control.mode != Motor_SoftwareControl_CascadeActiveTorque &&
-       control.mode != Motor_SoftwareControl_StaticHoldActiveTorque) ||
+  if (control.mode != Motor_SoftwareControl_StaticHoldActiveTorque ||
       static_hold_motor_allowed(motor_index) == 0U ||
       control.motor_index != (int8_t)motor_index || control.dry_run != 0U)
     return 0;

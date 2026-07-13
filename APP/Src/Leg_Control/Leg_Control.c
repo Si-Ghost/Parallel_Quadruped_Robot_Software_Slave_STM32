@@ -747,22 +747,22 @@ int Leg_Control_PlanSingleMotor(uint8_t motor_index, float offset_rad,
     return 0;
   }
 
-  if (!Motor_SoftwareControl_StartCascadeMoveActive(motor_index, offset_rad,
-                                                     duration_ms,
-                                                     HAL_GetTick())) {
+  if (!Motor_SoftwareControl_StartMoveHoldActive(motor_index, offset_rad,
+                                                  duration_ms,
+                                                  HAL_GetTick())) {
     single_motor_last_plan_reject_reason = Motor_SoftwareControl_GetLastRejectReason();
     Leg_Control_ForceZeroOutput(Motor_Control_Reason_InvalidCommand);
     return 0;
   }
 
   __disable_irq();
-  single_motor_control.mode = Motor_Control_SingleMotorPosition;
+  single_motor_control.mode = Motor_Control_StaticHoldActive;
   single_motor_control.reason = Motor_Control_Reason_None;
   single_motor_control.target_rotor_position =
       single_motor_control.arm_rotor_position + offset_rad;
-  single_motor_control.kp = kp;
-  single_motor_control.kw = kw;
-  single_motor_control.duration_ms = duration_ms;
+  single_motor_control.kp = 0.0f;
+  single_motor_control.kw = 0.0f;
+  single_motor_control.duration_ms = LEG_STATIC_HOLD_ACTIVE_DURATION_MS;
   single_motor_control.plan_start_tick = HAL_GetTick();
 
   /* Driver PD remains off; the reference-style software cascade PID owns T. */
@@ -1197,21 +1197,8 @@ void Leg_Control_Service(uint32_t now_ms)
     } else if (single_motor_control.duration_ms != 0U &&
                (now_ms - single_motor_control.plan_start_tick) >=
                single_motor_control.duration_ms) {
-      if (single_motor_control.mode == Motor_Control_SingleMotorPosition &&
-          Motor_SoftwareControl_TransitionCascadeToHold(now_ms)) {
-        __disable_irq();
-        single_motor_control.mode = Motor_Control_StaticHoldActive;
-        single_motor_control.reason = Motor_Control_Reason_None;
-        single_motor_control.kp = 0.0f;
-        single_motor_control.kw = 0.0f;
-        single_motor_control.duration_ms = LEG_STATIC_HOLD_ACTIVE_DURATION_MS;
-        single_motor_control.plan_start_tick = now_ms;
-        __enable_irq();
-        Communication_SendMotorControlStatus();
-      } else {
-        Leg_Control_ForceZeroOutput(Motor_Control_Reason_PlanTimeout);
-        stopped = 1U;
-      }
+      Leg_Control_ForceZeroOutput(Motor_Control_Reason_PlanTimeout);
+      stopped = 1U;
     } else {
       float plan_offset = absf_local(single_motor_control.target_rotor_position -
                                      single_motor_control.arm_rotor_position);
