@@ -267,6 +267,7 @@ static void transport_feedback_received(uint8_t leg,
   Legs[leg]->motor_data[motor] = *feedback;
   Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
   Motor_State_UpdateRawFeedback(state, feedback->Pos, feedback->W, feedback->T,
+                                (int8_t)feedback->Temp, feedback->MError,
                                 timestamp, LEG_REDUCTION_RATIO,
                                 LEG_ROTOR_ZERO_NEAR_RAD);
   state->handshake_status = Motor_Handshake_Ok;
@@ -1041,6 +1042,7 @@ void Leg_Control_Handshake(void)
                                                 Legs[leg]->GPIO_Pin, Legs[leg]->huartx);
         if (ret == HAL_OK && fbk->correct && fbk->motor_id == motor) {
           Motor_State_UpdateRawFeedback(state, fbk->Pos, fbk->W, fbk->T,
+                                        (int8_t)fbk->Temp, fbk->MError,
                                         HAL_GetTick(), LEG_REDUCTION_RATIO,
                                         LEG_ROTOR_ZERO_NEAR_RAD);
           state->handshake_status = Motor_Handshake_Ok;
@@ -1123,6 +1125,7 @@ static void __attribute__((unused)) poll_online_motor(uint8_t leg, uint8_t motor
 
   if (motor_feedback_is_valid(ret, fbk, motor)) {
     Motor_State_UpdateRawFeedback(state, fbk->Pos, fbk->W, fbk->T,
+                                  (int8_t)fbk->Temp, fbk->MError,
                                   HAL_GetTick(), LEG_REDUCTION_RATIO,
                                   LEG_ROTOR_ZERO_NEAR_RAD);
     state->io_error_count = 0;
@@ -1492,7 +1495,10 @@ void Leg_Rx_Handler(Leg_HandlerTypeDef *hleg, uint16_t Size)
         if (state->online && hleg->motor_data[0].correct)
           Motor_State_UpdateRawFeedback(state, hleg->motor_data[0].Pos,
                                         hleg->motor_data[0].W,
-                                        hleg->motor_data[0].T, HAL_GetTick(),
+                                        hleg->motor_data[0].T,
+                                        (int8_t)hleg->motor_data[0].Temp,
+                                        hleg->motor_data[0].MError,
+                                        HAL_GetTick(),
                                         LEG_REDUCTION_RATIO,
                                         LEG_ROTOR_ZERO_NEAR_RAD);
         else {
@@ -1527,7 +1533,10 @@ void Leg_Rx_Handler(Leg_HandlerTypeDef *hleg, uint16_t Size)
         if (state->online && hleg->motor_data[1].correct)
           Motor_State_UpdateRawFeedback(state, hleg->motor_data[1].Pos,
                                         hleg->motor_data[1].W,
-                                        hleg->motor_data[1].T, HAL_GetTick(),
+                                        hleg->motor_data[1].T,
+                                        (int8_t)hleg->motor_data[1].Temp,
+                                        hleg->motor_data[1].MError,
+                                        HAL_GetTick(),
                                         LEG_REDUCTION_RATIO,
                                         LEG_ROTOR_ZERO_NEAR_RAD);
         else {

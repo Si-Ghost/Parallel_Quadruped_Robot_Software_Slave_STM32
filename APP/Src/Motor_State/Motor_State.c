@@ -71,6 +71,8 @@ void Motor_State_UpdateRawFeedback(Motor_StateTypeDef *state,
                                    float rotor_position,
                                    float raw_velocity,
                                    float raw_torque,
+                                   int8_t temperature_c,
+                                   uint8_t motor_error,
                                    uint32_t timestamp,
                                    float reduction_ratio,
                                    float zero_threshold)
@@ -80,6 +82,8 @@ void Motor_State_UpdateRawFeedback(Motor_StateTypeDef *state,
   state->rotor_position = rotor_position;
   state->raw_velocity = raw_velocity;
   state->raw_torque = raw_torque;
+  state->temperature_c = temperature_c;
+  state->motor_error = motor_error;
   state->timestamp = timestamp;
   state->angle_valid = Motor_Angle_Valid;
   state->online = Motor_Online;
@@ -113,6 +117,8 @@ void Motor_State_GetSnapshot(const Motor_StateTypeDef *state,
   snapshot->rotor_position = state->rotor_position;
   snapshot->raw_velocity = state->raw_velocity;
   snapshot->raw_torque = state->raw_torque;
+  snapshot->temperature_c = state->temperature_c;
+  snapshot->motor_error = state->motor_error;
   snapshot->zero_rotor_position = state->zero_rotor_position;
   snapshot->direction = state->direction;
   snapshot->joint_position = state->joint_position;

@@ -10,7 +10,7 @@ extern RC_DataTypeDef rc_data;
 extern volatile uint32_t last_valid_packet_tick;
 
 #define RX_BUF_SIZE 128
-#define TX_IT_BUF_SIZE 256
+#define TX_IT_BUF_SIZE 384
 #define RX_SNAPSHOT_SIZE 16
 #define TEXT_COMMAND_BUF_SIZE 128
 #define RX_CHUNK_QUEUE_DEPTH 8U
@@ -1136,6 +1136,40 @@ static int append_motor_zero(char *buf, size_t size, int len)
     return len;
 }
 
+static int append_motor_health(char *buf, size_t size, int len)
+{
+    int8_t temperature[8] = {0};
+    uint8_t motor_error[8] = {0};
+    uint8_t valid[8] = {0};
+
+    for (uint8_t i = 0U; i < 8U; ++i) {
+        Motor_StateSnapshotTypeDef state;
+        if (Leg_Control_GetMotorStateSnapshot(i, &state)) {
+            temperature[i] = state.temperature_c;
+            motor_error[i] = state.motor_error;
+            valid[i] = (state.online && state.angle_valid) ? 1U : 0U;
+        }
+    }
+
+    if (len < 0 || (size_t)len >= size)
+        return -1;
+
+    int written = snprintf(&buf[len], size - (size_t)len,
+        "MOTOR_HEALTH %d,%d,%d,%d,%d,%d,%d,%d "
+        "%u,%u,%u,%u,%u,%u,%u,%u %u,%u,%u,%u,%u,%u,%u,%u\n",
+        (int)temperature[0], (int)temperature[1],
+        (int)temperature[2], (int)temperature[3],
+        (int)temperature[4], (int)temperature[5],
+        (int)temperature[6], (int)temperature[7],
+        motor_error[0], motor_error[1], motor_error[2], motor_error[3],
+        motor_error[4], motor_error[5], motor_error[6], motor_error[7],
+        valid[0], valid[1], valid[2], valid[3],
+        valid[4], valid[5], valid[6], valid[7]);
+    if (written < 0 || written >= (int)(size - (size_t)len))
+        return -1;
+    return len + written;
+}
+
 /* 向 ESP32 网页端发送紧凑的电机握手与目标状态。 */
 void Communication_SendMotorStatus(void)
 {
@@ -1161,6 +1195,10 @@ void Communication_SendMotorStatus(void)
         target_active[4], target_active[5], target_active[6], target_active[7],
         target_result[0], target_result[1], target_result[2], target_result[3],
         target_result[4], target_result[5], target_result[6], target_result[7]);
+
+    if (len > 0 && len < (int)sizeof(buf)) {
+        len = append_motor_health(buf, sizeof(buf), len);
+    }
 
     if (len > 0 && len < (int)sizeof(buf)) {
         len = append_motor_zero(buf, sizeof(buf), len);

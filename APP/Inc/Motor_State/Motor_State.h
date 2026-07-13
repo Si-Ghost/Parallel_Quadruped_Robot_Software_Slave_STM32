@@ -63,6 +63,8 @@ typedef struct
     float speed;
   };
   float raw_torque;
+  int8_t temperature_c;
+  uint8_t motor_error;
   union {
     float zero_rotor_position;
     float zero_offset;
@@ -106,6 +108,8 @@ typedef struct
   float rotor_position;
   float raw_velocity;
   float raw_torque;
+  int8_t temperature_c;
+  uint8_t motor_error;
   float zero_rotor_position;
   float direction;
   float joint_position;
@@ -126,6 +130,8 @@ void Motor_State_UpdateRawFeedback(Motor_StateTypeDef *state,
                                    float rotor_position,
                                    float raw_velocity,
                                    float raw_torque,
+                                   int8_t temperature_c,
+                                   uint8_t motor_error,
                                    uint32_t timestamp,
                                    float reduction_ratio,
                                    float zero_threshold);
