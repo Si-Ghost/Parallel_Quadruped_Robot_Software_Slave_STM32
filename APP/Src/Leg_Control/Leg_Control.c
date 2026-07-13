@@ -1210,8 +1210,9 @@ void Leg_Control_Service(uint32_t now_ms)
                           : (plan_offset <= 0.101f) ? 0.150f
                                                    : LEG_SINGLE_MOTOR_MAX_ERROR_RAD;
       if (absf_local(single_motor_control.target_rotor_position -
-                     state->rotor_position) > error_limit ||
-               absf_local(state->raw_velocity) > LEG_SINGLE_MOTOR_MAX_VELOCITY_RAD_S) {
+                      state->rotor_position) > error_limit ||
+          (static_hold_mode == 0U &&
+           absf_local(state->raw_velocity) > LEG_SINGLE_MOTOR_MAX_VELOCITY_RAD_S)) {
         Leg_Control_ForceZeroOutput(Motor_Control_Reason_SafetyLimit);
         stopped = 1U;
       } else {

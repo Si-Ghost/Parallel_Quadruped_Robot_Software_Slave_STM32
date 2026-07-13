@@ -11,8 +11,8 @@
 #define MOTOR_TRANSPORT_OFFLINE_TIMEOUT_MS 100U
 #define MOTOR_TRANSPORT_QUIESCE_TIMEOUT_MS 5U
 
-/* Approved ACTIVE test: widened reference-style hold on LF ID1 only. */
-#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 0U
+/* Re-lock for the reference-style hold dry-run without a W hard stop. */
+#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 1U
 
 _Static_assert((MOTOR_TRANSPORT_RING_SIZE & (MOTOR_TRANSPORT_RING_SIZE - 1U)) == 0U,
                "motor RX ring size must be a power of two");
