@@ -35,6 +35,10 @@ typedef struct
   float previous_speed_error;
   float integral;
   float torque;
+  float diagnostic_position_min;
+  float diagnostic_position_max;
+  float diagnostic_max_abs_velocity;
+  float diagnostic_max_abs_torque;
   uint32_t previous_feedback_timestamp;
 } Motor_GroupChannel;
 
@@ -127,6 +131,8 @@ int Motor_GroupControl_ArmTarget(const Motor_StateSnapshotTypeDef states[8],
     channel->ramped_target = channel->arm_position;
     channel->actual_position = channel->arm_position;
     channel->position_error = delta;
+    channel->diagnostic_position_min = channel->arm_position;
+    channel->diagnostic_position_max = channel->arm_position;
   }
 
   group_mode = Motor_Group_Armed;
@@ -145,6 +151,10 @@ int Motor_GroupControl_Start(uint32_t now_ms)
     channels[i].previous_speed_error = 0.0f;
     channels[i].integral = 0.0f;
     channels[i].torque = 0.0f;
+    channels[i].diagnostic_position_min = channels[i].actual_position;
+    channels[i].diagnostic_position_max = channels[i].actual_position;
+    channels[i].diagnostic_max_abs_velocity = 0.0f;
+    channels[i].diagnostic_max_abs_torque = 0.0f;
   }
   group_mode = Motor_Group_Active;
   stop_reason = Motor_Group_StopNone;
@@ -166,6 +176,12 @@ void Motor_GroupControl_Update(uint8_t motor_index,
 
   Motor_GroupChannel *channel = &channels[motor_index];
   channel->actual_position = rotor_position;
+  if (rotor_position < channel->diagnostic_position_min)
+    channel->diagnostic_position_min = rotor_position;
+  if (rotor_position > channel->diagnostic_position_max)
+    channel->diagnostic_position_max = rotor_position;
+  if (fabsf(rotor_velocity) > channel->diagnostic_max_abs_velocity)
+    channel->diagnostic_max_abs_velocity = fabsf(rotor_velocity);
   if (fabsf(rotor_position - channel->arm_position) >
       GROUP_MAX_ARM_EXCURSION_RAD) {
     Motor_GroupControl_Stop(Motor_Group_StopPositionLimit);
@@ -207,6 +223,8 @@ void Motor_GroupControl_Update(uint8_t motor_index,
       GROUP_SPEED_KP * speed_error + channel->integral +
           GROUP_SPEED_KD * speed_delta,
       GROUP_TORQUE_MAX_NM);
+  if (fabsf(channel->torque) > channel->diagnostic_max_abs_torque)
+    channel->diagnostic_max_abs_torque = fabsf(channel->torque);
 
   /* Infinite hold intentionally does not treat persistent position error as a
    * stall.  An operator load may prevent progress while the controller must
@@ -256,5 +274,25 @@ void Motor_GroupControl_GetSnapshot(Motor_GroupSnapshot *snapshot)
                                   channels[i].actual_position;
     if (fabsf(snapshot->position_error[i]) > GROUP_TARGET_ERROR_RAD)
       snapshot->all_at_zero = 0U;
+  }
+}
+
+void Motor_GroupControl_GetDiagnostics(Motor_GroupDiagnostics *diagnostics,
+                                       uint8_t reset_window)
+{
+  if (diagnostics == NULL) return;
+  memset(diagnostics, 0, sizeof(*diagnostics));
+  for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i) {
+    Motor_GroupChannel *channel = &channels[i];
+    diagnostics->position_peak_to_peak[i] =
+        channel->diagnostic_position_max - channel->diagnostic_position_min;
+    diagnostics->max_abs_velocity[i] = channel->diagnostic_max_abs_velocity;
+    diagnostics->max_abs_torque[i] = channel->diagnostic_max_abs_torque;
+    if (reset_window != 0U) {
+      channel->diagnostic_position_min = channel->actual_position;
+      channel->diagnostic_position_max = channel->actual_position;
+      channel->diagnostic_max_abs_velocity = 0.0f;
+      channel->diagnostic_max_abs_torque = 0.0f;
+    }
   }
 }

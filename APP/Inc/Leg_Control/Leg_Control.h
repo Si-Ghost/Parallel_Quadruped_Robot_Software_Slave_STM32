@@ -102,6 +102,8 @@ int  Leg_Control_ArmAllZero(void);
 int  Leg_Control_ArmAllOffset(float rotor_offset);
 int  Leg_Control_StartAllZero(void);
 void Leg_Control_GetGroupSnapshot(Motor_GroupSnapshot *snapshot);
+void Leg_Control_GetGroupDiagnostics(Motor_GroupDiagnostics *diagnostics,
+                                     uint8_t reset_window);
 void Leg_Control_StopAllDebugTargets(uint8_t reason);
 void Leg_Control_GetAngles(float angles[8], uint8_t valid[8]);
 int  Leg_Control_GetMotorStateSnapshot(uint8_t motor_index,

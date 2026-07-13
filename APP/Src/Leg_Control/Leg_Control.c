@@ -1348,6 +1348,15 @@ void Leg_Control_GetGroupSnapshot(Motor_GroupSnapshot *snapshot)
   Motor_GroupControl_GetSnapshot(snapshot);
 }
 
+void Leg_Control_GetGroupDiagnostics(Motor_GroupDiagnostics *diagnostics,
+                                     uint8_t reset_window)
+{
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  Motor_GroupControl_GetDiagnostics(diagnostics, reset_window);
+  if (primask == 0U) __enable_irq();
+}
+
 void Leg_Control_StopAllDebugTargets(uint8_t reason)
 {
   (void)reason;

@@ -1,4 +1,5 @@
 #include "communication.h"
+#include <math.h>
 #include <string.h>
 #include <stdio.h>
 #include "crc_ccitt.h"
@@ -10,7 +11,7 @@ extern RC_DataTypeDef rc_data;
 extern volatile uint32_t last_valid_packet_tick;
 
 #define RX_BUF_SIZE 128
-#define TX_IT_BUF_SIZE 640
+#define TX_IT_BUF_SIZE 896
 #define RX_SNAPSHOT_SIZE 16
 #define TEXT_COMMAND_BUF_SIZE 128
 #define RX_CHUNK_QUEUE_DEPTH 8U
@@ -1295,6 +1296,70 @@ static int append_motor_group(char *buf, size_t size, int len)
     return len;
 }
 
+static float clamp_diagnostic_value(float value, float maximum)
+{
+    if (!isfinite(value) || value < 0.0f) return 0.0f;
+    return value > maximum ? maximum : value;
+}
+
+static int append_motor_group_diagnostics(char *buf, size_t size, int len)
+{
+    Motor_GroupDiagnostics diagnostics;
+    Leg_Control_GetGroupDiagnostics(&diagnostics, 1U);
+    if (len < 0 || (size_t)len >= size) return -1;
+
+    int written = snprintf(&buf[len], size - (size_t)len,
+                           "MOTOR_GROUP_DIAG p2p=");
+    if (written < 0 || written >= (int)(size - (size_t)len)) return -1;
+    len += written;
+    for (uint8_t i = 0U; i < 8U && len > 0; ++i) {
+        len = append_fixed4(buf, size, len,
+                            clamp_diagnostic_value(
+                                diagnostics.position_peak_to_peak[i], 9.9999f));
+        if (len > 0) {
+            written = snprintf(&buf[len], size - (size_t)len,
+                               "%c", i == 7U ? ' ' : ',');
+            if (written < 0 || written >= (int)(size - (size_t)len)) return -1;
+            len += written;
+        }
+    }
+
+    if (len > 0) {
+        written = snprintf(&buf[len], size - (size_t)len, "vmax=");
+        if (written < 0 || written >= (int)(size - (size_t)len)) return -1;
+        len += written;
+    }
+    for (uint8_t i = 0U; i < 8U && len > 0; ++i) {
+        len = append_fixed4(buf, size, len,
+                            clamp_diagnostic_value(
+                                diagnostics.max_abs_velocity[i], 99.9999f));
+        if (len > 0) {
+            written = snprintf(&buf[len], size - (size_t)len,
+                               "%c", i == 7U ? ' ' : ',');
+            if (written < 0 || written >= (int)(size - (size_t)len)) return -1;
+            len += written;
+        }
+    }
+
+    if (len > 0) {
+        written = snprintf(&buf[len], size - (size_t)len, "tmax=");
+        if (written < 0 || written >= (int)(size - (size_t)len)) return -1;
+        len += written;
+    }
+    for (uint8_t i = 0U; i < 8U && len > 0; ++i) {
+        len = append_fixed4(buf, size, len,
+                            clamp_diagnostic_value(
+                                diagnostics.max_abs_torque[i], 1.5000f));
+        if (len > 0) {
+            written = snprintf(&buf[len], size - (size_t)len,
+                               "%c", i == 7U ? '\n' : ',');
+            if (written < 0 || written >= (int)(size - (size_t)len)) return -1;
+            len += written;
+        }
+    }
+    return len;
+}
+
 /* 向 ESP32 网页端发送紧凑的电机握手与目标状态。 */
 void Communication_SendMotorStatus(void)
 {
@@ -1323,6 +1388,10 @@ void Communication_SendMotorStatus(void)
 
     if (len > 0 && len < (int)sizeof(buf)) {
         len = append_motor_group(buf, sizeof(buf), len);
+    }
+
+    if (len > 0 && len < (int)sizeof(buf)) {
+        len = append_motor_group_diagnostics(buf, sizeof(buf), len);
     }
 
     if (len > 0 && len < (int)sizeof(buf)) {

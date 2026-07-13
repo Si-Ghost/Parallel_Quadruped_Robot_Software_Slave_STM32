@@ -42,6 +42,13 @@ typedef struct
   float position_error[8];
 } Motor_GroupSnapshot;
 
+typedef struct
+{
+  float position_peak_to_peak[8];
+  float max_abs_velocity[8];
+  float max_abs_torque[8];
+} Motor_GroupDiagnostics;
+
 void Motor_GroupControl_Init(void);
 int Motor_GroupControl_ArmZero(const Motor_StateSnapshotTypeDef states[8],
                                uint32_t now_ms);
@@ -57,5 +64,7 @@ uint8_t Motor_GroupControl_IsArmed(void);
 uint8_t Motor_GroupControl_IsActive(void);
 int Motor_GroupControl_GetAuthorizedTorque(uint8_t motor_index, float *torque);
 void Motor_GroupControl_GetSnapshot(Motor_GroupSnapshot *snapshot);
+void Motor_GroupControl_GetDiagnostics(Motor_GroupDiagnostics *diagnostics,
+                                       uint8_t reset_window);
 
 #endif
