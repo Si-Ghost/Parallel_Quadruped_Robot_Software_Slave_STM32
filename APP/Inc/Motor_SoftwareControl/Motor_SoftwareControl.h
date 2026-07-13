@@ -13,14 +13,17 @@ typedef enum
   Motor_SoftwareControl_CascadeDryRun = 5,
   Motor_SoftwareControl_CascadeActiveTorque = 6,
   Motor_SoftwareControl_StaticHoldDryRun = 7,
-  Motor_SoftwareControl_StaticHoldActiveTorque = 8
+  Motor_SoftwareControl_StaticHoldActiveTorque = 8,
+  Motor_SoftwareControl_TrajectoryDryRun = 9,
+  Motor_SoftwareControl_TrajectoryActiveTorque = 10
 } Motor_SoftwareControlMode;
 
 typedef enum
 {
   Motor_SoftwareControl_TestNone = 0,
   Motor_SoftwareControl_TestPositionStep = 1,
-  Motor_SoftwareControl_TestStaticHold = 2
+  Motor_SoftwareControl_TestStaticHold = 2,
+  Motor_SoftwareControl_TestCycloidTrajectory = 3
 } Motor_SoftwareControlTest;
 
 typedef enum
@@ -99,7 +102,20 @@ typedef struct
   uint8_t simulation_phase;
   uint8_t velocity_bias_valid;
   uint8_t raw_overspeed_count;
+  float trajectory_amplitude;
+  float trajectory_phase;
+  uint32_t trajectory_period_ms;
+  uint8_t trajectory_cycles;
+  uint8_t trajectory_cycle_index;
+  uint8_t trajectory_complete;
 } Motor_SoftwareControlSnapshot;
+
+#define MOTOR_SOFTWARE_TRAJECTORY_MOTOR_INDEX       2U
+#define MOTOR_SOFTWARE_TRAJECTORY_AMPLITUDE_RAD      0.50f
+#define MOTOR_SOFTWARE_TRAJECTORY_PERIOD_MS          4000U
+#define MOTOR_SOFTWARE_TRAJECTORY_CYCLES             1U
+#define MOTOR_SOFTWARE_TRAJECTORY_SETTLE_MS          1000U
+#define MOTOR_SOFTWARE_TRAJECTORY_DURATION_MS        5000U
 
 void Motor_SoftwareControl_Init(void);
 int Motor_SoftwareControl_Arm(uint8_t motor_index, float rotor_position,
@@ -112,6 +128,9 @@ int Motor_SoftwareControl_StartStaticHoldDryRun(uint8_t motor_index,
                                                 uint32_t now_ms);
 int Motor_SoftwareControl_StartStaticHoldActive(uint8_t motor_index,
                                                 uint32_t now_ms);
+int Motor_SoftwareControl_StartCycloidTrajectory(uint8_t motor_index,
+                                                 uint8_t dry_run,
+                                                 uint32_t now_ms);
 void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
                                   float feedback_torque,
                                   uint32_t feedback_timestamp, uint32_t now_ms);

@@ -31,6 +31,13 @@
 #define SWCTRL_STATIC_HOLD_POSITION_MAX 0.00f
 #define SWCTRL_STATIC_HOLD_VELOCITY_FILTER_HZ 20.0f
 #define SWCTRL_STATIC_HOLD_INTEGRAL_GATE_RAD 0.0f
+#define SWCTRL_TRAJECTORY_TORQUE_MAX       1.50f
+#define SWCTRL_TRAJECTORY_INTEGRAL_MAX     0.20f
+#define SWCTRL_TRAJECTORY_SPEED_TARGET_MAX 2.00f
+#define SWCTRL_TRAJECTORY_ACTUAL_SPEED_MAX 3.00f
+#define SWCTRL_TRAJECTORY_EXCURSION_MAX    0.75f
+#define SWCTRL_TRAJECTORY_VELOCITY_FILTER_HZ 20.0f
+#define SWCTRL_TRAJECTORY_OVERSPEED_SAMPLES 3U
 /* Two Q15 rotor-position counts.  The dry-run now exercises the same
  * sub-milliradian region that failed to build holding torque in hardware. */
 #define SWCTRL_STATIC_HOLD_SIM_OFFSET_RAD (2.0f * 6.28318530718f / 32768.0f)
@@ -55,6 +62,20 @@ static float clampf(float value, float limit)
 static uint8_t static_hold_motor_allowed(uint8_t motor_index)
 {
   return motor_index < 8U ? 1U : 0U;
+}
+
+static uint8_t trajectory_mode(void)
+{
+  return (control.mode == Motor_SoftwareControl_TrajectoryDryRun ||
+          control.mode == Motor_SoftwareControl_TrajectoryActiveTorque) ? 1U
+                                                                         : 0U;
+}
+
+static uint8_t continuous_cascade_mode(void)
+{
+  return (control.mode == Motor_SoftwareControl_StaticHoldDryRun ||
+          control.mode == Motor_SoftwareControl_StaticHoldActiveTorque ||
+          trajectory_mode() != 0U) ? 1U : 0U;
 }
 
 void Motor_SoftwareControl_Init(void)
@@ -265,18 +286,127 @@ int Motor_SoftwareControl_StartStaticHoldActive(uint8_t motor_index,
   return 1;
 }
 
-static uint8_t static_hold_safety_exceeded(float rotor_position)
+int Motor_SoftwareControl_StartCycloidTrajectory(uint8_t motor_index,
+                                                 uint8_t dry_run,
+                                                 uint32_t now_ms)
 {
-  if (control.mode != Motor_SoftwareControl_StaticHoldDryRun &&
-      control.mode != Motor_SoftwareControl_StaticHoldActiveTorque) return 0U;
+  if (control.mode != Motor_SoftwareControl_Armed)
+    last_reject_reason = "not_armed";
+  else if (control.motor_index != (int8_t)motor_index)
+    last_reject_reason = "different_armed_motor";
+  else if (motor_index != MOTOR_SOFTWARE_TRAJECTORY_MOTOR_INDEX)
+    last_reject_reason = "trajectory_motor_locked";
+  else if (dry_run > 1U)
+    last_reject_reason = "trajectory_dry_run_invalid";
+  else
+    last_reject_reason = "none";
+
+  if (strcmp(last_reject_reason, "none") != 0) {
+    Motor_SoftwareControl_Stop(Motor_SoftwareControl_StopInvalidCommand);
+    return 0;
+  }
+
+  control.mode = dry_run != 0U
+                     ? Motor_SoftwareControl_TrajectoryDryRun
+                     : Motor_SoftwareControl_TrajectoryActiveTorque;
+  control.stop_reason = Motor_SoftwareControl_StopNone;
+  control.test = Motor_SoftwareControl_TestCycloidTrajectory;
+  control.safety_limit = Motor_SoftwareControl_LimitNone;
+  control.dry_run = dry_run;
+  control.raw_target = control.arm_position;
+  control.ramped_target = control.arm_position;
+  control.ramp_velocity = 0.0f;
+  control.position_loop_kp = SWCTRL_CASCADE_POSITION_KP;
+  control.position_loop_ki = SWCTRL_CASCADE_POSITION_KI;
+  control.position_loop_kd = SWCTRL_CASCADE_POSITION_KD;
+  control.speed_loop_kp = SWCTRL_CASCADE_SPEED_KP;
+  control.speed_loop_ki = SWCTRL_CASCADE_SPEED_KI;
+  control.speed_loop_kd = SWCTRL_CASCADE_SPEED_KD;
+  control.torque_limit = SWCTRL_TRAJECTORY_TORQUE_MAX;
+  control.target_velocity_limit = SWCTRL_TRAJECTORY_SPEED_TARGET_MAX;
+  control.actual_velocity_limit = SWCTRL_TRAJECTORY_ACTUAL_SPEED_MAX;
+  control.position_excursion_limit = SWCTRL_TRAJECTORY_EXCURSION_MAX;
+  control.velocity_filter_hz = SWCTRL_TRAJECTORY_VELOCITY_FILTER_HZ;
+  control.integral_position_gate = 0.0f;
+  control.duration_ms = MOTOR_SOFTWARE_TRAJECTORY_DURATION_MS;
+  control.elapsed_ms = 0U;
+  control.p_term = 0.0f;
+  control.i_term = 0.0f;
+  control.d_term = 0.0f;
+  control.calculated_torque = 0.0f;
+  control.limited_torque = 0.0f;
+  control.torque_limited = 0U;
+  control.integral_enabled = 0U;
+  control.raw_overspeed_count = 0U;
+  control.trajectory_amplitude = MOTOR_SOFTWARE_TRAJECTORY_AMPLITUDE_RAD;
+  control.trajectory_phase = 0.0f;
+  control.trajectory_period_ms = MOTOR_SOFTWARE_TRAJECTORY_PERIOD_MS;
+  control.trajectory_cycles = MOTOR_SOFTWARE_TRAJECTORY_CYCLES;
+  control.trajectory_cycle_index = 0U;
+  control.trajectory_complete = 0U;
+  plan_start_ms = now_ms;
+  previous_feedback_timestamp = 0U;
+  cascade_position_error_previous = 0.0f;
+  cascade_speed_error_previous = 0.0f;
+  previous_rotor_position = control.arm_position;
+  return 1;
+}
+
+static uint8_t controlled_safety_exceeded(float rotor_position,
+                                          float rotor_velocity)
+{
+  if (continuous_cascade_mode() == 0U) return 0U;
   if (control.position_excursion_limit > 0.0f &&
       fabsf(rotor_position - control.arm_position) >
       control.position_excursion_limit) {
     control.safety_limit = Motor_SoftwareControl_LimitPositionExcursion;
     return 1U;
   }
-  control.raw_overspeed_count = 0U;
+  if (control.actual_velocity_limit > 0.0f &&
+      fabsf(rotor_velocity) > control.actual_velocity_limit) {
+    if (control.raw_overspeed_count < 255U) ++control.raw_overspeed_count;
+    if (control.raw_overspeed_count >= SWCTRL_TRAJECTORY_OVERSPEED_SAMPLES) {
+      control.safety_limit = Motor_SoftwareControl_LimitRawVelocity;
+      return 1U;
+    }
+  } else {
+    control.raw_overspeed_count = 0U;
+  }
   return 0U;
+}
+
+static void update_cycloid_trajectory_target(void)
+{
+  if (trajectory_mode() == 0U || control.trajectory_period_ms == 0U ||
+      control.trajectory_cycles == 0U) return;
+
+  uint32_t motion_ms = control.trajectory_period_ms *
+                       (uint32_t)control.trajectory_cycles;
+  if (control.elapsed_ms >= motion_ms) {
+    control.raw_target = control.arm_position;
+    control.ramped_target = control.arm_position;
+    control.ramp_velocity = 0.0f;
+    control.trajectory_phase = 1.0f;
+    control.trajectory_cycle_index = control.trajectory_cycles;
+    control.trajectory_complete = 1U;
+    return;
+  }
+
+  uint32_t cycle_ms = control.elapsed_ms % control.trajectory_period_ms;
+  float phase = (float)cycle_ms / (float)control.trajectory_period_ms;
+  const float two_pi = 6.28318530718f;
+  float phase_angle = two_pi * phase;
+  float shape = 0.5f - 0.5f * cosf(phase_angle);
+  float period_s = (float)control.trajectory_period_ms * 0.001f;
+  control.raw_target = control.arm_position +
+                       control.trajectory_amplitude * shape;
+  control.ramped_target = control.raw_target;
+  control.ramp_velocity = control.trajectory_amplitude *
+                          (3.14159265359f / period_s) * sinf(phase_angle);
+  control.trajectory_phase = phase;
+  control.trajectory_cycle_index =
+      (uint8_t)(control.elapsed_ms / control.trajectory_period_ms);
+  control.trajectory_complete = 0U;
 }
 
 static void update_static_hold_dry_run_simulation(void)
@@ -307,7 +437,9 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
       control.mode != Motor_SoftwareControl_CascadeDryRun &&
       control.mode != Motor_SoftwareControl_CascadeActiveTorque &&
       control.mode != Motor_SoftwareControl_StaticHoldDryRun &&
-      control.mode != Motor_SoftwareControl_StaticHoldActiveTorque) return;
+      control.mode != Motor_SoftwareControl_StaticHoldActiveTorque &&
+      control.mode != Motor_SoftwareControl_TrajectoryDryRun &&
+      control.mode != Motor_SoftwareControl_TrajectoryActiveTorque) return;
   if (!isfinite(rotor_position) || !isfinite(rotor_velocity) ||
       !isfinite(feedback_torque)) {
     Motor_SoftwareControl_Stop(Motor_SoftwareControl_StopInvalidNumber);
@@ -324,6 +456,7 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
     control.position_error = control.raw_target - rotor_position;
     control.feedback_timestamp = feedback_timestamp;
     control.elapsed_ms = now_ms - plan_start_ms;
+    update_cycloid_trajectory_target();
     update_static_hold_dry_run_simulation();
     control.velocity_bias = 0.0f;
     control.corrected_velocity = control.filtered_velocity;
@@ -331,7 +464,7 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
     control.velocity_bias_valid = 1U;
     control.position_error = control.raw_target -
                              (rotor_position + control.simulated_position_offset);
-    if (static_hold_safety_exceeded(rotor_position))
+    if (controlled_safety_exceeded(rotor_position, rotor_velocity))
       Motor_SoftwareControl_Stop(Motor_SoftwareControl_StopSafetyLimit);
     return;
   }
@@ -344,25 +477,29 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
     return;
   }
 
-  float remaining = control.raw_target - control.ramped_target;
-  float ramp_speed_limit =
-      (control.test == Motor_SoftwareControl_TestPositionStep)
-          ? SWCTRL_TARGET_SPEED_RAD_S : control.target_velocity_limit;
-  float max_step = ramp_speed_limit * dt;
-  float target_step = clampf(remaining, max_step);
-  control.ramped_target += target_step;
-  control.ramp_velocity = target_step / dt;
+  control.elapsed_ms = now_ms - plan_start_ms;
+  if (trajectory_mode() != 0U) {
+    update_cycloid_trajectory_target();
+  } else {
+    float remaining = control.raw_target - control.ramped_target;
+    float ramp_speed_limit =
+        (control.test == Motor_SoftwareControl_TestPositionStep)
+            ? SWCTRL_TARGET_SPEED_RAD_S : control.target_velocity_limit;
+    float max_step = ramp_speed_limit * dt;
+    float target_step = clampf(remaining, max_step);
+    control.ramped_target += target_step;
+    control.ramp_velocity = target_step / dt;
+  }
   control.actual_position = rotor_position;
   control.raw_velocity = rotor_velocity;
   control.feedback_torque = feedback_torque;
   control.dt_s = dt;
   control.feedback_timestamp = feedback_timestamp;
-  control.elapsed_ms = now_ms - plan_start_ms;
   update_static_hold_dry_run_simulation();
   control.position_velocity = (rotor_position - previous_rotor_position) / dt;
   previous_rotor_position = rotor_position;
 
-  if (static_hold_safety_exceeded(rotor_position)) {
+  if (controlled_safety_exceeded(rotor_position, rotor_velocity)) {
     control.position_error = control.raw_target - rotor_position;
     Motor_SoftwareControl_Stop(Motor_SoftwareControl_StopSafetyLimit);
     return;
@@ -379,24 +516,23 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
   if (control.mode == Motor_SoftwareControl_CascadeDryRun ||
       control.mode == Motor_SoftwareControl_CascadeActiveTorque ||
       control.mode == Motor_SoftwareControl_StaticHoldDryRun ||
-      control.mode == Motor_SoftwareControl_StaticHoldActiveTorque) {
+      control.mode == Motor_SoftwareControl_StaticHoldActiveTorque ||
+      control.mode == Motor_SoftwareControl_TrajectoryDryRun ||
+      control.mode == Motor_SoftwareControl_TrajectoryActiveTorque) {
     float previous_position_error = cascade_position_error_previous;
     float position_delta = control.position_error - previous_position_error;
     cascade_position_error_previous = control.position_error;
-    float speed_target_limit =
-        (control.mode == Motor_SoftwareControl_StaticHoldDryRun ||
-         control.mode == Motor_SoftwareControl_StaticHoldActiveTorque)
-            ? control.target_velocity_limit : SWCTRL_CASCADE_POSITION_MAX;
+    float speed_target_limit = continuous_cascade_mode() != 0U
+                                   ? control.target_velocity_limit
+                                   : SWCTRL_CASCADE_POSITION_MAX;
     control.speed_target = clampf(control.ramp_velocity +
                                   control.position_loop_kp * control.position_error +
                                   control.position_loop_ki * 0.0f +
                                   control.position_loop_kd * position_delta,
                                   speed_target_limit);
-    uint8_t static_hold_mode =
-        (control.mode == Motor_SoftwareControl_StaticHoldDryRun ||
-         control.mode == Motor_SoftwareControl_StaticHoldActiveTorque) ? 1U : 0U;
-    float speed_feedback = static_hold_mode ? control.raw_velocity
-                                            : control.corrected_velocity;
+    float speed_feedback = continuous_cascade_mode() != 0U
+                               ? control.raw_velocity
+                               : control.corrected_velocity;
     control.speed_error = control.speed_target - speed_feedback;
     float speed_delta = control.speed_error - cascade_speed_error_previous;
     cascade_speed_error_previous = control.speed_error;
@@ -410,7 +546,9 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
   uint8_t cascade_mode = (control.mode == Motor_SoftwareControl_CascadeDryRun ||
                           control.mode == Motor_SoftwareControl_CascadeActiveTorque ||
                           control.mode == Motor_SoftwareControl_StaticHoldDryRun ||
-                          control.mode == Motor_SoftwareControl_StaticHoldActiveTorque);
+                          control.mode == Motor_SoftwareControl_StaticHoldActiveTorque ||
+                          control.mode == Motor_SoftwareControl_TrajectoryDryRun ||
+                          control.mode == Motor_SoftwareControl_TrajectoryActiveTorque);
   float integral_error = cascade_mode
                              ? control.speed_error : control.position_error;
   float integral_gain = cascade_mode
@@ -421,10 +559,10 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
    * runs every control cycle, including while the rest-speed bias estimate is
    * converging and while position error is close to zero. */
   if (!cascade_mode) integral_step *= dt;
-  uint8_t static_hold_mode =
-      (control.mode == Motor_SoftwareControl_StaticHoldDryRun ||
-       control.mode == Motor_SoftwareControl_StaticHoldActiveTorque) ? 1U : 0U;
-  float integral_limit = static_hold_mode ? SWCTRL_STATIC_HOLD_INTEGRAL_MAX
+  float integral_limit = trajectory_mode() != 0U
+                             ? SWCTRL_TRAJECTORY_INTEGRAL_MAX
+                         : continuous_cascade_mode() != 0U
+                             ? SWCTRL_STATIC_HOLD_INTEGRAL_MAX
                          : cascade_mode ? SWCTRL_CASCADE_INTEGRAL_MAX
                                         : SWCTRL_INTEGRAL_LIMIT;
   /* Match Software_Ref PID_calc(): accumulate and clamp I every cycle, then
@@ -451,7 +589,8 @@ int Motor_SoftwareControl_GetAuthorizedTorque(uint8_t motor_index, float *torque
 {
   if (torque == NULL) return 0;
   *torque = 0.0f;
-  if (control.mode != Motor_SoftwareControl_StaticHoldActiveTorque ||
+  if ((control.mode != Motor_SoftwareControl_StaticHoldActiveTorque &&
+       control.mode != Motor_SoftwareControl_TrajectoryActiveTorque) ||
       static_hold_motor_allowed(motor_index) == 0U ||
       control.motor_index != (int8_t)motor_index || control.dry_run != 0U)
     return 0;

@@ -82,6 +82,7 @@ static SingleMotorControlContextTypeDef single_motor_control = {
   .armed_motor_index = -1,
 };
 static const char *single_motor_last_plan_reject_reason = "none";
+static uint8_t single_motor_trajectory_dry_run_passed = 0U;
 
 static void refresh_leg_online_state(uint8_t leg);
 
@@ -134,6 +135,7 @@ void Leg_Control_ForceZeroOutput(Motor_ControlReasonTypeDef reason)
   else if (reason == Motor_Control_Reason_PlanTimeout) sw_reason = Motor_SoftwareControl_StopDuration;
   else if (reason == Motor_Control_Reason_SafetyLimit) sw_reason = Motor_SoftwareControl_StopSafetyLimit;
   else if (reason == Motor_Control_Reason_CommandLink) sw_reason = Motor_SoftwareControl_StopCommandLink;
+  else if (reason == Motor_Control_Reason_TrajectoryComplete) sw_reason = Motor_SoftwareControl_StopDuration;
   Motor_SoftwareControl_Stop(sw_reason);
   Motor_GroupStopReason group_reason = Motor_Group_StopInvalidState;
   if (reason == Motor_Control_Reason_None) group_reason = Motor_Group_StopNone;
@@ -899,6 +901,73 @@ int Leg_Control_StartStaticHoldActive(uint8_t motor_index)
   return 1;
 }
 
+static int start_single_motor_trajectory(uint8_t motor_index, uint8_t dry_run)
+{
+  Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
+  if (motor_index != MOTOR_SOFTWARE_TRAJECTORY_MOTOR_INDEX) {
+    single_motor_last_plan_reject_reason = "trajectory_motor_locked";
+  } else if (state == NULL || state->online != Motor_Online ||
+             state->angle_valid != Motor_Angle_Valid ||
+             (HAL_GetTick() - state->timestamp) > 10U ||
+             state->motor_error != 0U || state->temperature_c >= 40) {
+    single_motor_last_plan_reject_reason = "trajectory_feedback_or_health";
+  } else if (dry_run == 0U && Motor_Transport_IsZeroOutputOnly() != 0U) {
+    single_motor_last_plan_reject_reason = "transport_zero_guard";
+  } else if (single_motor_control.mode != Motor_Control_ArmedSingleMotor) {
+    single_motor_last_plan_reject_reason = "not_armed";
+  } else if (single_motor_control.armed_motor_index != (int8_t)motor_index) {
+    single_motor_last_plan_reject_reason = "different_armed_motor";
+  } else if (dry_run == 0U &&
+             single_motor_trajectory_dry_run_passed == 0U) {
+    single_motor_last_plan_reject_reason = "trajectory_dry_run_required";
+  } else {
+    single_motor_last_plan_reject_reason = "none";
+  }
+
+  if (strcmp(single_motor_last_plan_reject_reason, "none") != 0) {
+    Leg_Control_ForceZeroOutput(Motor_Control_Reason_InvalidCommand);
+    return 0;
+  }
+
+  if (!Motor_SoftwareControl_StartCycloidTrajectory(motor_index, dry_run,
+                                                     HAL_GetTick())) {
+    single_motor_last_plan_reject_reason =
+        Motor_SoftwareControl_GetLastRejectReason();
+    Leg_Control_ForceZeroOutput(Motor_Control_Reason_InvalidCommand);
+    return 0;
+  }
+
+  single_motor_trajectory_dry_run_passed = 0U;
+
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  single_motor_control.mode = dry_run != 0U
+                                  ? Motor_Control_TrajectoryDryRun
+                                  : Motor_Control_TrajectoryActive;
+  single_motor_control.reason = Motor_Control_Reason_None;
+  single_motor_control.target_rotor_position =
+      single_motor_control.arm_rotor_position;
+  single_motor_control.kp = 0.0f;
+  single_motor_control.kw = 0.0f;
+  single_motor_control.duration_ms =
+      MOTOR_SOFTWARE_TRAJECTORY_DURATION_MS;
+  single_motor_control.plan_start_tick = HAL_GetTick();
+  MOTOR_send *cmd = &Legs[motor_index / 2U]->motor_cmd[motor_index % 2U];
+  set_zero_command(cmd, motor_index % 2U);
+  if (primask == 0U) __enable_irq();
+  return 1;
+}
+
+int Leg_Control_StartSingleMotorTrajectoryDryRun(uint8_t motor_index)
+{
+  return start_single_motor_trajectory(motor_index, 1U);
+}
+
+int Leg_Control_StartSingleMotorTrajectoryActive(uint8_t motor_index)
+{
+  return start_single_motor_trajectory(motor_index, 0U);
+}
+
 const char *Leg_Control_GetLastPlanRejectReason(void)
 {
   return single_motor_last_plan_reject_reason;
@@ -988,6 +1057,7 @@ void Leg_Control_InitSafe(void)
 {
   Motor_SoftwareControl_Init();
   Motor_GroupControl_Init();
+  single_motor_trajectory_dry_run_passed = 0U;
   Left_Front_Leg.GPIOx = Left_Front_Leg_Control_GPIO_Port;
   Left_Front_Leg.GPIO_Pin = Left_Front_Leg_Control_Pin;
   Left_Front_Leg.huartx = &huart2;
@@ -1358,7 +1428,9 @@ void Leg_Control_Service(uint32_t now_ms)
 
   if (single_motor_control.mode == Motor_Control_SingleMotorPosition ||
       single_motor_control.mode == Motor_Control_StaticHoldDryRun ||
-      single_motor_control.mode == Motor_Control_StaticHoldActive) {
+      single_motor_control.mode == Motor_Control_StaticHoldActive ||
+      single_motor_control.mode == Motor_Control_TrajectoryDryRun ||
+      single_motor_control.mode == Motor_Control_TrajectoryActive) {
     uint8_t motor_index = (uint8_t)single_motor_control.armed_motor_index;
     Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
     uint8_t stopped = 0U;
@@ -1372,20 +1444,32 @@ void Leg_Control_Service(uint32_t now_ms)
     } else if ((now_ms - state->timestamp) > 10U) {
       Leg_Control_ForceZeroOutput(Motor_Control_Reason_Offline);
       stopped = 1U;
+    } else if (state->motor_error != 0U || state->temperature_c >= 40) {
+      Leg_Control_ForceZeroOutput(Motor_Control_Reason_SafetyLimit);
+      stopped = 1U;
     } else if (single_motor_control.duration_ms != 0U &&
                (now_ms - single_motor_control.plan_start_tick) >=
                single_motor_control.duration_ms) {
-      Leg_Control_ForceZeroOutput(Motor_Control_Reason_PlanTimeout);
+      if (single_motor_control.mode == Motor_Control_TrajectoryDryRun)
+        single_motor_trajectory_dry_run_passed = 1U;
+      Motor_ControlReasonTypeDef completion_reason =
+          (single_motor_control.mode == Motor_Control_TrajectoryDryRun ||
+           single_motor_control.mode == Motor_Control_TrajectoryActive)
+              ? Motor_Control_Reason_TrajectoryComplete
+              : Motor_Control_Reason_PlanTimeout;
+      Leg_Control_ForceZeroOutput(completion_reason);
       stopped = 1U;
     } else {
       float plan_offset = absf_local(single_motor_control.target_rotor_position -
                                      single_motor_control.arm_rotor_position);
-      uint8_t static_hold_mode =
+      uint8_t continuous_mode =
           (single_motor_control.mode == Motor_Control_StaticHoldDryRun ||
-           single_motor_control.mode == Motor_Control_StaticHoldActive) ? 1U : 0U;
+           single_motor_control.mode == Motor_Control_StaticHoldActive ||
+           single_motor_control.mode == Motor_Control_TrajectoryDryRun ||
+           single_motor_control.mode == Motor_Control_TrajectoryActive) ? 1U : 0U;
       float error_limit = (plan_offset <= 0.101f) ? 0.150f
                                                   : LEG_SINGLE_MOTOR_MAX_ERROR_RAD;
-      if (static_hold_mode == 0U &&
+      if (continuous_mode == 0U &&
           (absf_local(single_motor_control.target_rotor_position -
                       state->rotor_position) > error_limit ||
            absf_local(state->raw_velocity) > LEG_SINGLE_MOTOR_MAX_VELOCITY_RAD_S)) {
@@ -1397,6 +1481,8 @@ void Leg_Control_Service(uint32_t now_ms)
                                      state->timestamp, now_ms);
         Motor_SoftwareControlSnapshot sw;
         Motor_SoftwareControl_GetSnapshot(&sw);
+        if (sw.test == Motor_SoftwareControl_TestCycloidTrajectory)
+          single_motor_control.target_rotor_position = sw.ramped_target;
         if (sw.mode == Motor_SoftwareControl_Stopped) {
           Leg_Control_ForceZeroOutput(Motor_Control_Reason_SafetyLimit);
           stopped = 1U;

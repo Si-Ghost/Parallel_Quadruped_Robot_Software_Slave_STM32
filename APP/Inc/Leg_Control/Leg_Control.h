@@ -42,7 +42,9 @@ typedef enum
   Motor_Control_SingleMotorPosition = 3,
   Motor_Control_SingleLegPosition = 4,
   Motor_Control_StaticHoldDryRun = 5,
-  Motor_Control_StaticHoldActive = 6
+  Motor_Control_StaticHoldActive = 6,
+  Motor_Control_TrajectoryDryRun = 7,
+  Motor_Control_TrajectoryActive = 8
 } Motor_ControlModeTypeDef;
 
 typedef enum
@@ -55,7 +57,8 @@ typedef enum
   Motor_Control_Reason_InvalidCommand = 5,
   Motor_Control_Reason_PlanTimeout = 6,
   Motor_Control_Reason_SafetyLimit = 7,
-  Motor_Control_Reason_CommandLink = 8
+  Motor_Control_Reason_CommandLink = 8,
+  Motor_Control_Reason_TrajectoryComplete = 9
 } Motor_ControlReasonTypeDef;
 
 typedef struct
@@ -93,6 +96,8 @@ int  Leg_Control_PlanSingleMotor(uint8_t motor_index, float offset_rad,
                                   float kp, float kw, uint32_t duration_ms);
 int  Leg_Control_StartStaticHoldDryRun(uint8_t motor_index);
 int  Leg_Control_StartStaticHoldActive(uint8_t motor_index);
+int  Leg_Control_StartSingleMotorTrajectoryDryRun(uint8_t motor_index);
+int  Leg_Control_StartSingleMotorTrajectoryActive(uint8_t motor_index);
 const char *Leg_Control_GetLastPlanRejectReason(void);
 void Leg_Control_ForceZeroOutput(Motor_ControlReasonTypeDef reason);
 void Leg_Control_GetControlSnapshot(Motor_ControlSnapshotTypeDef *snapshot);
