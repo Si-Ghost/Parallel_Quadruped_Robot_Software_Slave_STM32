@@ -16,7 +16,8 @@ typedef enum
   Motor_Group_Disabled = 0,
   Motor_Group_Armed = 1,
   Motor_Group_Active = 2,
-  Motor_Group_Stopped = 3
+  Motor_Group_Stopped = 3,
+  Motor_Group_ActivePending = 4
 } Motor_GroupMode;
 
 typedef enum

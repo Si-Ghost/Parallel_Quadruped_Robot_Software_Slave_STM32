@@ -1437,7 +1437,11 @@ int Leg_Control_ArmAllZero(void)
 int Leg_Control_ArmAllOffset(float rotor_offset)
 {
   Motor_StateSnapshotTypeDef states[8];
-  Leg_Control_ForceZeroOutput(Motor_Control_Reason_None);
+  /* Initial arm is deliberately zero-output.  Retargeting an already ACTIVE
+   * group must preserve its authorized torques until the separate RUN command
+   * commits the staged target. */
+  if (Motor_GroupControl_IsActive() == 0U)
+    Leg_Control_ForceZeroOutput(Motor_Control_Reason_None);
   for (uint8_t idx = 0U; idx < 8U; ++idx) {
     if (!Leg_Control_GetMotorStateSnapshot(idx, &states[idx]))
       return 0;
@@ -1455,8 +1459,9 @@ int Leg_Control_ArmStandPose(void)
   };
   Leg_JointAnglesTypeDef stand_angles;
 
-  Leg_Control_ForceZeroOutput(Motor_Control_Reason_None);
   if (!Leg_Kinematics_Inverse(&stand_foot, &stand_angles)) return 0;
+  if (Motor_GroupControl_IsActive() == 0U)
+    Leg_Control_ForceZeroOutput(Motor_Control_Reason_None);
 
   for (uint8_t idx = 0U; idx < 8U; ++idx) {
     if (!Leg_Control_GetMotorStateSnapshot(idx, &states[idx])) return 0;
@@ -1490,19 +1495,22 @@ int Leg_Control_ArmStandPose(void)
 
 int Leg_Control_StartAllZero(void)
 {
-  if (Motor_Transport_IsZeroOutputOnly() != 0U ||
-      !Communication_IsLinkAlive() || !Motor_GroupControl_IsArmed())
-    return 0;
-
   Motor_GroupSnapshot group;
   Motor_GroupControl_GetSnapshot(&group);
+  if (Motor_Transport_IsZeroOutputOnly() != 0U ||
+      !Communication_IsLinkAlive() ||
+      (group.mode != Motor_Group_Armed &&
+       group.mode != Motor_Group_ActivePending) || !group.ready)
+    return 0;
+
   for (uint8_t idx = 0U; idx < 8U; ++idx) {
     Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(idx);
     if (state == NULL || state->online != Motor_Online ||
         state->angle_valid != Motor_Angle_Valid ||
         (HAL_GetTick() - state->timestamp) > 10U ||
         state->motor_error != 0U || state->temperature_c >= 40 ||
-        absf_local(state->rotor_position - group.arm_position[idx]) > 0.10f) {
+        (group.mode == Motor_Group_Armed &&
+         absf_local(state->rotor_position - group.arm_position[idx]) > 0.10f)) {
       Motor_GroupControl_StopWithContext(
           Motor_Group_StopInvalidState, (int8_t)idx,
           state == NULL ? -1.0f
@@ -1510,7 +1518,14 @@ int Leg_Control_StartAllZero(void)
       return 0;
     }
   }
-  return Motor_GroupControl_Start(HAL_GetTick());
+  /* Feedback callbacks update the group controller from IRQ context.  Commit
+   * all eight staged targets atomically so no interrupt can observe a partly
+   * replaced target set. */
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  int started = Motor_GroupControl_Start(HAL_GetTick());
+  if (primask == 0U) __enable_irq();
+  return started;
 }
 
 void Leg_Control_GetGroupSnapshot(Motor_GroupSnapshot *snapshot)

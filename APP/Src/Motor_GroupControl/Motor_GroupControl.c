@@ -33,6 +33,8 @@ typedef struct
   float arm_position;
   float zero_position;
   float target_position;
+  float pending_arm_position;
+  float pending_target_position;
   float ramped_target;
   float actual_position;
   float position_error;
@@ -53,6 +55,8 @@ static Motor_GroupProfile group_profile;
 static Motor_GroupStopReason stop_reason;
 static uint8_t group_ready;
 static float group_target_offset;
+static Motor_GroupProfile pending_group_profile;
+static float pending_group_target_offset;
 static int8_t stop_motor_index;
 static float stop_detail;
 static uint32_t stop_sequence;
@@ -78,6 +82,8 @@ void Motor_GroupControl_Init(void)
   stop_reason = Motor_Group_StopNone;
   group_ready = 0U;
   group_target_offset = 0.0f;
+  pending_group_profile = Motor_Group_ProfileUniformOffset;
+  pending_group_target_offset = 0.0f;
   stop_motor_index = -1;
   stop_detail = 0.0f;
 }
@@ -142,15 +148,32 @@ int Motor_GroupControl_ArmOffsets(const Motor_StateSnapshotTypeDef states[8],
       (profile != Motor_Group_ProfileUniformOffset &&
        profile != Motor_Group_ProfileStandPose)) return 0;
 
-  Motor_GroupControl_Init();
-  group_profile = profile;
-  group_target_offset = target_offsets[0];
+  uint8_t active_retarget =
+      (group_mode == Motor_Group_Active ||
+       group_mode == Motor_Group_ActivePending) ? 1U : 0U;
+  uint8_t requests_nonzero = profile == Motor_Group_ProfileStandPose ? 1U : 0U;
+  float arm_positions[GROUP_MOTOR_COUNT];
+  float zero_positions[GROUP_MOTOR_COUNT];
+  float new_targets[GROUP_MOTOR_COUNT];
+
+  for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i) {
+    if (fabsf(target_offsets[i]) > 0.0001f) requests_nonzero = 1U;
+  }
+  /* A non-zero retarget may only be staged while the currently executing
+   * controller is still holding mechanical zero.  Returning to zero from a
+   * non-zero target remains allowed. */
+  if (active_retarget != 0U && requests_nonzero != 0U &&
+      (group_profile != Motor_Group_ProfileUniformOffset ||
+       fabsf(group_target_offset) > 0.0001f))
+    return 0;
+
   for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i) {
     float target_offset = target_offsets[i];
     if (!isfinite(target_offset) ||
         fabsf(target_offset) > GROUP_MAX_TARGET_OFFSET_RAD) {
-      Motor_GroupControl_StopWithContext(Motor_Group_StopPositionLimit,
-                                         (int8_t)i, target_offset);
+      if (active_retarget == 0U)
+        Motor_GroupControl_StopWithContext(Motor_Group_StopPositionLimit,
+                                           (int8_t)i, target_offset);
       return 0;
     }
     const Motor_StateSnapshotTypeDef *state = &states[i];
@@ -167,37 +190,65 @@ int Motor_GroupControl_ArmOffsets(const Motor_StateSnapshotTypeDef states[8],
                          : state->temperature_c >= 40
                                ? (float)state->temperature_c
                                : (float)(now_ms - state->timestamp);
+      /* Invalid live feedback is a real safety fault, not merely a rejected
+       * pending target, so it still revokes an active hold. */
       Motor_GroupControl_StopWithContext(reason, (int8_t)i, detail);
       return 0;
     }
 
-    Motor_GroupChannel *channel = &channels[i];
-    channel->arm_position = state->rotor_position;
     float zero_position = aligned_zero(state->rotor_position,
                                        state->zero_rotor_position);
-    channel->zero_position = zero_position;
+    arm_positions[i] = state->rotor_position;
+    zero_positions[i] = zero_position;
     /* Non-zero synchronized tests must begin within the approved mechanical
      * zero neighborhood.  Returning to zero remains allowed from either +1
      * or +2 rad. */
     if (fabsf(target_offset) > 0.0001f &&
-        fabsf(zero_position - channel->arm_position) >
+        fabsf(zero_position - arm_positions[i]) >
             GROUP_OFFSET_START_ZERO_RAD) {
-      Motor_GroupControl_StopWithContext(Motor_Group_StopInvalidState,
-                                         (int8_t)i,
-                                         zero_position - channel->arm_position);
+      if (active_retarget == 0U)
+        Motor_GroupControl_StopWithContext(
+            Motor_Group_StopInvalidState, (int8_t)i,
+            zero_position - arm_positions[i]);
       return 0;
     }
-    channel->target_position = zero_position + target_offset;
-    float delta = channel->target_position - channel->arm_position;
-    if (!isfinite(channel->target_position) ||
+    new_targets[i] = zero_position + target_offset;
+    float delta = new_targets[i] - arm_positions[i];
+    if (!isfinite(new_targets[i]) ||
         fabsf(delta) > GROUP_MAX_TARGET_DELTA_RAD) {
-      Motor_GroupControl_StopWithContext(Motor_Group_StopPositionLimit,
-                                         (int8_t)i, delta);
+      if (active_retarget == 0U)
+        Motor_GroupControl_StopWithContext(Motor_Group_StopPositionLimit,
+                                           (int8_t)i, delta);
       return 0;
     }
+  }
+
+  if (active_retarget != 0U) {
+    /* Stage only.  The executing target, ramp, PID state, integrator and
+     * authorized torques remain untouched until START commits this plan. */
+    for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i) {
+      channels[i].pending_arm_position = arm_positions[i];
+      channels[i].pending_target_position = new_targets[i];
+    }
+    pending_group_profile = profile;
+    pending_group_target_offset = target_offsets[0];
+    group_mode = Motor_Group_ActivePending;
+    stop_reason = Motor_Group_StopNone;
+    group_ready = 1U;
+    return 1;
+  }
+
+  Motor_GroupControl_Init();
+  group_profile = profile;
+  group_target_offset = target_offsets[0];
+  for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i) {
+    Motor_GroupChannel *channel = &channels[i];
+    channel->arm_position = arm_positions[i];
+    channel->zero_position = zero_positions[i];
+    channel->target_position = new_targets[i];
     channel->ramped_target = channel->arm_position;
     channel->actual_position = channel->arm_position;
-    channel->position_error = delta;
+    channel->position_error = channel->target_position - channel->arm_position;
     channel->diagnostic_position_min = channel->arm_position;
     channel->diagnostic_position_max = channel->arm_position;
   }
@@ -211,6 +262,26 @@ int Motor_GroupControl_ArmOffsets(const Motor_StateSnapshotTypeDef states[8],
 int Motor_GroupControl_Start(uint32_t now_ms)
 {
   (void)now_ms;
+  if (group_mode == Motor_Group_ActivePending && group_ready != 0U) {
+    for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i) {
+      Motor_GroupChannel *channel = &channels[i];
+      channel->arm_position = channel->pending_arm_position;
+      channel->target_position = channel->pending_target_position;
+      channel->position_error = channel->ramped_target -
+                                channel->actual_position;
+      channel->diagnostic_position_min = channel->actual_position;
+      channel->diagnostic_position_max = channel->actual_position;
+      channel->diagnostic_max_abs_velocity = 0.0f;
+      channel->diagnostic_max_abs_torque = 0.0f;
+    }
+    group_profile = pending_group_profile;
+    group_target_offset = pending_group_target_offset;
+    group_mode = Motor_Group_Active;
+    stop_reason = Motor_Group_StopNone;
+    group_ready = 0U;
+    return 1;
+  }
+
   if (group_mode != Motor_Group_Armed || !group_ready) return 0;
   for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i) {
     channels[i].previous_feedback_timestamp = 0U;
@@ -225,6 +296,7 @@ int Motor_GroupControl_Start(uint32_t now_ms)
   }
   group_mode = Motor_Group_Active;
   stop_reason = Motor_Group_StopNone;
+  group_ready = 0U;
   return 1;
 }
 
@@ -233,7 +305,9 @@ void Motor_GroupControl_Update(uint8_t motor_index,
                                float rotor_velocity,
                                uint32_t feedback_timestamp)
 {
-  if (group_mode != Motor_Group_Active || motor_index >= GROUP_MOTOR_COUNT)
+  if ((group_mode != Motor_Group_Active &&
+       group_mode != Motor_Group_ActivePending) ||
+      motor_index >= GROUP_MOTOR_COUNT)
     return;
   if (!isfinite(rotor_position) || !isfinite(rotor_velocity) ||
       feedback_timestamp == 0U) {
@@ -329,14 +403,17 @@ uint8_t Motor_GroupControl_IsArmed(void)
 
 uint8_t Motor_GroupControl_IsActive(void)
 {
-  return group_mode == Motor_Group_Active ? 1U : 0U;
+  return (group_mode == Motor_Group_Active ||
+          group_mode == Motor_Group_ActivePending) ? 1U : 0U;
 }
 
 int Motor_GroupControl_GetAuthorizedTorque(uint8_t motor_index, float *torque)
 {
   if (torque == NULL) return 0;
   *torque = 0.0f;
-  if (group_mode != Motor_Group_Active || motor_index >= GROUP_MOTOR_COUNT)
+  if ((group_mode != Motor_Group_Active &&
+       group_mode != Motor_Group_ActivePending) ||
+      motor_index >= GROUP_MOTOR_COUNT)
     return 0;
   if (!isfinite(channels[motor_index].torque) ||
       fabsf(channels[motor_index].torque) > GROUP_TORQUE_MAX_NM) {
@@ -353,20 +430,26 @@ void Motor_GroupControl_GetSnapshot(Motor_GroupSnapshot *snapshot)
 {
   if (snapshot == NULL) return;
   memset(snapshot, 0, sizeof(*snapshot));
+  uint8_t pending = group_mode == Motor_Group_ActivePending ? 1U : 0U;
   snapshot->mode = group_mode;
-  snapshot->profile = group_profile;
+  snapshot->profile = pending != 0U ? pending_group_profile : group_profile;
   snapshot->reason = stop_reason;
   snapshot->ready = group_ready;
   snapshot->all_at_zero = group_mode == Motor_Group_Active ? 1U : 0U;
   snapshot->stop_motor_index = stop_motor_index;
   snapshot->stop_detail = stop_detail;
   snapshot->stop_sequence = stop_sequence;
-  snapshot->target_offset = group_target_offset;
+  snapshot->target_offset = pending != 0U ? pending_group_target_offset
+                                          : group_target_offset;
   for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i) {
-    snapshot->arm_position[i] = channels[i].arm_position;
-    snapshot->target_position[i] = channels[i].target_position;
+    snapshot->arm_position[i] = pending != 0U
+                                    ? channels[i].pending_arm_position
+                                    : channels[i].arm_position;
+    snapshot->target_position[i] = pending != 0U
+                                       ? channels[i].pending_target_position
+                                       : channels[i].target_position;
     snapshot->actual_position[i] = channels[i].actual_position;
-    snapshot->position_error[i] = channels[i].target_position -
+    snapshot->position_error[i] = snapshot->target_position[i] -
                                   channels[i].actual_position;
     if (fabsf(snapshot->position_error[i]) > GROUP_TARGET_ERROR_RAD)
       snapshot->all_at_zero = 0U;
