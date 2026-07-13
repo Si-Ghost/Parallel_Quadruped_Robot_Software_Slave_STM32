@@ -1217,7 +1217,7 @@ static void send_static_hold_plan(void)
         "\"skp\":%ld,\"ski\":%ld,\"skd\":%ld,"
         "\"tmax\":%ld,\"vtmax\":%ld,\"vmax\":%ld,"
         "\"dropmax\":%ld,\"dur\":%lu,\"drvkp\":0,\"drvkw\":0,"
-        "\"liveonce\":1,\"livei\":2,\"guard\":%u}\n",
+        "\"vfhz\":%ld,\"igpos\":%ld,\"guard\":%u}\n",
         (unsigned int)s.dry_run, (int)s.motor_index,
         (long)(s.position_loop_kp * 1000000.0f),
         (long)(s.position_loop_ki * 1000000.0f),
@@ -1230,6 +1230,8 @@ static void send_static_hold_plan(void)
         (long)(s.actual_velocity_limit * 1000000.0f),
         (long)(s.position_excursion_limit * 1000000.0f),
         (unsigned long)s.duration_ms,
+        (long)(s.velocity_filter_hz * 1000000.0f),
+        (long)(s.integral_position_gate * 1000000.0f),
         (unsigned int)Motor_Transport_IsZeroOutputOnly());
     if (len > 0 && len < (int)sizeof(buf))
         Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
@@ -1394,7 +1396,7 @@ void Communication_SendSoftwarePidTelemetry(void)
     } else if (s.test == Motor_SoftwareControl_TestStaticHold) {
         len = snprintf(buf, sizeof(buf),
             "SW_HOLD_CTRL {\"m\":%u,\"i\":%d,\"st\":%ld,\"se\":%ld,"
-            "\"P\":%ld,\"I\":%ld,\"D\":%ld,\"T\":%ld,\"lim\":%u,"
+            "\"P\":%ld,\"I\":%ld,\"D\":%ld,\"T\":%ld,\"lim\":%u,\"ie\":%u,"
             "\"el\":%lu,\"stop\":%u,\"sl\":%u}\n",
             (unsigned int)s.mode, (int)s.motor_index,
             (long)(s.speed_target * 1000000.0f),
@@ -1403,6 +1405,7 @@ void Communication_SendSoftwarePidTelemetry(void)
             (long)(s.d_term * 1000000.0f),
             (long)(s.limited_torque * 1000000.0f),
             (unsigned int)s.torque_limited,
+            (unsigned int)s.integral_enabled,
             (unsigned long)s.elapsed_ms, (unsigned int)s.stop_reason,
             (unsigned int)s.safety_limit);
     } else if (phase == 0U) {

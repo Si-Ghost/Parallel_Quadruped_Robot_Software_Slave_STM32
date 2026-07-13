@@ -61,6 +61,8 @@ typedef struct
   float raw_velocity;
   float filtered_velocity;
   float feedback_torque;
+  float velocity_filter_hz;
+  float integral_position_gate;
   float kp;
   float ki;
   float kd;
@@ -87,6 +89,7 @@ typedef struct
   uint32_t feedback_timestamp;
   uint8_t torque_limited;
   uint8_t dry_run;
+  uint8_t integral_enabled;
 } Motor_SoftwareControlSnapshot;
 
 void Motor_SoftwareControl_Init(void);
