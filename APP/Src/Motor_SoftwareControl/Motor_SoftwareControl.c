@@ -154,6 +154,47 @@ int Motor_SoftwareControl_StartCascadeMoveActive(uint8_t motor_index,
   return 1;
 }
 
+int Motor_SoftwareControl_TransitionCascadeToHold(uint32_t now_ms)
+{
+  if (control.mode != Motor_SoftwareControl_CascadeActiveTorque ||
+      control.dry_run != 0U) {
+    last_reject_reason = "not_active_cascade";
+    return 0;
+  }
+
+  /* Keep the final multi-turn target and controller state.  Only switch the
+   * tuning/limits to the already validated reference-style static hold, so
+   * the move ends without a zero-torque gap or a return to the arm position. */
+  control.mode = Motor_SoftwareControl_StaticHoldActiveTorque;
+  control.test = Motor_SoftwareControl_TestStaticHold;
+  control.safety_limit = Motor_SoftwareControl_LimitNone;
+  control.stop_reason = Motor_SoftwareControl_StopNone;
+  control.arm_position = control.raw_target;
+  control.ramped_target = control.raw_target;
+  control.ramp_velocity = 0.0f;
+  control.torque_limit = SWCTRL_STATIC_HOLD_TORQUE_MAX;
+  control.target_velocity_limit = SWCTRL_STATIC_HOLD_TARGET_SPEED_MAX;
+  control.actual_velocity_limit = SWCTRL_STATIC_HOLD_ACTUAL_SPEED_MAX;
+  control.position_excursion_limit = SWCTRL_STATIC_HOLD_POSITION_MAX;
+  control.velocity_filter_hz = SWCTRL_STATIC_HOLD_VELOCITY_FILTER_HZ;
+  control.integral_position_gate = SWCTRL_STATIC_HOLD_INTEGRAL_GATE_RAD;
+  control.i_term = clampf(control.i_term, SWCTRL_STATIC_HOLD_INTEGRAL_MAX);
+  control.duration_ms = SWCTRL_STATIC_HOLD_ACTIVE_DURATION_MS;
+  control.elapsed_ms = 0U;
+  control.simulated_position_offset = 0.0f;
+  control.simulation_phase = 0U;
+  control.velocity_bias = 0.0f;
+  control.corrected_velocity = control.raw_velocity;
+  control.velocity_bias_samples = 0U;
+  control.velocity_bias_valid = 1U;
+  control.raw_overspeed_count = 0U;
+  plan_start_ms = now_ms;
+  cascade_position_error_previous = control.position_error;
+  cascade_speed_error_previous = control.speed_target - control.raw_velocity;
+  last_reject_reason = "none";
+  return 1;
+}
+
 static void configure_static_hold(Motor_SoftwareControlMode mode,
                                   uint8_t dry_run, uint32_t now_ms)
 {
@@ -438,7 +479,8 @@ int Motor_SoftwareControl_GetAuthorizedTorque(uint8_t motor_index, float *torque
 {
   if (torque == NULL) return 0;
   *torque = 0.0f;
-  if (control.mode != Motor_SoftwareControl_StaticHoldActiveTorque ||
+  if ((control.mode != Motor_SoftwareControl_CascadeActiveTorque &&
+       control.mode != Motor_SoftwareControl_StaticHoldActiveTorque) ||
       static_hold_motor_allowed(motor_index) == 0U ||
       control.motor_index != (int8_t)motor_index || control.dry_run != 0U)
     return 0;
