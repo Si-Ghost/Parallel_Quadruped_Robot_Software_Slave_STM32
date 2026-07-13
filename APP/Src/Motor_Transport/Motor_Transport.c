@@ -11,9 +11,9 @@
 #define MOTOR_TRANSPORT_OFFLINE_TIMEOUT_MS 100U
 #define MOTOR_TRANSPORT_QUIESCE_TIMEOUT_MS 5U
 
-/* Re-lock after the approved RF ID0 test could not resist the supported
- * 400 g load.  A new controller must pass another dry-run before reopening. */
-#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 1U
+/* One-shot authorization: RF ID0 static-load validation with the pure
+ * software cascade PID, 400 g supported load, 1.5 Nm limit, 10 s maximum. */
+#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 0U
 #define MOTOR_TRANSPORT_LIVE_LEG         1U
 #define MOTOR_TRANSPORT_LIVE_MOTOR       0U
 
