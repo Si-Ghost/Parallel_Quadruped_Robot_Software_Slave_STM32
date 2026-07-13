@@ -63,6 +63,8 @@ static const char motor_stop_all_cmd[] = "MOTOR_STOP_ALL";
 static const char motor_hold_current_cmd[] = "MOTOR_HOLD_CURRENT";
 static const char motor_zero_all_arm_cmd[] = "MOTOR_ZERO_ALL_ARM";
 static const char motor_zero_all_run_cmd[] = "MOTOR_ZERO_ALL_RUN";
+static const char motor_group_arm_cmd[] = "MOTOR_GROUP_ARM";
+static const char motor_group_run_cmd[] = "MOTOR_GROUP_RUN";
 static const char pid_arm_cmd[] = "PID_ARM";
 static const char pid_plan_cmd[] = "PID_PLAN";
 static const char pid_hold_dryrun_cmd[] = "PID_HOLD_DRYRUN";
@@ -481,6 +483,31 @@ static void handle_leg_sine_text(const char *cmd_buf)
   }
 }
 
+static int parse_motor_group_arm_command(const char *cmd, float *offset)
+{
+    const char *p = cmd;
+    if (memcmp(p, motor_group_arm_cmd, sizeof(motor_group_arm_cmd) - 1) != 0)
+        return 0;
+    p += sizeof(motor_group_arm_cmd) - 1;
+    if (*p != ' ' && *p != '\t') return 0;
+    if (!parse_decimal_value(&p, offset)) return 0;
+    p = skip_spaces(p);
+    return *p == '\0';
+}
+
+static void handle_motor_group_arm_text(const char *cmd_buf)
+{
+    float offset = 0.0f;
+    if (!parse_motor_group_arm_command(cmd_buf, &offset)) {
+        Communication_SendString("MOTOR_GROUP_ARM parse_fail\r\n");
+        return;
+    }
+    if (Leg_Control_ArmAllOffset(offset))
+        Communication_SendString("MOTOR_GROUP_ARM ok\r\n");
+    else
+        Communication_SendString("MOTOR_GROUP_ARM rejected\r\n");
+}
+
 static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
 {
     if (len < sizeof(motor_set_cmd) - 1 &&
@@ -490,6 +517,8 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         len < sizeof(motor_hold_current_cmd) - 1 &&
         len < sizeof(motor_zero_all_arm_cmd) - 1 &&
         len < sizeof(motor_zero_all_run_cmd) - 1 &&
+        len < sizeof(motor_group_arm_cmd) - 1 &&
+        len < sizeof(motor_group_run_cmd) - 1 &&
         len < sizeof(pid_arm_cmd) - 1 &&
         len < sizeof(pid_plan_cmd) - 1 &&
         len < sizeof(pid_hold_dryrun_cmd) - 1 &&
@@ -505,6 +534,30 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         len < sizeof(leg_touch_step_cmd) - 1 &&
         len < sizeof(leg_loaded_step_cmd) - 1)
         return;
+
+    for (uint16_t i = 0; i + sizeof(motor_group_arm_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], motor_group_arm_cmd,
+                   sizeof(motor_group_arm_cmd) - 1) == 0) {
+            char cmd_buf[48];
+            uint16_t copy_len = len - i;
+            if (copy_len >= sizeof(cmd_buf)) copy_len = sizeof(cmd_buf) - 1U;
+            memcpy(cmd_buf, &data[i], copy_len);
+            cmd_buf[copy_len] = '\0';
+            handle_motor_group_arm_text(cmd_buf);
+            return;
+        }
+    }
+
+    for (uint16_t i = 0; i + sizeof(motor_group_run_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], motor_group_run_cmd,
+                   sizeof(motor_group_run_cmd) - 1) == 0) {
+            if (Leg_Control_StartAllZero())
+                Communication_SendString("MOTOR_GROUP_RUN ok\r\n");
+            else
+                Communication_SendString("MOTOR_GROUP_RUN rejected\r\n");
+            return;
+        }
+    }
 
     for (uint16_t i = 0; i + sizeof(pid_hold_active_cmd) - 1 <= len; i++) {
         if (memcmp(&data[i], pid_hold_active_cmd,
@@ -1203,9 +1256,15 @@ static int append_motor_group(char *buf, size_t size, int len)
     if (len < 0 || (size_t)len >= size) return -1;
 
     int written = snprintf(&buf[len], size - (size_t)len,
-        "MOTOR_GROUP mode=%u reason=%u ready=%u at_zero=%u delta=",
+        "MOTOR_GROUP mode=%u reason=%u ready=%u at_zero=%u offset=",
         (unsigned int)group.mode, (unsigned int)group.reason,
         (unsigned int)group.ready, (unsigned int)group.all_at_zero);
+    if (written < 0 || written >= (int)(size - (size_t)len)) return -1;
+    len += written;
+
+    len = append_fixed4(buf, size, len, group.target_offset);
+    if (len <= 0) return -1;
+    written = snprintf(&buf[len], size - (size_t)len, " delta=");
     if (written < 0 || written >= (int)(size - (size_t)len)) return -1;
     len += written;
 

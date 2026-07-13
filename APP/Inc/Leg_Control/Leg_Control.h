@@ -99,6 +99,7 @@ void Leg_Control_GetControlSnapshot(Motor_ControlSnapshotTypeDef *snapshot);
 void Leg_Control_LogFootSnapshot(void);
 int  Leg_Control_HoldCurrentPosition(void);
 int  Leg_Control_ArmAllZero(void);
+int  Leg_Control_ArmAllOffset(float rotor_offset);
 int  Leg_Control_StartAllZero(void);
 void Leg_Control_GetGroupSnapshot(Motor_GroupSnapshot *snapshot);
 void Leg_Control_StopAllDebugTargets(uint8_t reason);

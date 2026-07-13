@@ -1307,13 +1307,18 @@ int Leg_Control_HoldCurrentPosition(void)
 
 int Leg_Control_ArmAllZero(void)
 {
+  return Leg_Control_ArmAllOffset(0.0f);
+}
+
+int Leg_Control_ArmAllOffset(float rotor_offset)
+{
   Motor_StateSnapshotTypeDef states[8];
   Leg_Control_ForceZeroOutput(Motor_Control_Reason_None);
   for (uint8_t idx = 0U; idx < 8U; ++idx) {
     if (!Leg_Control_GetMotorStateSnapshot(idx, &states[idx]))
       return 0;
   }
-  return Motor_GroupControl_ArmZero(states, HAL_GetTick());
+  return Motor_GroupControl_ArmTarget(states, rotor_offset, HAL_GetTick());
 }
 
 int Leg_Control_StartAllZero(void)

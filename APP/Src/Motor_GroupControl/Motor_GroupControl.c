@@ -5,8 +5,10 @@
 
 #define GROUP_MOTOR_COUNT                 8U
 #define GROUP_TWO_PI                      6.28318530717958647692f
-#define GROUP_MAX_ZERO_DELTA_RAD          1.50f
-#define GROUP_MAX_ARM_EXCURSION_RAD       2.00f
+#define GROUP_MAX_TARGET_OFFSET_RAD       2.00f
+#define GROUP_MAX_TARGET_DELTA_RAD        2.10f
+#define GROUP_OFFSET_START_ZERO_RAD       0.10f
+#define GROUP_MAX_ARM_EXCURSION_RAD       2.25f
 #define GROUP_TARGET_SPEED_RAD_S          0.25f
 #define GROUP_TARGET_ERROR_RAD            0.08f
 #define GROUP_MIN_DT_S                    0.0002f
@@ -40,6 +42,7 @@ static Motor_GroupChannel channels[GROUP_MOTOR_COUNT];
 static Motor_GroupMode group_mode;
 static Motor_GroupStopReason stop_reason;
 static uint8_t group_ready;
+static float group_target_offset;
 
 static float clamp_symmetric(float value, float limit)
 {
@@ -60,6 +63,7 @@ void Motor_GroupControl_Init(void)
   group_mode = Motor_Group_Disabled;
   stop_reason = Motor_Group_StopNone;
   group_ready = 0U;
+  group_target_offset = 0.0f;
 }
 
 void Motor_GroupControl_Stop(Motor_GroupStopReason reason)
@@ -77,9 +81,17 @@ void Motor_GroupControl_Stop(Motor_GroupStopReason reason)
 int Motor_GroupControl_ArmZero(const Motor_StateSnapshotTypeDef states[8],
                                uint32_t now_ms)
 {
-  if (states == NULL) return 0;
+  return Motor_GroupControl_ArmTarget(states, 0.0f, now_ms);
+}
+
+int Motor_GroupControl_ArmTarget(const Motor_StateSnapshotTypeDef states[8],
+                                 float target_offset, uint32_t now_ms)
+{
+  if (states == NULL || !isfinite(target_offset) ||
+      fabsf(target_offset) > GROUP_MAX_TARGET_OFFSET_RAD) return 0;
 
   Motor_GroupControl_Init();
+  group_target_offset = target_offset;
   for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i) {
     const Motor_StateSnapshotTypeDef *state = &states[i];
     if (!state->online || !state->angle_valid || state->timestamp == 0U ||
@@ -95,11 +107,20 @@ int Motor_GroupControl_ArmZero(const Motor_StateSnapshotTypeDef states[8],
 
     Motor_GroupChannel *channel = &channels[i];
     channel->arm_position = state->rotor_position;
-    channel->target_position = aligned_zero(state->rotor_position,
-                                             state->zero_rotor_position);
+    float zero_position = aligned_zero(state->rotor_position,
+                                       state->zero_rotor_position);
+    /* Non-zero synchronized tests must begin from the verified zero pose.
+     * Returning to zero remains allowed from either +1 or +2 rad. */
+    if (fabsf(target_offset) > 0.0001f &&
+        fabsf(zero_position - channel->arm_position) >
+            GROUP_OFFSET_START_ZERO_RAD) {
+      Motor_GroupControl_Stop(Motor_Group_StopInvalidState);
+      return 0;
+    }
+    channel->target_position = zero_position + target_offset;
     float delta = channel->target_position - channel->arm_position;
     if (!isfinite(channel->target_position) ||
-        fabsf(delta) > GROUP_MAX_ZERO_DELTA_RAD) {
+        fabsf(delta) > GROUP_MAX_TARGET_DELTA_RAD) {
       Motor_GroupControl_Stop(Motor_Group_StopPositionLimit);
       return 0;
     }
@@ -226,6 +247,7 @@ void Motor_GroupControl_GetSnapshot(Motor_GroupSnapshot *snapshot)
   snapshot->reason = stop_reason;
   snapshot->ready = group_ready;
   snapshot->all_at_zero = group_mode == Motor_Group_Active ? 1U : 0U;
+  snapshot->target_offset = group_target_offset;
   for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i) {
     snapshot->arm_position[i] = channels[i].arm_position;
     snapshot->target_position[i] = channels[i].target_position;

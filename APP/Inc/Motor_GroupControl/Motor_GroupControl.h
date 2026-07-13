@@ -35,6 +35,7 @@ typedef struct
   Motor_GroupStopReason reason;
   uint8_t ready;
   uint8_t all_at_zero;
+  float target_offset;
   float arm_position[8];
   float target_position[8];
   float actual_position[8];
@@ -44,6 +45,8 @@ typedef struct
 void Motor_GroupControl_Init(void);
 int Motor_GroupControl_ArmZero(const Motor_StateSnapshotTypeDef states[8],
                                uint32_t now_ms);
+int Motor_GroupControl_ArmTarget(const Motor_StateSnapshotTypeDef states[8],
+                                 float target_offset, uint32_t now_ms);
 int Motor_GroupControl_Start(uint32_t now_ms);
 void Motor_GroupControl_Update(uint8_t motor_index,
                                float rotor_position,
