@@ -43,7 +43,9 @@ extern UART_HandleTypeDef huart8;
 #define LEG_SINGLE_MOTOR_MAX_DURATION_MS      4000U
 #define LEG_SINGLE_MOTOR_MAX_ERROR_RAD        1.20f
 #define LEG_SINGLE_MOTOR_MAX_VELOCITY_RAD_S   3.0f
-#define LEG_STATIC_HOLD_DURATION_MS             10000U
+#define LEG_STATIC_HOLD_MOTOR_INDEX                 2U
+#define LEG_STATIC_HOLD_DRY_RUN_DURATION_MS     10000U
+#define LEG_STATIC_HOLD_ACTIVE_DURATION_MS          0U
 #define LEG_UART_HARD_ERROR_MASK \
   (HAL_UART_ERROR_DMA | HAL_UART_ERROR_RTO)
 #define LEG_MOTOR_THETA1            0U /* ID0 drives AB after front/rear mounting swap. */
@@ -775,7 +777,9 @@ int Leg_Control_PlanSingleMotor(uint8_t motor_index, float offset_rad,
 int Leg_Control_StartStaticHoldDryRun(uint8_t motor_index)
 {
   Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
-  if (state == NULL || state->online != Motor_Online ||
+  if (motor_index != LEG_STATIC_HOLD_MOTOR_INDEX) {
+    single_motor_last_plan_reject_reason = "static_hold_motor_locked";
+  } else if (state == NULL || state->online != Motor_Online ||
              state->angle_valid != Motor_Angle_Valid) {
     single_motor_last_plan_reject_reason = "offline_or_feedback_invalid";
   } else if (single_motor_control.mode != Motor_Control_ArmedSingleMotor) {
@@ -806,7 +810,7 @@ int Leg_Control_StartStaticHoldDryRun(uint8_t motor_index)
       single_motor_control.arm_rotor_position;
   single_motor_control.kp = 0.0f;
   single_motor_control.kw = 0.0f;
-  single_motor_control.duration_ms = LEG_STATIC_HOLD_DURATION_MS;
+  single_motor_control.duration_ms = LEG_STATIC_HOLD_DRY_RUN_DURATION_MS;
   single_motor_control.plan_start_tick = HAL_GetTick();
 
   /* The driver-side position PD stays disabled.  The software controller only
@@ -821,7 +825,9 @@ int Leg_Control_StartStaticHoldDryRun(uint8_t motor_index)
 int Leg_Control_StartStaticHoldActive(uint8_t motor_index)
 {
   Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
-  if (Motor_Transport_IsZeroOutputOnly() != 0U) {
+  if (motor_index != LEG_STATIC_HOLD_MOTOR_INDEX) {
+    single_motor_last_plan_reject_reason = "static_hold_motor_locked";
+  } else if (Motor_Transport_IsZeroOutputOnly() != 0U) {
     single_motor_last_plan_reject_reason = "transport_zero_guard";
   } else if (state == NULL || state->online != Motor_Online ||
              state->angle_valid != Motor_Angle_Valid) {
@@ -854,7 +860,7 @@ int Leg_Control_StartStaticHoldActive(uint8_t motor_index)
       single_motor_control.arm_rotor_position;
   single_motor_control.kp = 0.0f;
   single_motor_control.kw = 0.0f;
-  single_motor_control.duration_ms = LEG_STATIC_HOLD_DURATION_MS;
+  single_motor_control.duration_ms = LEG_STATIC_HOLD_ACTIVE_DURATION_MS;
   single_motor_control.plan_start_tick = HAL_GetTick();
 
   /* Driver-side PD remains disabled.  Motor_Transport accepts only the
@@ -1184,7 +1190,8 @@ void Leg_Control_Service(uint32_t now_ms)
     } else if ((now_ms - state->timestamp) > 10U) {
       Leg_Control_ForceZeroOutput(Motor_Control_Reason_Offline);
       stopped = 1U;
-    } else if ((now_ms - single_motor_control.plan_start_tick) >=
+    } else if (single_motor_control.duration_ms != 0U &&
+               (now_ms - single_motor_control.plan_start_tick) >=
                single_motor_control.duration_ms) {
       Leg_Control_ForceZeroOutput(Motor_Control_Reason_PlanTimeout);
       stopped = 1U;
