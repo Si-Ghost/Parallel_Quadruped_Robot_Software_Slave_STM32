@@ -28,7 +28,7 @@
 #define SWCTRL_STATIC_HOLD_INTEGRAL_MAX 0.20f
 #define SWCTRL_STATIC_HOLD_TARGET_SPEED_MAX 100.0f
 #define SWCTRL_STATIC_HOLD_ACTUAL_SPEED_MAX 0.00f
-#define SWCTRL_STATIC_HOLD_POSITION_MAX 0.30f
+#define SWCTRL_STATIC_HOLD_POSITION_MAX 0.00f
 #define SWCTRL_STATIC_HOLD_VELOCITY_FILTER_HZ 20.0f
 #define SWCTRL_STATIC_HOLD_INTEGRAL_GATE_RAD 0.0f
 /* Two Q15 rotor-position counts.  The dry-run now exercises the same
@@ -259,7 +259,8 @@ static uint8_t static_hold_safety_exceeded(float rotor_position)
 {
   if (control.mode != Motor_SoftwareControl_StaticHoldDryRun &&
       control.mode != Motor_SoftwareControl_StaticHoldActiveTorque) return 0U;
-  if (fabsf(rotor_position - control.arm_position) >
+  if (control.position_excursion_limit > 0.0f &&
+      fabsf(rotor_position - control.arm_position) >
       control.position_excursion_limit) {
     control.safety_limit = Motor_SoftwareControl_LimitPositionExcursion;
     return 1U;

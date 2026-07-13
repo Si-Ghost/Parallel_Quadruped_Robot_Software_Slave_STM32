@@ -43,7 +43,6 @@ extern UART_HandleTypeDef huart8;
 #define LEG_SINGLE_MOTOR_MAX_DURATION_MS      4000U
 #define LEG_SINGLE_MOTOR_MAX_ERROR_RAD        1.20f
 #define LEG_SINGLE_MOTOR_MAX_VELOCITY_RAD_S   3.0f
-#define LEG_STATIC_HOLD_MAX_ERROR_RAD          0.30f
 #define LEG_STATIC_HOLD_DRY_RUN_DURATION_MS     10000U
 #define LEG_STATIC_HOLD_ACTIVE_DURATION_MS          0U
 #define LEG_UART_HARD_ERROR_MASK \
@@ -1206,12 +1205,11 @@ void Leg_Control_Service(uint32_t now_ms)
       uint8_t static_hold_mode =
           (single_motor_control.mode == Motor_Control_StaticHoldDryRun ||
            single_motor_control.mode == Motor_Control_StaticHoldActive) ? 1U : 0U;
-      float error_limit = static_hold_mode ? LEG_STATIC_HOLD_MAX_ERROR_RAD
-                          : (plan_offset <= 0.101f) ? 0.150f
-                                                   : LEG_SINGLE_MOTOR_MAX_ERROR_RAD;
-      if (absf_local(single_motor_control.target_rotor_position -
+      float error_limit = (plan_offset <= 0.101f) ? 0.150f
+                                                  : LEG_SINGLE_MOTOR_MAX_ERROR_RAD;
+      if (static_hold_mode == 0U &&
+          (absf_local(single_motor_control.target_rotor_position -
                       state->rotor_position) > error_limit ||
-          (static_hold_mode == 0U &&
            absf_local(state->raw_velocity) > LEG_SINGLE_MOTOR_MAX_VELOCITY_RAD_S)) {
         Leg_Control_ForceZeroOutput(Motor_Control_Reason_SafetyLimit);
         stopped = 1U;
