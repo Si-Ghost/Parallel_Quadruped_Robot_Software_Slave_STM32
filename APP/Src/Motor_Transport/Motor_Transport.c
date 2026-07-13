@@ -11,9 +11,8 @@
 #define MOTOR_TRANSPORT_OFFLINE_TIMEOUT_MS 100U
 #define MOTOR_TRANSPORT_QUIESCE_TIMEOUT_MS 5U
 
-/* Re-lock after simplifying static hold to the direct reference cascade PID.
- * The revised controller must complete a zero-output dry-run before ACTIVE. */
-#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 1U
+/* One-shot authorization after the direct-cascade dry-run: LF ID1 only. */
+#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 0U
 
 _Static_assert((MOTOR_TRANSPORT_RING_SIZE & (MOTOR_TRANSPORT_RING_SIZE - 1U)) == 0U,
                "motor RX ring size must be a power of two");
@@ -124,8 +123,7 @@ static void prepare_tx_frame(Motor_TransportChannel *channel, uint8_t motor)
   command.K_P = 0.0f;
   command.K_W = 0.0f;
   uint8_t motor_index = (uint8_t)(channel->leg_index * 2U + motor);
-  if (motor_index != 1U && motor_index != 3U &&
-      motor_index != 4U && motor_index != 6U)
+  if (motor_index != 1U)
     command.T = 0.0f;
 
 #if MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY

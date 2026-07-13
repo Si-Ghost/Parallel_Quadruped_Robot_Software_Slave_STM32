@@ -84,8 +84,7 @@ static void refresh_leg_online_state(uint8_t leg);
 
 static uint8_t static_hold_motor_allowed(uint8_t motor_index)
 {
-  return (motor_index == 1U || motor_index == 3U ||
-          motor_index == 4U || motor_index == 6U) ? 1U : 0U;
+  return motor_index == 1U ? 1U : 0U;
 }
 
 static void set_zero_command(MOTOR_send *cmd, uint8_t motor)
