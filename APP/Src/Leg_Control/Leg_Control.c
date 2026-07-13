@@ -1,6 +1,7 @@
 #include "Leg_Control.h"
 #include "Motor_Transport.h"
 #include "Motor_SoftwareControl.h"
+#include "Motor_GroupControl.h"
 #include "Leg_Gait.h"
 #include "communication.h"
 #include <math.h>
@@ -132,6 +133,14 @@ void Leg_Control_ForceZeroOutput(Motor_ControlReasonTypeDef reason)
   else if (reason == Motor_Control_Reason_SafetyLimit) sw_reason = Motor_SoftwareControl_StopSafetyLimit;
   else if (reason == Motor_Control_Reason_CommandLink) sw_reason = Motor_SoftwareControl_StopCommandLink;
   Motor_SoftwareControl_Stop(sw_reason);
+  Motor_GroupStopReason group_reason = Motor_Group_StopInvalidState;
+  if (reason == Motor_Control_Reason_None) group_reason = Motor_Group_StopNone;
+  else if (reason == Motor_Control_Reason_OperatorStop) group_reason = Motor_Group_StopOperator;
+  else if (reason == Motor_Control_Reason_Rescan) group_reason = Motor_Group_StopRescan;
+  else if (reason == Motor_Control_Reason_Offline) group_reason = Motor_Group_StopOffline;
+  else if (reason == Motor_Control_Reason_TransportError) group_reason = Motor_Group_StopTransport;
+  else if (reason == Motor_Control_Reason_CommandLink) group_reason = Motor_Group_StopCommandLink;
+  Motor_GroupControl_Stop(group_reason);
   if (primask == 0U) __enable_irq();
 }
 
@@ -248,8 +257,9 @@ static uint8_t transport_load_command(uint8_t leg, uint8_t motor, MOTOR_send *co
   command->id = motor;
   command->mode = 1U;
   float torque = 0.0f;
-  if (Motor_SoftwareControl_GetAuthorizedTorque(Leg_Control_MotorIndex(leg, motor),
-                                                 &torque))
+  uint8_t motor_index = Leg_Control_MotorIndex(leg, motor);
+  if (Motor_GroupControl_GetAuthorizedTorque(motor_index, &torque) ||
+      Motor_SoftwareControl_GetAuthorizedTorque(motor_index, &torque))
     command->T = torque;
   command->W = 0.0f;
   command->Pos = 0.0f;
@@ -270,6 +280,13 @@ static void transport_feedback_received(uint8_t leg,
                                 (int8_t)feedback->Temp, feedback->MError,
                                 timestamp, LEG_REDUCTION_RATIO,
                                 LEG_ROTOR_ZERO_NEAR_RAD);
+  uint8_t motor_index = Leg_Control_MotorIndex(leg, motor);
+  if (Motor_GroupControl_IsActive() && feedback->MError != 0U)
+    Motor_GroupControl_Stop(Motor_Group_StopMotorFault);
+  else if (Motor_GroupControl_IsActive() && feedback->Temp >= 40)
+    Motor_GroupControl_Stop(Motor_Group_StopTemperature);
+  else
+    Motor_GroupControl_Update(motor_index, feedback->Pos, feedback->W, timestamp);
   state->handshake_status = Motor_Handshake_Ok;
   state->io_error_count = 0U;
   refresh_leg_online_state(leg);
@@ -964,6 +981,7 @@ static uint8_t motor_feedback_is_valid(HAL_StatusTypeDef ret, MOTOR_recv *fbk, u
 void Leg_Control_InitSafe(void)
 {
   Motor_SoftwareControl_Init();
+  Motor_GroupControl_Init();
   Left_Front_Leg.GPIOx = Left_Front_Leg_Control_GPIO_Port;
   Left_Front_Leg.GPIO_Pin = Left_Front_Leg_Control_Pin;
   Left_Front_Leg.huartx = &huart2;
@@ -1181,6 +1199,39 @@ void Leg_Control_Service(uint32_t now_ms)
     Leg_Control_Handshake();
   }
 
+  if (Motor_GroupControl_IsArmed() || Motor_GroupControl_IsActive()) {
+    Motor_GroupStopReason group_stop = Motor_Group_StopNone;
+    if (!Communication_IsLinkAlive()) {
+      group_stop = Motor_Group_StopCommandLink;
+    } else {
+      for (uint8_t idx = 0U; idx < 8U; ++idx) {
+        Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(idx);
+        if (state == NULL || state->online != Motor_Online ||
+            state->angle_valid != Motor_Angle_Valid ||
+            (now_ms - state->timestamp) > 10U) {
+          group_stop = Motor_Group_StopOffline;
+          break;
+        }
+        if (state->motor_error != 0U) {
+          group_stop = Motor_Group_StopMotorFault;
+          break;
+        }
+        if (state->temperature_c >= 40) {
+          group_stop = Motor_Group_StopTemperature;
+          break;
+        }
+      }
+    }
+    if (group_stop != Motor_Group_StopNone) {
+      Leg_Control_ForceZeroOutput(group_stop == Motor_Group_StopCommandLink
+                                      ? Motor_Control_Reason_CommandLink
+                                      : group_stop == Motor_Group_StopOffline
+                                            ? Motor_Control_Reason_Offline
+                                            : Motor_Control_Reason_SafetyLimit);
+      Motor_GroupControl_Stop(group_stop);
+    }
+  }
+
   if (single_motor_control.mode == Motor_Control_SingleMotorPosition ||
       single_motor_control.mode == Motor_Control_StaticHoldDryRun ||
       single_motor_control.mode == Motor_Control_StaticHoldActive) {
@@ -1241,7 +1292,8 @@ void Leg_Control_Service(uint32_t now_ms)
   if ((now_ms - last_service_tick) < LEG_SERVICE_PERIOD_MS) return;
   last_service_tick = now_ms;
 
-  /* Communication-only DMA validation: motion and gait services stay disabled. */
+  /* Legacy gait services stay disabled.  The guarded all-zero controller is
+   * updated directly from each validated transport feedback frame. */
 }
 
 /* ---- hold / stop ---- */
@@ -1251,6 +1303,44 @@ int Leg_Control_HoldCurrentPosition(void)
   Leg_Control_ForceZeroOutput(Motor_Control_Reason_InvalidCommand);
   Communication_SendString("MOTOR_HOLD_CURRENT rejected: pid_stage_zero_output\r\n");
   return 0;
+}
+
+int Leg_Control_ArmAllZero(void)
+{
+  Motor_StateSnapshotTypeDef states[8];
+  Leg_Control_ForceZeroOutput(Motor_Control_Reason_None);
+  for (uint8_t idx = 0U; idx < 8U; ++idx) {
+    if (!Leg_Control_GetMotorStateSnapshot(idx, &states[idx]))
+      return 0;
+  }
+  return Motor_GroupControl_ArmZero(states, HAL_GetTick());
+}
+
+int Leg_Control_StartAllZero(void)
+{
+  if (Motor_Transport_IsZeroOutputOnly() != 0U ||
+      !Communication_IsLinkAlive() || !Motor_GroupControl_IsArmed())
+    return 0;
+
+  Motor_GroupSnapshot group;
+  Motor_GroupControl_GetSnapshot(&group);
+  for (uint8_t idx = 0U; idx < 8U; ++idx) {
+    Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(idx);
+    if (state == NULL || state->online != Motor_Online ||
+        state->angle_valid != Motor_Angle_Valid ||
+        (HAL_GetTick() - state->timestamp) > 10U ||
+        state->motor_error != 0U || state->temperature_c >= 40 ||
+        absf_local(state->rotor_position - group.arm_position[idx]) > 0.10f) {
+      Motor_GroupControl_Stop(Motor_Group_StopInvalidState);
+      return 0;
+    }
+  }
+  return Motor_GroupControl_Start(HAL_GetTick());
+}
+
+void Leg_Control_GetGroupSnapshot(Motor_GroupSnapshot *snapshot)
+{
+  Motor_GroupControl_GetSnapshot(snapshot);
 }
 
 void Leg_Control_StopAllDebugTargets(uint8_t reason)

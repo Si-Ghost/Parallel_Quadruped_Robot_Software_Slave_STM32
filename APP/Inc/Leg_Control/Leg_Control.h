@@ -5,6 +5,7 @@
 #include "Leg_Kinematics.h"
 #include "Motor_State.h"
 #include "Motor_SoftwareControl.h"
+#include "Motor_GroupControl.h"
 #include "main.h"
 
 typedef enum
@@ -97,6 +98,9 @@ void Leg_Control_ForceZeroOutput(Motor_ControlReasonTypeDef reason);
 void Leg_Control_GetControlSnapshot(Motor_ControlSnapshotTypeDef *snapshot);
 void Leg_Control_LogFootSnapshot(void);
 int  Leg_Control_HoldCurrentPosition(void);
+int  Leg_Control_ArmAllZero(void);
+int  Leg_Control_StartAllZero(void);
+void Leg_Control_GetGroupSnapshot(Motor_GroupSnapshot *snapshot);
 void Leg_Control_StopAllDebugTargets(uint8_t reason);
 void Leg_Control_GetAngles(float angles[8], uint8_t valid[8]);
 int  Leg_Control_GetMotorStateSnapshot(uint8_t motor_index,

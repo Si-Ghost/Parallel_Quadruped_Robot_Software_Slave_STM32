@@ -10,7 +10,7 @@ extern RC_DataTypeDef rc_data;
 extern volatile uint32_t last_valid_packet_tick;
 
 #define RX_BUF_SIZE 128
-#define TX_IT_BUF_SIZE 384
+#define TX_IT_BUF_SIZE 640
 #define RX_SNAPSHOT_SIZE 16
 #define TEXT_COMMAND_BUF_SIZE 128
 #define RX_CHUNK_QUEUE_DEPTH 8U
@@ -61,6 +61,8 @@ static const char motor_set_cmd[] = "MOTOR_SET";
 static const char motor_rescan_cmd[] = "MOTOR_RESCAN";
 static const char motor_stop_all_cmd[] = "MOTOR_STOP_ALL";
 static const char motor_hold_current_cmd[] = "MOTOR_HOLD_CURRENT";
+static const char motor_zero_all_arm_cmd[] = "MOTOR_ZERO_ALL_ARM";
+static const char motor_zero_all_run_cmd[] = "MOTOR_ZERO_ALL_RUN";
 static const char pid_arm_cmd[] = "PID_ARM";
 static const char pid_plan_cmd[] = "PID_PLAN";
 static const char pid_hold_dryrun_cmd[] = "PID_HOLD_DRYRUN";
@@ -486,6 +488,8 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         len < sizeof(motor_rescan_cmd) - 1 &&
         len < sizeof(motor_stop_all_cmd) - 1 &&
         len < sizeof(motor_hold_current_cmd) - 1 &&
+        len < sizeof(motor_zero_all_arm_cmd) - 1 &&
+        len < sizeof(motor_zero_all_run_cmd) - 1 &&
         len < sizeof(pid_arm_cmd) - 1 &&
         len < sizeof(pid_plan_cmd) - 1 &&
         len < sizeof(pid_hold_dryrun_cmd) - 1 &&
@@ -545,6 +549,28 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
             memcpy(cmd_buf, &data[i], copy_len);
             cmd_buf[copy_len] = '\0';
             handle_pid_control_text(cmd_buf);
+            return;
+        }
+    }
+
+    for (uint16_t i = 0; i + sizeof(motor_zero_all_arm_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], motor_zero_all_arm_cmd,
+                   sizeof(motor_zero_all_arm_cmd) - 1) == 0) {
+            if (Leg_Control_ArmAllZero())
+                Communication_SendString("MOTOR_ZERO_ALL_ARM ok\r\n");
+            else
+                Communication_SendString("MOTOR_ZERO_ALL_ARM rejected\r\n");
+            return;
+        }
+    }
+
+    for (uint16_t i = 0; i + sizeof(motor_zero_all_run_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], motor_zero_all_run_cmd,
+                   sizeof(motor_zero_all_run_cmd) - 1) == 0) {
+            if (Leg_Control_StartAllZero())
+                Communication_SendString("MOTOR_ZERO_ALL_RUN ok\r\n");
+            else
+                Communication_SendString("MOTOR_ZERO_ALL_RUN rejected\r\n");
             return;
         }
     }
@@ -1170,6 +1196,46 @@ static int append_motor_health(char *buf, size_t size, int len)
     return len + written;
 }
 
+static int append_motor_group(char *buf, size_t size, int len)
+{
+    Motor_GroupSnapshot group;
+    Leg_Control_GetGroupSnapshot(&group);
+    if (len < 0 || (size_t)len >= size) return -1;
+
+    int written = snprintf(&buf[len], size - (size_t)len,
+        "MOTOR_GROUP mode=%u reason=%u ready=%u at_zero=%u delta=",
+        (unsigned int)group.mode, (unsigned int)group.reason,
+        (unsigned int)group.ready, (unsigned int)group.all_at_zero);
+    if (written < 0 || written >= (int)(size - (size_t)len)) return -1;
+    len += written;
+
+    for (uint8_t i = 0U; i < 8U && len > 0; ++i) {
+        len = append_fixed4(buf, size, len,
+                            group.target_position[i] - group.arm_position[i]);
+        if (len > 0) {
+            written = snprintf(&buf[len], size - (size_t)len,
+                               "%c", i == 7U ? ' ' : ',');
+            if (written < 0 || written >= (int)(size - (size_t)len)) return -1;
+            len += written;
+        }
+    }
+    if (len > 0) {
+        written = snprintf(&buf[len], size - (size_t)len, "error=");
+        if (written < 0 || written >= (int)(size - (size_t)len)) return -1;
+        len += written;
+    }
+    for (uint8_t i = 0U; i < 8U && len > 0; ++i) {
+        len = append_fixed4(buf, size, len, group.position_error[i]);
+        if (len > 0) {
+            written = snprintf(&buf[len], size - (size_t)len,
+                               "%c", i == 7U ? '\n' : ',');
+            if (written < 0 || written >= (int)(size - (size_t)len)) return -1;
+            len += written;
+        }
+    }
+    return len;
+}
+
 /* 向 ESP32 网页端发送紧凑的电机握手与目标状态。 */
 void Communication_SendMotorStatus(void)
 {
@@ -1195,6 +1261,10 @@ void Communication_SendMotorStatus(void)
         target_active[4], target_active[5], target_active[6], target_active[7],
         target_result[0], target_result[1], target_result[2], target_result[3],
         target_result[4], target_result[5], target_result[6], target_result[7]);
+
+    if (len > 0 && len < (int)sizeof(buf)) {
+        len = append_motor_group(buf, sizeof(buf), len);
+    }
 
     if (len > 0 && len < (int)sizeof(buf)) {
         len = append_motor_health(buf, sizeof(buf), len);

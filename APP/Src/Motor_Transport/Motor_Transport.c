@@ -11,7 +11,7 @@
 #define MOTOR_TRANSPORT_OFFLINE_TIMEOUT_MS 100U
 #define MOTOR_TRANSPORT_QUIESCE_TIMEOUT_MS 5U
 
-/* Approved ACTIVE static-hold tests for any one of the eight motors. */
+/* ACTIVE output is authorized only by the guarded software controllers. */
 #define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 0U
 
 _Static_assert((MOTOR_TRANSPORT_RING_SIZE & (MOTOR_TRANSPORT_RING_SIZE - 1U)) == 0U,
