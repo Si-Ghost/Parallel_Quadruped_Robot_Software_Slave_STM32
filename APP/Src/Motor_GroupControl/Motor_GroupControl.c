@@ -9,18 +9,18 @@
 #define GROUP_MAX_ARM_EXCURSION_RAD       2.00f
 #define GROUP_TARGET_SPEED_RAD_S          0.25f
 #define GROUP_TARGET_ERROR_RAD            0.08f
-#define GROUP_PROGRESS_RAD                0.005f
-#define GROUP_STALL_TIMEOUT_MS            4000U
-#define GROUP_MIN_DT_S                    0.0005f
+#define GROUP_MIN_DT_S                    0.0002f
 #define GROUP_MAX_DT_S                    0.0100f
 #define GROUP_POSITION_KP                 35.9f
 #define GROUP_POSITION_KD                 1.0f
-#define GROUP_SPEED_TARGET_MAX_RAD_S      2.0f
+/* Keep the cautious group target ramp above, but use the already validated
+ * single-motor static-hold cascade limits once position error is generated. */
+#define GROUP_SPEED_TARGET_MAX_RAD_S      100.0f
 #define GROUP_SPEED_KP                    0.01f
 #define GROUP_SPEED_KI                    0.0006f
 #define GROUP_SPEED_KD                    0.0015f
 #define GROUP_SPEED_INTEGRAL_MAX          0.20f
-#define GROUP_TORQUE_MAX_NM               0.50f
+#define GROUP_TORQUE_MAX_NM               1.50f
 
 typedef struct
 {
@@ -33,9 +33,7 @@ typedef struct
   float previous_speed_error;
   float integral;
   float torque;
-  float best_abs_error;
   uint32_t previous_feedback_timestamp;
-  uint32_t last_progress_tick;
 } Motor_GroupChannel;
 
 static Motor_GroupChannel channels[GROUP_MOTOR_COUNT];
@@ -108,8 +106,6 @@ int Motor_GroupControl_ArmZero(const Motor_StateSnapshotTypeDef states[8],
     channel->ramped_target = channel->arm_position;
     channel->actual_position = channel->arm_position;
     channel->position_error = delta;
-    channel->best_abs_error = fabsf(delta);
-    channel->last_progress_tick = now_ms;
   }
 
   group_mode = Motor_Group_Armed;
@@ -120,6 +116,7 @@ int Motor_GroupControl_ArmZero(const Motor_StateSnapshotTypeDef states[8],
 
 int Motor_GroupControl_Start(uint32_t now_ms)
 {
+  (void)now_ms;
   if (group_mode != Motor_Group_Armed || !group_ready) return 0;
   for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i) {
     channels[i].previous_feedback_timestamp = 0U;
@@ -127,7 +124,6 @@ int Motor_GroupControl_Start(uint32_t now_ms)
     channels[i].previous_speed_error = 0.0f;
     channels[i].integral = 0.0f;
     channels[i].torque = 0.0f;
-    channels[i].last_progress_tick = now_ms;
   }
   group_mode = Motor_Group_Active;
   stop_reason = Motor_Group_StopNone;
@@ -191,15 +187,10 @@ void Motor_GroupControl_Update(uint8_t motor_index,
           GROUP_SPEED_KD * speed_delta,
       GROUP_TORQUE_MAX_NM);
 
-  float final_abs_error = fabsf(channel->target_position - rotor_position);
-  if (final_abs_error + GROUP_PROGRESS_RAD < channel->best_abs_error) {
-    channel->best_abs_error = final_abs_error;
-    channel->last_progress_tick = feedback_timestamp;
-  } else if (final_abs_error > GROUP_TARGET_ERROR_RAD &&
-             (feedback_timestamp - channel->last_progress_tick) >=
-                 GROUP_STALL_TIMEOUT_MS) {
-    Motor_GroupControl_Stop(Motor_Group_StopStall);
-  }
+  /* Infinite hold intentionally does not treat persistent position error as a
+   * stall.  An operator load may prevent progress while the controller must
+   * continue producing restoring torque.  Temperature, hardware-fault,
+   * feedback/link and arm-excursion interlocks remain responsible for stops. */
 }
 
 uint8_t Motor_GroupControl_IsArmed(void)
