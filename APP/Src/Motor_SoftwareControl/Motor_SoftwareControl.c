@@ -26,7 +26,6 @@
 #define SWCTRL_STATIC_HOLD_ACTIVE_DURATION_MS  0U
 #define SWCTRL_STATIC_HOLD_TORQUE_MAX  1.50f
 #define SWCTRL_STATIC_HOLD_INTEGRAL_MAX 0.20f
-#define SWCTRL_STATIC_HOLD_SPEED_KP     0.10f
 #define SWCTRL_STATIC_HOLD_TARGET_SPEED_MAX 100.0f
 #define SWCTRL_STATIC_HOLD_ACTUAL_SPEED_MAX 3.00f
 #define SWCTRL_STATIC_HOLD_POSITION_MAX 0.30f
@@ -172,7 +171,7 @@ static void configure_static_hold(Motor_SoftwareControlMode mode,
   control.position_loop_kp = SWCTRL_CASCADE_POSITION_KP;
   control.position_loop_ki = SWCTRL_CASCADE_POSITION_KI;
   control.position_loop_kd = SWCTRL_CASCADE_POSITION_KD;
-  control.speed_loop_kp = SWCTRL_STATIC_HOLD_SPEED_KP;
+  control.speed_loop_kp = SWCTRL_CASCADE_SPEED_KP;
   control.speed_loop_ki = SWCTRL_CASCADE_SPEED_KI;
   control.speed_loop_kd = SWCTRL_CASCADE_SPEED_KD;
   control.torque_limit = SWCTRL_STATIC_HOLD_TORQUE_MAX;
