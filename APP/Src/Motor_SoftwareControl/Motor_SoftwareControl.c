@@ -24,7 +24,6 @@
 #define SWCTRL_CASCADE_INTEGRAL_MAX    1.45f
 #define SWCTRL_STATIC_HOLD_DRY_RUN_DURATION_MS 10000U
 #define SWCTRL_STATIC_HOLD_ACTIVE_DURATION_MS  0U
-#define SWCTRL_STATIC_HOLD_MOTOR_INDEX 2U
 #define SWCTRL_STATIC_HOLD_TORQUE_MAX  1.50f
 #define SWCTRL_STATIC_HOLD_TARGET_SPEED_MAX 0.50f
 #define SWCTRL_STATIC_HOLD_ACTUAL_SPEED_MAX 1.00f
@@ -44,14 +43,20 @@ static const char *last_reject_reason = "none";
 static float cascade_position_error_previous;
 static float cascade_speed_error_previous;
 static float previous_rotor_position;
-/* ACTIVE static hold is authorized for one start per MCU boot. */
-static uint8_t static_hold_active_consumed;
+/* Each approved motor may start ACTIVE once per MCU boot. */
+static uint8_t static_hold_active_consumed[8];
 
 static float clampf(float value, float limit)
 {
   if (value > limit) return limit;
   if (value < -limit) return -limit;
   return value;
+}
+
+static uint8_t static_hold_motor_allowed(uint8_t motor_index)
+{
+  return (motor_index == 1U || motor_index == 3U ||
+          motor_index == 4U || motor_index == 6U) ? 1U : 0U;
 }
 
 void Motor_SoftwareControl_Init(void)
@@ -213,7 +218,7 @@ int Motor_SoftwareControl_StartStaticHoldDryRun(uint8_t motor_index,
     last_reject_reason = "not_armed";
   else if (control.motor_index != (int8_t)motor_index)
     last_reject_reason = "different_armed_motor";
-  else if (motor_index != SWCTRL_STATIC_HOLD_MOTOR_INDEX)
+  else if (static_hold_motor_allowed(motor_index) == 0U)
     last_reject_reason = "static_hold_motor_locked";
   else
     last_reject_reason = "none";
@@ -234,9 +239,9 @@ int Motor_SoftwareControl_StartStaticHoldActive(uint8_t motor_index,
     last_reject_reason = "not_armed";
   else if (control.motor_index != (int8_t)motor_index)
     last_reject_reason = "different_armed_motor";
-  else if (motor_index != SWCTRL_STATIC_HOLD_MOTOR_INDEX)
+  else if (static_hold_motor_allowed(motor_index) == 0U)
     last_reject_reason = "static_hold_motor_locked";
-  else if (static_hold_active_consumed != 0U)
+  else if (static_hold_active_consumed[motor_index] != 0U)
     last_reject_reason = "static_hold_live_consumed";
   else
     last_reject_reason = "none";
@@ -246,7 +251,7 @@ int Motor_SoftwareControl_StartStaticHoldActive(uint8_t motor_index,
     return 0;
   }
 
-  static_hold_active_consumed = 1U;
+  static_hold_active_consumed[motor_index] = 1U;
   configure_static_hold(Motor_SoftwareControl_StaticHoldActiveTorque, 0U,
                         now_ms);
   return 1;
@@ -465,7 +470,7 @@ int Motor_SoftwareControl_GetAuthorizedTorque(uint8_t motor_index, float *torque
   if (torque == NULL) return 0;
   *torque = 0.0f;
   if (control.mode != Motor_SoftwareControl_StaticHoldActiveTorque ||
-      motor_index != SWCTRL_STATIC_HOLD_MOTOR_INDEX ||
+      static_hold_motor_allowed(motor_index) == 0U ||
       control.motor_index != (int8_t)motor_index || control.dry_run != 0U)
     return 0;
   if (!isfinite(control.limited_torque) ||

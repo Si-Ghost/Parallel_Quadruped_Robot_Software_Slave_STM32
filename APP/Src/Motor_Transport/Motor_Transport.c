@@ -11,10 +11,8 @@
 #define MOTOR_TRANSPORT_OFFLINE_TIMEOUT_MS 100U
 #define MOTOR_TRANSPORT_QUIESCE_TIMEOUT_MS 5U
 
-/* New indefinite static-hold behavior is awaiting its zero-output dry-run. */
-#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 1U
-#define MOTOR_TRANSPORT_LIVE_LEG         1U
-#define MOTOR_TRANSPORT_LIVE_MOTOR       0U
+/* Approved sequential static-hold tests: indices 1, 3, 4 and 6. */
+#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 0U
 
 _Static_assert((MOTOR_TRANSPORT_RING_SIZE & (MOTOR_TRANSPORT_RING_SIZE - 1U)) == 0U,
                "motor RX ring size must be a power of two");
@@ -124,8 +122,9 @@ static void prepare_tx_frame(Motor_TransportChannel *channel, uint8_t motor)
   command.Pos = 0.0f;
   command.K_P = 0.0f;
   command.K_W = 0.0f;
-  if (channel->leg_index != MOTOR_TRANSPORT_LIVE_LEG ||
-      motor != MOTOR_TRANSPORT_LIVE_MOTOR)
+  uint8_t motor_index = (uint8_t)(channel->leg_index * 2U + motor);
+  if (motor_index != 1U && motor_index != 3U &&
+      motor_index != 4U && motor_index != 6U)
     command.T = 0.0f;
 
 #if MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY

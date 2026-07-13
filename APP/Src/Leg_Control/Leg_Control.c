@@ -43,7 +43,6 @@ extern UART_HandleTypeDef huart8;
 #define LEG_SINGLE_MOTOR_MAX_DURATION_MS      4000U
 #define LEG_SINGLE_MOTOR_MAX_ERROR_RAD        1.20f
 #define LEG_SINGLE_MOTOR_MAX_VELOCITY_RAD_S   3.0f
-#define LEG_STATIC_HOLD_MOTOR_INDEX                 2U
 #define LEG_STATIC_HOLD_DRY_RUN_DURATION_MS     10000U
 #define LEG_STATIC_HOLD_ACTIVE_DURATION_MS          0U
 #define LEG_UART_HARD_ERROR_MASK \
@@ -82,6 +81,12 @@ static SingleMotorControlContextTypeDef single_motor_control = {
 static const char *single_motor_last_plan_reject_reason = "none";
 
 static void refresh_leg_online_state(uint8_t leg);
+
+static uint8_t static_hold_motor_allowed(uint8_t motor_index)
+{
+  return (motor_index == 1U || motor_index == 3U ||
+          motor_index == 4U || motor_index == 6U) ? 1U : 0U;
+}
 
 static void set_zero_command(MOTOR_send *cmd, uint8_t motor)
 {
@@ -777,7 +782,7 @@ int Leg_Control_PlanSingleMotor(uint8_t motor_index, float offset_rad,
 int Leg_Control_StartStaticHoldDryRun(uint8_t motor_index)
 {
   Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
-  if (motor_index != LEG_STATIC_HOLD_MOTOR_INDEX) {
+  if (static_hold_motor_allowed(motor_index) == 0U) {
     single_motor_last_plan_reject_reason = "static_hold_motor_locked";
   } else if (state == NULL || state->online != Motor_Online ||
              state->angle_valid != Motor_Angle_Valid) {
@@ -825,7 +830,7 @@ int Leg_Control_StartStaticHoldDryRun(uint8_t motor_index)
 int Leg_Control_StartStaticHoldActive(uint8_t motor_index)
 {
   Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
-  if (motor_index != LEG_STATIC_HOLD_MOTOR_INDEX) {
+  if (static_hold_motor_allowed(motor_index) == 0U) {
     single_motor_last_plan_reject_reason = "static_hold_motor_locked";
   } else if (Motor_Transport_IsZeroOutputOnly() != 0U) {
     single_motor_last_plan_reject_reason = "transport_zero_guard";
