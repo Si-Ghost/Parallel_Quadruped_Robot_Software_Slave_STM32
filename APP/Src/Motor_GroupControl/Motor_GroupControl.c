@@ -12,9 +12,8 @@
 #define GROUP_TARGET_SPEED_RAD_S          0.25f
 #define GROUP_STAND_TARGET_SPEED_RAD_S    0.125f
 #define GROUP_TARGET_ERROR_RAD            0.08f
-#define GROUP_CONTROL_PERIOD_MS           10U
-#define GROUP_MIN_DT_S                    0.0090f
-#define GROUP_MAX_DT_S                    0.0250f
+#define GROUP_MIN_DT_S                    0.0002f
+#define GROUP_MAX_DT_S                    0.0100f
 #define GROUP_POSITION_KP                 35.9f
 #define GROUP_POSITION_KD                 1.0f
 /* Keep the cautious group target ramp above, but use the already validated
@@ -25,7 +24,6 @@
 #define GROUP_SPEED_KD                    0.0015f
 #define GROUP_SPEED_INTEGRAL_MAX          0.20f
 #define GROUP_TORQUE_MAX_NM               1.50f
-#define GROUP_FEEDBACK_SPEED_BIAS_RAD_S   0.14137188f
 
 typedef struct
 {
@@ -219,11 +217,10 @@ void Motor_GroupControl_Update(uint8_t motor_index,
     channel->previous_feedback_timestamp = feedback_timestamp;
     return;
   }
-  uint32_t elapsed_ms = feedback_timestamp -
-                        channel->previous_feedback_timestamp;
-  if (elapsed_ms < GROUP_CONTROL_PERIOD_MS) return;
+  if (feedback_timestamp == channel->previous_feedback_timestamp) return;
 
-  float dt = (float)elapsed_ms * 0.001f;
+  float dt = (float)(feedback_timestamp - channel->previous_feedback_timestamp) *
+             0.001f;
   channel->previous_feedback_timestamp = feedback_timestamp;
   if (!isfinite(dt) || dt < GROUP_MIN_DT_S || dt > GROUP_MAX_DT_S) {
     Motor_GroupControl_Stop(Motor_Group_StopController);
@@ -236,19 +233,16 @@ void Motor_GroupControl_Update(uint8_t motor_index,
                            : GROUP_TARGET_SPEED_RAD_S;
   float target_step = clamp_symmetric(remaining, target_speed * dt);
   channel->ramped_target += target_step;
+  float ramp_velocity = target_step / dt;
 
   float previous_position_error = channel->previous_position_error;
   channel->position_error = channel->ramped_target - rotor_position;
   channel->previous_position_error = channel->position_error;
   float speed_target = clamp_symmetric(
-      GROUP_POSITION_KP * channel->position_error +
+      ramp_velocity + GROUP_POSITION_KP * channel->position_error +
           GROUP_POSITION_KD * (channel->position_error - previous_position_error),
       GROUP_SPEED_TARGET_MAX_RAD_S);
-  /* Software_Ref applies this empirical offset before the speed PID.  Keep
-   * raw feedback/diagnostics untouched and align only the controller input. */
-  float corrected_velocity = rotor_velocity -
-                             GROUP_FEEDBACK_SPEED_BIAS_RAD_S;
-  float speed_error = speed_target - corrected_velocity;
+  float speed_error = speed_target - rotor_velocity;
   float speed_delta = speed_error - channel->previous_speed_error;
   channel->previous_speed_error = speed_error;
   channel->integral = clamp_symmetric(
