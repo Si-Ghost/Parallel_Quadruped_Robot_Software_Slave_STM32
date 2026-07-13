@@ -6,9 +6,9 @@
 #define GROUP_MOTOR_COUNT                 8U
 #define GROUP_TWO_PI                      6.28318530717958647692f
 #define GROUP_MAX_TARGET_OFFSET_RAD       2.00f
-#define GROUP_MAX_TARGET_DELTA_RAD        2.10f
-#define GROUP_OFFSET_START_ZERO_RAD       0.10f
-#define GROUP_MAX_ARM_EXCURSION_RAD       2.25f
+#define GROUP_MAX_TARGET_DELTA_RAD        2.60f
+#define GROUP_OFFSET_START_ZERO_RAD       0.50f
+#define GROUP_MAX_ZERO_EXCURSION_RAD      2.25f
 #define GROUP_TARGET_SPEED_RAD_S          0.25f
 #define GROUP_STAND_TARGET_SPEED_RAD_S    0.125f
 #define GROUP_TARGET_ERROR_RAD            0.08f
@@ -31,6 +31,7 @@
 typedef struct
 {
   float arm_position;
+  float zero_position;
   float target_position;
   float ramped_target;
   float actual_position;
@@ -174,8 +175,10 @@ int Motor_GroupControl_ArmOffsets(const Motor_StateSnapshotTypeDef states[8],
     channel->arm_position = state->rotor_position;
     float zero_position = aligned_zero(state->rotor_position,
                                        state->zero_rotor_position);
-    /* Non-zero synchronized tests must begin from the verified zero pose.
-     * Returning to zero remains allowed from either +1 or +2 rad. */
+    channel->zero_position = zero_position;
+    /* Non-zero synchronized tests must begin within the approved mechanical
+     * zero neighborhood.  Returning to zero remains allowed from either +1
+     * or +2 rad. */
     if (fabsf(target_offset) > 0.0001f &&
         fabsf(zero_position - channel->arm_position) >
             GROUP_OFFSET_START_ZERO_RAD) {
@@ -247,11 +250,15 @@ void Motor_GroupControl_Update(uint8_t motor_index,
     channel->diagnostic_position_max = rotor_position;
   if (fabsf(rotor_velocity) > channel->diagnostic_max_abs_velocity)
     channel->diagnostic_max_abs_velocity = fabsf(rotor_velocity);
-  if (fabsf(rotor_position - channel->arm_position) >
-      GROUP_MAX_ARM_EXCURSION_RAD) {
+  /* Guard the absolute mechanical-zero neighborhood, not displacement from
+   * the arm instant.  A loaded zero pose may deflect by as much as 0.5 rotor
+   * rad; it must still be able to target +2 rad without falsely tripping a
+   * 2.1 rad arm-relative excursion check. */
+  if (fabsf(rotor_position - channel->zero_position) >
+      GROUP_MAX_ZERO_EXCURSION_RAD) {
     Motor_GroupControl_StopWithContext(
         Motor_Group_StopPositionLimit, (int8_t)motor_index,
-        rotor_position - channel->arm_position);
+        rotor_position - channel->zero_position);
     return;
   }
 
