@@ -11,9 +11,9 @@
 #define MOTOR_TRANSPORT_OFFLINE_TIMEOUT_MS 100U
 #define MOTOR_TRANSPORT_QUIESCE_TIMEOUT_MS 5U
 
-/* Approved 2026-07-13: one RF ID0 static-hold test.  The callback and the
- * final frame builder both restrict live torque to global index 2. */
-#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 0U
+/* Re-lock after the approved RF ID0 test could not resist the supported
+ * 400 g load.  A new controller must pass another dry-run before reopening. */
+#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 1U
 #define MOTOR_TRANSPORT_LIVE_LEG         1U
 #define MOTOR_TRANSPORT_LIVE_MOTOR       0U
 
