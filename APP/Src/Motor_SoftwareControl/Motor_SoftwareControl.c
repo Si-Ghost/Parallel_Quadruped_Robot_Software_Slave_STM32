@@ -413,13 +413,6 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
     control.d_term = -control.kd * control.filtered_velocity;
   }
 
-  /* The first two seconds are measurement-only.  Future active tests must
-   * keep the supported load fully external while the zero-speed bias settles. */
-  if (static_hold_mode && control.velocity_bias_valid == 0U) {
-    control.p_term = 0.0f;
-    control.d_term = 0.0f;
-  }
-
   uint8_t cascade_mode = (control.mode == Motor_SoftwareControl_CascadeDryRun ||
                           control.mode == Motor_SoftwareControl_CascadeActiveTorque ||
                           control.mode == Motor_SoftwareControl_StaticHoldDryRun ||
@@ -430,14 +423,9 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
                             ? control.speed_loop_ki : control.ki;
   float integral_step = integral_gain * integral_error;
   control.integral_enabled = 1U;
-  /* Match the reference cascade PID semantics after bias calibration: the
-   * discrete speed integrator runs every control cycle, including close to
-   * the position target.  The previous 1 mrad gate prevented any static load
-   * torque from being established. */
-  if (static_hold_mode && control.velocity_bias_valid == 0U) {
-    integral_step = 0.0f;
-    control.integral_enabled = 0U;
-  }
+  /* Match the reference cascade PID semantics: the discrete speed integrator
+   * runs every control cycle, including while the rest-speed bias estimate is
+   * converging and while position error is close to zero. */
   if (!cascade_mode) integral_step *= dt;
   float integral_limit = cascade_mode
                              ? SWCTRL_CASCADE_INTEGRAL_MAX : SWCTRL_INTEGRAL_LIMIT;
