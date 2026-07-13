@@ -43,7 +43,6 @@ extern UART_HandleTypeDef huart8;
 #define LEG_SINGLE_MOTOR_MAX_DURATION_MS      4000U
 #define LEG_SINGLE_MOTOR_MAX_ERROR_RAD        1.20f
 #define LEG_SINGLE_MOTOR_MAX_VELOCITY_RAD_S   3.0f
-#define LEG_STATIC_HOLD_MOTOR_INDEX            2U
 #define LEG_STATIC_HOLD_DURATION_MS             10000U
 #define LEG_UART_HARD_ERROR_MASK \
   (HAL_UART_ERROR_DMA | HAL_UART_ERROR_RTO)
@@ -723,6 +722,8 @@ int Leg_Control_PlanSingleMotor(uint8_t motor_index, float offset_rad,
     single_motor_last_plan_reject_reason = "kw_limit";
   } else if (duration_ms == 0U || duration_ms > LEG_SINGLE_MOTOR_MAX_DURATION_MS) {
     single_motor_last_plan_reject_reason = "duration_limit";
+  } else if (Motor_Transport_IsZeroOutputOnly() != 0U) {
+    single_motor_last_plan_reject_reason = "transport_zero_guard";
   } else if (single_motor_control.mode != Motor_Control_ArmedSingleMotor) {
     single_motor_last_plan_reject_reason = "not_armed";
   } else if (single_motor_control.armed_motor_index != (int8_t)motor_index) {
@@ -740,8 +741,9 @@ int Leg_Control_PlanSingleMotor(uint8_t motor_index, float offset_rad,
     return 0;
   }
 
-  if (!Motor_SoftwareControl_StartDryRun(motor_index, offset_rad, kp, kw,
-                                         duration_ms, HAL_GetTick())) {
+  if (!Motor_SoftwareControl_StartCascadeMoveActive(motor_index, offset_rad,
+                                                     duration_ms,
+                                                     HAL_GetTick())) {
     single_motor_last_plan_reject_reason = Motor_SoftwareControl_GetLastRejectReason();
     Leg_Control_ForceZeroOutput(Motor_Control_Reason_InvalidCommand);
     return 0;
@@ -757,8 +759,7 @@ int Leg_Control_PlanSingleMotor(uint8_t motor_index, float offset_rad,
   single_motor_control.duration_ms = duration_ms;
   single_motor_control.plan_start_tick = HAL_GetTick();
 
-  /* Software PID dry-run: calculate internally, but keep every driver control
-   * field zero. Motor_Transport provides a second compile-time zero gate. */
+  /* Driver PD remains off; the reference-style software cascade PID owns T. */
   MOTOR_send *cmd = &Legs[motor_index / 2U]->motor_cmd[motor_index % 2U];
   cmd->mode = 1U;
   cmd->T = 0.0f;
@@ -774,9 +775,7 @@ int Leg_Control_PlanSingleMotor(uint8_t motor_index, float offset_rad,
 int Leg_Control_StartStaticHoldDryRun(uint8_t motor_index)
 {
   Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
-  if (motor_index != LEG_STATIC_HOLD_MOTOR_INDEX) {
-    single_motor_last_plan_reject_reason = "static_hold_motor_locked";
-  } else if (state == NULL || state->online != Motor_Online ||
+  if (state == NULL || state->online != Motor_Online ||
              state->angle_valid != Motor_Angle_Valid) {
     single_motor_last_plan_reject_reason = "offline_or_feedback_invalid";
   } else if (single_motor_control.mode != Motor_Control_ArmedSingleMotor) {
@@ -822,9 +821,7 @@ int Leg_Control_StartStaticHoldDryRun(uint8_t motor_index)
 int Leg_Control_StartStaticHoldActive(uint8_t motor_index)
 {
   Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
-  if (motor_index != LEG_STATIC_HOLD_MOTOR_INDEX) {
-    single_motor_last_plan_reject_reason = "static_hold_motor_locked";
-  } else if (Motor_Transport_IsZeroOutputOnly() != 0U) {
+  if (Motor_Transport_IsZeroOutputOnly() != 0U) {
     single_motor_last_plan_reject_reason = "transport_zero_guard";
   } else if (state == NULL || state->online != Motor_Online ||
              state->angle_valid != Motor_Angle_Valid) {
@@ -1177,9 +1174,7 @@ void Leg_Control_Service(uint32_t now_ms)
     uint8_t motor_index = (uint8_t)single_motor_control.armed_motor_index;
     Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(motor_index);
     uint8_t stopped = 0U;
-    if ((single_motor_control.mode == Motor_Control_StaticHoldDryRun ||
-         single_motor_control.mode == Motor_Control_StaticHoldActive) &&
-        !Communication_IsLinkAlive()) {
+    if (!Communication_IsLinkAlive()) {
       Leg_Control_ForceZeroOutput(Motor_Control_Reason_CommandLink);
       stopped = 1U;
     } else if (state == NULL || state->online != Motor_Online ||

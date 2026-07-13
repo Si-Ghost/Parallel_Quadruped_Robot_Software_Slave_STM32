@@ -11,11 +11,9 @@
 #define MOTOR_TRANSPORT_OFFLINE_TIMEOUT_MS 100U
 #define MOTOR_TRANSPORT_QUIESCE_TIMEOUT_MS 5U
 
-/* Re-lock after the active RF ID0 test exposed near-zero commanded torque:
- * the static integrator stayed gated off around the armed target. */
-#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 1U
-#define MOTOR_TRANSPORT_LIVE_LEG         1U
-#define MOTOR_TRANSPORT_LIVE_MOTOR       0U
+/* Direct debug control is explicitly enabled.  Leg_Control supplies torque
+ * only for the single currently armed software-cascade motor. */
+#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 0U
 
 _Static_assert((MOTOR_TRANSPORT_RING_SIZE & (MOTOR_TRANSPORT_RING_SIZE - 1U)) == 0U,
                "motor RX ring size must be a power of two");
@@ -125,10 +123,6 @@ static void prepare_tx_frame(Motor_TransportChannel *channel, uint8_t motor)
   command.Pos = 0.0f;
   command.K_P = 0.0f;
   command.K_W = 0.0f;
-  if (channel->leg_index != MOTOR_TRANSPORT_LIVE_LEG ||
-      motor != MOTOR_TRANSPORT_LIVE_MOTOR)
-    command.T = 0.0f;
-
 #if MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY
   command.T = 0.0f;
 #endif

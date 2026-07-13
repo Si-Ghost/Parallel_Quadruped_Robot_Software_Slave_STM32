@@ -1403,9 +1403,10 @@ void Communication_SendSoftwarePidTelemetry(void)
             (unsigned long)s.elapsed_ms, (unsigned int)s.stop_reason,
             (unsigned int)s.safety_limit);
     } else if (s.test == Motor_SoftwareControl_TestStaticHold) {
+        int32_t torque_q8 = (int32_t)(s.limited_torque * 256.0f);
         len = snprintf(buf, sizeof(buf),
             "SW_HOLD_CTRL {\"m\":%u,\"i\":%d,\"st\":%ld,\"se\":%ld,"
-            "\"P\":%ld,\"I\":%ld,\"D\":%ld,\"T\":%ld,\"lim\":%u,\"ie\":%u,"
+            "\"P\":%ld,\"I\":%ld,\"D\":%ld,\"T\":%ld,\"qT\":%ld,\"lim\":%u,\"ie\":%u,"
             "\"el\":%lu,\"stop\":%u,\"sl\":%u}\n",
             (unsigned int)s.mode, (int)s.motor_index,
             (long)(s.speed_target * 1000000.0f),
@@ -1413,6 +1414,7 @@ void Communication_SendSoftwarePidTelemetry(void)
             (long)(s.p_term * 1000000.0f), (long)(s.i_term * 1000000.0f),
             (long)(s.d_term * 1000000.0f),
             (long)(s.limited_torque * 1000000.0f),
+            (long)((float)torque_q8 * (1000000.0f / 256.0f)),
             (unsigned int)s.torque_limited,
             (unsigned int)s.integral_enabled,
             (unsigned long)s.elapsed_ms, (unsigned int)s.stop_reason,
@@ -1433,14 +1435,16 @@ void Communication_SendSoftwarePidTelemetry(void)
             (unsigned long)(s.dt_s * 1000000.0f),
             (unsigned long)s.elapsed_ms, (unsigned int)s.stop_reason);
     } else {
+        int32_t torque_q8 = (int32_t)(s.limited_torque * 256.0f);
         len = snprintf(buf, sizeof(buf),
             "SW_PID_CTRL {\"m\":%u,\"i\":%d,\"P\":%ld,\"I\":%ld,"
-            "\"D\":%ld,\"T\":%ld,\"lim\":%u,\"st\":%ld,\"se\":%ld,"
+            "\"D\":%ld,\"T\":%ld,\"qT\":%ld,\"lim\":%u,\"st\":%ld,\"se\":%ld,"
             "\"el\":%lu,\"stop\":%u}\n",
             (unsigned int)s.mode, (int)s.motor_index,
             (long)(s.p_term * 1000000.0f), (long)(s.i_term * 1000000.0f),
             (long)(s.d_term * 1000000.0f),
             (long)(s.limited_torque * 1000000.0f),
+            (long)((float)torque_q8 * (1000000.0f / 256.0f)),
             (unsigned int)s.torque_limited,
             (long)(s.speed_target * 1000000.0f),
             (long)(s.speed_error * 1000000.0f),

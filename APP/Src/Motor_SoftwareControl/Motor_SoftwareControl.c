@@ -13,11 +13,6 @@
 #define SWCTRL_VELOCITY_FILTER_HZ      100.0f
 #define SWCTRL_MIN_DT_S                0.0002f
 #define SWCTRL_MAX_DT_S                0.0100f
-#define SWCTRL_MATCH_EPSILON           0.0015f
-#define SWCTRL_CASCADE_OFFSET_RAD      1.000f
-#define SWCTRL_CASCADE_SIGNATURE_KP    0.50f
-#define SWCTRL_CASCADE_SIGNATURE_KD    0.0f
-#define SWCTRL_CASCADE_DURATION_MS     4000U
 #define SWCTRL_CASCADE_POSITION_KP     35.9f
 #define SWCTRL_CASCADE_POSITION_KI     0.0f
 #define SWCTRL_CASCADE_POSITION_KD     1.0f
@@ -25,19 +20,18 @@
 #define SWCTRL_CASCADE_SPEED_KP        0.01f
 #define SWCTRL_CASCADE_SPEED_KI        0.0006f
 #define SWCTRL_CASCADE_SPEED_KD        0.0015f
-#define SWCTRL_CASCADE_TORQUE_MAX      0.50f
-#define SWCTRL_CASCADE_INTEGRAL_MAX    0.48f
-#define SWCTRL_FLEET_OFFSET_RAD        0.100f
-#define SWCTRL_FLEET_DURATION_MS       1500U
-#define SWCTRL_STATIC_HOLD_MOTOR_INDEX 2U
+#define SWCTRL_CASCADE_TORQUE_MAX      1.50f
+#define SWCTRL_CASCADE_INTEGRAL_MAX    1.45f
 #define SWCTRL_STATIC_HOLD_DURATION_MS 10000U
 #define SWCTRL_STATIC_HOLD_TORQUE_MAX  1.50f
 #define SWCTRL_STATIC_HOLD_TARGET_SPEED_MAX 0.50f
 #define SWCTRL_STATIC_HOLD_ACTUAL_SPEED_MAX 1.00f
 #define SWCTRL_STATIC_HOLD_POSITION_MAX 0.15f
 #define SWCTRL_STATIC_HOLD_VELOCITY_FILTER_HZ 20.0f
-#define SWCTRL_STATIC_HOLD_INTEGRAL_GATE_RAD 0.0010f
-#define SWCTRL_STATIC_HOLD_SIM_OFFSET_RAD 0.0100f
+#define SWCTRL_STATIC_HOLD_INTEGRAL_GATE_RAD 0.0f
+/* Two Q15 rotor-position counts.  The dry-run now exercises the same
+ * sub-milliradian region that failed to build holding torque in hardware. */
+#define SWCTRL_STATIC_HOLD_SIM_OFFSET_RAD (2.0f * 6.28318530718f / 32768.0f)
 #define SWCTRL_STATIC_HOLD_BIAS_CAL_MS 2000U
 #define SWCTRL_STATIC_HOLD_RAW_OVERSPEED_SAMPLES 5U
 
@@ -48,35 +42,12 @@ static const char *last_reject_reason = "none";
 static float cascade_position_error_previous;
 static float cascade_speed_error_previous;
 static float previous_rotor_position;
-/* The approved live static-hold action is consumable only once per MCU boot.
- * Arming and stopping do not restore it. */
-static uint8_t static_hold_active_consumed;
 
 static float clampf(float value, float limit)
 {
   if (value > limit) return limit;
   if (value < -limit) return -limit;
   return value;
-}
-
-static uint8_t matches_cascade_dry_run(uint8_t motor_index, float offset_rad,
-                                       float kp, float kd, uint32_t duration_ms)
-{
-  return motor_index < 8U &&
-         fabsf(fabsf(offset_rad) - SWCTRL_CASCADE_OFFSET_RAD) <= SWCTRL_MATCH_EPSILON &&
-         fabsf(kp - SWCTRL_CASCADE_SIGNATURE_KP) <= SWCTRL_MATCH_EPSILON &&
-         fabsf(kd - SWCTRL_CASCADE_SIGNATURE_KD) <= SWCTRL_MATCH_EPSILON &&
-         duration_ms == SWCTRL_CASCADE_DURATION_MS;
-}
-
-static uint8_t matches_fleet_dry_run(uint8_t motor_index, float offset_rad,
-                                     float kp, float kd, uint32_t duration_ms)
-{
-  return motor_index < 8U &&
-         fabsf(fabsf(offset_rad) - SWCTRL_FLEET_OFFSET_RAD) <= SWCTRL_MATCH_EPSILON &&
-         fabsf(kp - SWCTRL_CASCADE_SIGNATURE_KP) <= SWCTRL_MATCH_EPSILON &&
-         fabsf(kd - SWCTRL_CASCADE_SIGNATURE_KD) <= SWCTRL_MATCH_EPSILON &&
-         duration_ms == SWCTRL_FLEET_DURATION_MS;
 }
 
 void Motor_SoftwareControl_Init(void)
@@ -129,15 +100,14 @@ int Motor_SoftwareControl_Arm(uint8_t motor_index, float rotor_position,
   return 1;
 }
 
-int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
-                                      float kp, float kd, uint32_t duration_ms,
-                                      uint32_t now_ms)
+int Motor_SoftwareControl_StartCascadeMoveActive(uint8_t motor_index,
+                                                 float offset_rad,
+                                                 uint32_t duration_ms,
+                                                 uint32_t now_ms)
 {
   if (control.mode != Motor_SoftwareControl_Armed) last_reject_reason = "not_armed";
   else if (control.motor_index != (int8_t)motor_index) last_reject_reason = "different_armed_motor";
   else if (!isfinite(offset_rad) || offset_rad == 0.0f || fabsf(offset_rad) > SWCTRL_MAX_OFFSET_RAD) last_reject_reason = "offset_limit";
-  else if (!isfinite(kp) || kp < 0.0f || kp > SWCTRL_MAX_KP) last_reject_reason = "kp_limit";
-  else if (!isfinite(kd) || kd < 0.0f || kd > SWCTRL_MAX_KD) last_reject_reason = "kd_limit";
   else if (duration_ms == 0U || duration_ms > SWCTRL_MAX_DURATION_MS) last_reject_reason = "duration_limit";
   else last_reject_reason = "none";
 
@@ -145,34 +115,25 @@ int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
     Motor_SoftwareControl_Stop(Motor_SoftwareControl_StopInvalidCommand);
     return 0;
   }
-  uint8_t fleet_match = matches_fleet_dry_run(motor_index, offset_rad, kp, kd,
-                                               duration_ms);
-  /* Earlier one-shot live authorization has expired.  Every position-step
-   * signature is dry-run again, independently of the transport output gate. */
-  if (fleet_match || matches_cascade_dry_run(motor_index, offset_rad, kp,
-                                              kd, duration_ms))
-    control.mode = Motor_SoftwareControl_CascadeDryRun;
-  else
-    control.mode = Motor_SoftwareControl_DryRun;
-  control.dry_run = 1U;
+  /* Debug movement uses the same cascade PID as the reference project.
+   * Motor_Transport remains the final global output guard. */
+  control.mode = Motor_SoftwareControl_CascadeActiveTorque;
+  control.dry_run = 0U;
   control.test = Motor_SoftwareControl_TestPositionStep;
   control.safety_limit = Motor_SoftwareControl_LimitNone;
   control.stop_reason = Motor_SoftwareControl_StopNone;
   control.raw_target = control.arm_position + offset_rad;
   control.ramped_target = control.arm_position;
-  control.kp = kp;
+  control.kp = 0.0f;
   control.ki = 0.0f;
-  control.kd = kd;
-  if (control.mode == Motor_SoftwareControl_CascadeDryRun ||
-      control.mode == Motor_SoftwareControl_CascadeActiveTorque) {
-    control.position_loop_kp = SWCTRL_CASCADE_POSITION_KP;
-    control.position_loop_ki = SWCTRL_CASCADE_POSITION_KI;
-    control.position_loop_kd = SWCTRL_CASCADE_POSITION_KD;
-    control.speed_loop_kp = SWCTRL_CASCADE_SPEED_KP;
-    control.speed_loop_ki = SWCTRL_CASCADE_SPEED_KI;
-    control.speed_loop_kd = SWCTRL_CASCADE_SPEED_KD;
-    control.torque_limit = SWCTRL_CASCADE_TORQUE_MAX;
-  }
+  control.kd = 0.0f;
+  control.position_loop_kp = SWCTRL_CASCADE_POSITION_KP;
+  control.position_loop_ki = SWCTRL_CASCADE_POSITION_KI;
+  control.position_loop_kd = SWCTRL_CASCADE_POSITION_KD;
+  control.speed_loop_kp = SWCTRL_CASCADE_SPEED_KP;
+  control.speed_loop_ki = SWCTRL_CASCADE_SPEED_KI;
+  control.speed_loop_kd = SWCTRL_CASCADE_SPEED_KD;
+  control.torque_limit = SWCTRL_CASCADE_TORQUE_MAX;
   control.duration_ms = duration_ms;
   control.elapsed_ms = 0U;
   control.i_term = 0.0f;
@@ -247,8 +208,6 @@ int Motor_SoftwareControl_StartStaticHoldDryRun(uint8_t motor_index,
     last_reject_reason = "not_armed";
   else if (control.motor_index != (int8_t)motor_index)
     last_reject_reason = "different_armed_motor";
-  else if (motor_index != SWCTRL_STATIC_HOLD_MOTOR_INDEX)
-    last_reject_reason = "static_hold_motor_locked";
   else
     last_reject_reason = "none";
 
@@ -268,10 +227,6 @@ int Motor_SoftwareControl_StartStaticHoldActive(uint8_t motor_index,
     last_reject_reason = "not_armed";
   else if (control.motor_index != (int8_t)motor_index)
     last_reject_reason = "different_armed_motor";
-  else if (motor_index != SWCTRL_STATIC_HOLD_MOTOR_INDEX)
-    last_reject_reason = "static_hold_motor_locked";
-  else if (static_hold_active_consumed != 0U)
-    last_reject_reason = "static_hold_live_consumed";
   else
     last_reject_reason = "none";
 
@@ -280,7 +235,6 @@ int Motor_SoftwareControl_StartStaticHoldActive(uint8_t motor_index,
     return 0;
   }
 
-  static_hold_active_consumed = 1U;
   configure_static_hold(Motor_SoftwareControl_StaticHoldActiveTorque, 0U,
                         now_ms);
   return 1;
@@ -440,9 +394,6 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
     float previous_position_error = cascade_position_error_previous;
     float position_delta = control.position_error - previous_position_error;
     cascade_position_error_previous = control.position_error;
-    if (!static_hold_mode && previous_position_error != 0.0f &&
-        (control.position_error * previous_position_error) < 0.0f)
-      control.i_term = 0.0f;
     float speed_target_limit =
         (control.mode == Motor_SoftwareControl_StaticHoldDryRun ||
          control.mode == Motor_SoftwareControl_StaticHoldActiveTorque)
@@ -477,14 +428,13 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
                              ? control.speed_error : control.position_error;
   float integral_gain = cascade_mode
                             ? control.speed_loop_ki : control.ki;
-  if (cascade_mode && !static_hold_mode &&
-      (control.i_term * integral_error) < 0.0f)
-    control.i_term = 0.0f;
   float integral_step = integral_gain * integral_error;
   control.integral_enabled = 1U;
-  if (static_hold_mode &&
-      (control.velocity_bias_valid == 0U ||
-       fabsf(control.position_error) < control.integral_position_gate)) {
+  /* Match the reference cascade PID semantics after bias calibration: the
+   * discrete speed integrator runs every control cycle, including close to
+   * the position target.  The previous 1 mrad gate prevented any static load
+   * torque from being established. */
+  if (static_hold_mode && control.velocity_bias_valid == 0U) {
     integral_step = 0.0f;
     control.integral_enabled = 0U;
   }
@@ -517,8 +467,8 @@ int Motor_SoftwareControl_GetAuthorizedTorque(uint8_t motor_index, float *torque
 {
   if (torque == NULL) return 0;
   *torque = 0.0f;
-  if (control.mode != Motor_SoftwareControl_StaticHoldActiveTorque ||
-      motor_index != SWCTRL_STATIC_HOLD_MOTOR_INDEX ||
+  if ((control.mode != Motor_SoftwareControl_CascadeActiveTorque &&
+       control.mode != Motor_SoftwareControl_StaticHoldActiveTorque) ||
       control.motor_index != (int8_t)motor_index || control.dry_run != 0U)
     return 0;
   if (!isfinite(control.limited_torque) ||

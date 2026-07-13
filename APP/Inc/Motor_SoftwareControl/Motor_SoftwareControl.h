@@ -104,9 +104,10 @@ typedef struct
 void Motor_SoftwareControl_Init(void);
 int Motor_SoftwareControl_Arm(uint8_t motor_index, float rotor_position,
                               uint32_t feedback_timestamp);
-int Motor_SoftwareControl_StartDryRun(uint8_t motor_index, float offset_rad,
-                                      float kp, float kd, uint32_t duration_ms,
-                                      uint32_t now_ms);
+int Motor_SoftwareControl_StartCascadeMoveActive(uint8_t motor_index,
+                                                 float offset_rad,
+                                                 uint32_t duration_ms,
+                                                 uint32_t now_ms);
 int Motor_SoftwareControl_StartStaticHoldDryRun(uint8_t motor_index,
                                                 uint32_t now_ms);
 int Motor_SoftwareControl_StartStaticHoldActive(uint8_t motor_index,
