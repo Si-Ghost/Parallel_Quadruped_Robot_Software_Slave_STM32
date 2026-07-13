@@ -23,6 +23,8 @@
 #define GROUP_SPEED_KI                    0.0006f
 #define GROUP_SPEED_KD                    0.0015f
 #define GROUP_SPEED_INTEGRAL_MAX          0.20f
+#define GROUP_HOLD_POSITION_KP_NM_RAD     1.00f
+#define GROUP_HOLD_ENTRY_ERROR_RAD        0.0001f
 #define GROUP_TORQUE_MAX_NM               1.50f
 
 typedef struct
@@ -248,9 +250,20 @@ void Motor_GroupControl_Update(uint8_t motor_index,
   channel->integral = clamp_symmetric(
       channel->integral + GROUP_SPEED_KI * speed_error,
       GROUP_SPEED_INTEGRAL_MAX);
+  float hold_torque = 0.0f;
+  if (fabsf(channel->target_position - channel->ramped_target) <=
+      GROUP_HOLD_ENTRY_ERROR_RAD) {
+    /* The reference cascade has only 0.359 N.m/rad of immediate static
+     * stiffness (35.9 * 0.01); its integrator supplies load torque later.
+     * Add bounded direct stiffness only after the motion ramp has completed
+     * so an external displacement receives an immediate restoring response
+     * while the existing cascade continues to provide damping/integration. */
+    hold_torque = GROUP_HOLD_POSITION_KP_NM_RAD *
+                  (channel->target_position - rotor_position);
+  }
   channel->torque = clamp_symmetric(
       GROUP_SPEED_KP * speed_error + channel->integral +
-          GROUP_SPEED_KD * speed_delta,
+          GROUP_SPEED_KD * speed_delta + hold_torque,
       GROUP_TORQUE_MAX_NM);
   if (fabsf(channel->torque) > channel->diagnostic_max_abs_torque)
     channel->diagnostic_max_abs_torque = fabsf(channel->torque);
