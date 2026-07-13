@@ -1172,6 +1172,10 @@ void Leg_Control_Service(uint32_t now_ms)
   static uint32_t last_group_stop_log_sequence = 0U;
   static uint32_t pending_group_stop_log_sequence = 0U;
   static char pending_group_stop_log[256];
+  static uint8_t group_link_loss_active = 0U;
+  static uint32_t group_link_loss_start_ms = 0U;
+  static uint8_t pending_group_link_log = 0U;
+  static char pending_group_link_log_text[128];
   for (uint8_t leg = 0U; leg < 4U; ++leg) {
     uint32_t sequence = transport_uart_error_sequence[leg];
     if (sequence == transport_uart_error_reported[leg]) continue;
@@ -1208,14 +1212,42 @@ void Leg_Control_Service(uint32_t now_ms)
     Leg_Control_Handshake();
   }
 
-  if (Motor_GroupControl_IsArmed() || Motor_GroupControl_IsActive()) {
+  uint8_t group_is_armed = Motor_GroupControl_IsArmed();
+  uint8_t group_is_active = Motor_GroupControl_IsActive();
+  uint8_t command_link_alive = Communication_IsLinkAlive() ? 1U : 0U;
+
+  if (group_link_loss_active != 0U && command_link_alive != 0U) {
+    uint32_t outage_ms = now_ms - group_link_loss_start_ms;
+    int len = snprintf(
+        pending_group_link_log_text, sizeof(pending_group_link_log_text),
+        "[GROUP_LINK] recovered outage_ms=%lu action=continued_hold\r\n",
+        (unsigned long)outage_ms);
+    if (len > 0 && len < (int)sizeof(pending_group_link_log_text))
+      pending_group_link_log = 1U;
+    group_link_loss_active = 0U;
+  }
+
+  if (group_is_armed || group_is_active) {
     Motor_GroupStopReason group_stop = Motor_Group_StopNone;
     int8_t group_stop_motor = -1;
     float group_stop_detail = 0.0f;
-    if (!Communication_IsLinkAlive()) {
+    if (command_link_alive == 0U && group_is_armed != 0U) {
+      /* No torque is active yet, so an armed plan still fails closed if its
+       * command source disappears before START. */
       group_stop = Motor_Group_StopCommandLink;
       group_stop_detail = (float)Communication_GetLinkAgeMs();
     } else {
+      if (command_link_alive == 0U && group_is_active != 0U &&
+          group_link_loss_active == 0U) {
+        uint32_t link_age_ms = Communication_GetLinkAgeMs();
+        group_link_loss_start_ms = now_ms - link_age_ms;
+        group_link_loss_active = 1U;
+      }
+
+      /* Once the guarded static group is ACTIVE, STM32 owns its infinite
+       * hold.  Losing the ESP32/web command source must not collapse a
+       * load-bearing robot.  Motor feedback, temperature, motor-fault and
+       * controller guards remain fully active during the outage. */
       for (uint8_t idx = 0U; idx < 8U; ++idx) {
         Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(idx);
         if (state == NULL || state->online != Motor_Online ||
@@ -1314,9 +1346,14 @@ void Leg_Control_Service(uint32_t now_ms)
     }
   }
   if (pending_group_stop_log_sequence != 0U &&
+      command_link_alive != 0U &&
       Communication_TrySendString(pending_group_stop_log)) {
     last_group_stop_log_sequence = pending_group_stop_log_sequence;
     pending_group_stop_log_sequence = 0U;
+  }
+  if (pending_group_link_log != 0U && command_link_alive != 0U &&
+      Communication_TrySendString(pending_group_link_log_text)) {
+    pending_group_link_log = 0U;
   }
 
   if (single_motor_control.mode == Motor_Control_SingleMotorPosition ||
