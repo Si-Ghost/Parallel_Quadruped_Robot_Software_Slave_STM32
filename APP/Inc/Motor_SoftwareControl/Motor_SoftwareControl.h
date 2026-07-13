@@ -63,6 +63,8 @@ typedef struct
   float feedback_torque;
   float velocity_filter_hz;
   float integral_position_gate;
+  float static_position_integral_ki;
+  float simulated_position_offset;
   float kp;
   float ki;
   float kd;
@@ -90,6 +92,7 @@ typedef struct
   uint8_t torque_limited;
   uint8_t dry_run;
   uint8_t integral_enabled;
+  uint8_t simulation_phase;
 } Motor_SoftwareControlSnapshot;
 
 void Motor_SoftwareControl_Init(void);

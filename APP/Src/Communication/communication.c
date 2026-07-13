@@ -1216,8 +1216,8 @@ static void send_static_hold_plan(void)
         "\"pkp\":%ld,\"pki\":%ld,\"pkd\":%ld,"
         "\"skp\":%ld,\"ski\":%ld,\"skd\":%ld,"
         "\"tmax\":%ld,\"vtmax\":%ld,\"vmax\":%ld,"
-        "\"dropmax\":%ld,\"dur\":%lu,\"drvkp\":0,\"drvkw\":0,"
-        "\"vfhz\":%ld,\"igpos\":%ld,\"guard\":%u}\n",
+        "\"xmax\":%ld,\"dur\":%lu,\"dkp\":0,\"dkw\":0,"
+        "\"vf\":%ld,\"ig\":%ld,\"piki\":%ld,\"sa\":10000,\"guard\":%u}\n",
         (unsigned int)s.dry_run, (int)s.motor_index,
         (long)(s.position_loop_kp * 1000000.0f),
         (long)(s.position_loop_ki * 1000000.0f),
@@ -1232,6 +1232,7 @@ static void send_static_hold_plan(void)
         (unsigned long)s.duration_ms,
         (long)(s.velocity_filter_hz * 1000000.0f),
         (long)(s.integral_position_gate * 1000000.0f),
+        (long)(s.static_position_integral_ki * 1000000.0f),
         (unsigned int)Motor_Transport_IsZeroOutputOnly());
     if (len > 0 && len < (int)sizeof(buf))
         Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
@@ -1379,13 +1380,16 @@ void Communication_SendSoftwarePidTelemetry(void)
         float excursion = deviation >= 0.0f ? deviation : -deviation;
         len = snprintf(buf, sizeof(buf),
             "SW_HOLD_STATE {\"m\":%u,\"i\":%d,\"a\":%ld,\"p\":%ld,"
-            "\"dev\":%ld,\"x\":%ld,\"e\":%ld,\"v\":%ld,\"fv\":%ld,\"ft\":%ld,"
-            "\"dt\":%lu,\"el\":%lu,\"stop\":%u,\"sl\":%u}\n",
+            "\"dev\":%ld,\"x\":%ld,\"sim\":%ld,\"ph\":%u,\"e\":%ld,"
+            "\"v\":%ld,\"fv\":%ld,\"ft\":%ld,\"dt\":%lu,"
+            "\"el\":%lu,\"stop\":%u,\"sl\":%u}\n",
             (unsigned int)s.mode, (int)s.motor_index,
             (long)(s.arm_position * 1000000.0f),
             (long)(s.actual_position * 1000000.0f),
             (long)(deviation * 1000000.0f),
             (long)(excursion * 1000000.0f),
+            (long)(s.simulated_position_offset * 1000000.0f),
+            (unsigned int)s.simulation_phase,
             (long)(s.position_error * 1000000.0f),
             (long)(s.raw_velocity * 1000000.0f),
             (long)(s.filtered_velocity * 1000000.0f),

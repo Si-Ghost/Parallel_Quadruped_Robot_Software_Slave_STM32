@@ -37,6 +37,8 @@
 #define SWCTRL_STATIC_HOLD_POSITION_MAX 0.15f
 #define SWCTRL_STATIC_HOLD_VELOCITY_FILTER_HZ 20.0f
 #define SWCTRL_STATIC_HOLD_INTEGRAL_GATE_RAD 0.0010f
+#define SWCTRL_STATIC_HOLD_POSITION_INTEGRAL_KI 0.0050f
+#define SWCTRL_STATIC_HOLD_SIM_OFFSET_RAD 0.0100f
 
 static Motor_SoftwareControlSnapshot control;
 static uint32_t plan_start_ms;
@@ -207,6 +209,8 @@ static void configure_static_hold(Motor_SoftwareControlMode mode,
   control.position_excursion_limit = SWCTRL_STATIC_HOLD_POSITION_MAX;
   control.velocity_filter_hz = SWCTRL_STATIC_HOLD_VELOCITY_FILTER_HZ;
   control.integral_position_gate = SWCTRL_STATIC_HOLD_INTEGRAL_GATE_RAD;
+  control.static_position_integral_ki =
+      SWCTRL_STATIC_HOLD_POSITION_INTEGRAL_KI;
   control.duration_ms = SWCTRL_STATIC_HOLD_DURATION_MS;
   control.elapsed_ms = 0U;
   control.position_error = 0.0f;
@@ -220,6 +224,8 @@ static void configure_static_hold(Motor_SoftwareControlMode mode,
   control.limited_torque = 0.0f;
   control.torque_limited = 0U;
   control.integral_enabled = 0U;
+  control.simulated_position_offset = 0.0f;
+  control.simulation_phase = 0U;
   plan_start_ms = now_ms;
   previous_feedback_timestamp = 0U;
   cascade_position_error_previous = 0.0f;
@@ -289,6 +295,25 @@ static uint8_t static_hold_safety_exceeded(float rotor_position,
   return 0U;
 }
 
+static void update_static_hold_dry_run_simulation(void)
+{
+  control.simulated_position_offset = 0.0f;
+  control.simulation_phase = 0U;
+  if (control.mode != Motor_SoftwareControl_StaticHoldDryRun) return;
+
+  if (control.elapsed_ms >= 2000U && control.elapsed_ms < 4000U) {
+    control.simulated_position_offset = -SWCTRL_STATIC_HOLD_SIM_OFFSET_RAD;
+    control.simulation_phase = 1U;
+  } else if (control.elapsed_ms >= 4000U && control.elapsed_ms < 6000U) {
+    control.simulation_phase = 2U;
+  } else if (control.elapsed_ms >= 6000U && control.elapsed_ms < 8000U) {
+    control.simulated_position_offset = SWCTRL_STATIC_HOLD_SIM_OFFSET_RAD;
+    control.simulation_phase = 3U;
+  } else if (control.elapsed_ms >= 8000U) {
+    control.simulation_phase = 4U;
+  }
+}
+
 void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
                                   float feedback_torque,
                                   uint32_t feedback_timestamp, uint32_t now_ms)
@@ -313,6 +338,9 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
     control.position_error = control.raw_target - rotor_position;
     control.feedback_timestamp = feedback_timestamp;
     control.elapsed_ms = now_ms - plan_start_ms;
+    update_static_hold_dry_run_simulation();
+    control.position_error = control.raw_target -
+                             (rotor_position + control.simulated_position_offset);
     if (static_hold_safety_exceeded(rotor_position, rotor_velocity))
       Motor_SoftwareControl_Stop(Motor_SoftwareControl_StopSafetyLimit);
     return;
@@ -337,6 +365,7 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
   control.dt_s = dt;
   control.feedback_timestamp = feedback_timestamp;
   control.elapsed_ms = now_ms - plan_start_ms;
+  update_static_hold_dry_run_simulation();
 
   if (static_hold_safety_exceeded(rotor_position, rotor_velocity)) {
     control.position_error = control.raw_target - rotor_position;
@@ -348,7 +377,8 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
   float alpha = (two_pi * control.velocity_filter_hz * dt) /
                 (1.0f + two_pi * control.velocity_filter_hz * dt);
   control.filtered_velocity += alpha * (rotor_velocity - control.filtered_velocity);
-  control.position_error = control.ramped_target - rotor_position;
+  control.position_error = control.ramped_target -
+                           (rotor_position + control.simulated_position_offset);
   uint8_t static_hold_mode =
       (control.mode == Motor_SoftwareControl_StaticHoldDryRun ||
        control.mode == Motor_SoftwareControl_StaticHoldActiveTorque) ? 1U : 0U;
@@ -385,10 +415,14 @@ void Motor_SoftwareControl_Update(float rotor_position, float rotor_velocity,
                           control.mode == Motor_SoftwareControl_CascadeActiveTorque ||
                           control.mode == Motor_SoftwareControl_StaticHoldDryRun ||
                           control.mode == Motor_SoftwareControl_StaticHoldActiveTorque);
-  float integral_error = cascade_mode
-                             ? control.speed_error : control.position_error;
-  float integral_gain = cascade_mode
-                            ? control.speed_loop_ki : control.ki;
+  float integral_error = static_hold_mode
+                             ? control.position_error
+                             : (cascade_mode ? control.speed_error
+                                             : control.position_error);
+  float integral_gain = static_hold_mode
+                            ? control.static_position_integral_ki
+                            : (cascade_mode ? control.speed_loop_ki
+                                            : control.ki);
   if (cascade_mode && !static_hold_mode &&
       (control.i_term * integral_error) < 0.0f)
     control.i_term = 0.0f;
