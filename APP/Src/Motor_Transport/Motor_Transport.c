@@ -11,9 +11,9 @@
 #define MOTOR_TRANSPORT_OFFLINE_TIMEOUT_MS 100U
 #define MOTOR_TRANSPORT_QUIESCE_TIMEOUT_MS 5U
 
-/* Re-lock after the approved RF ID0 run received PID_HOLD_DRYRUN instead of
- * PID_HOLD_ACTIVE.  Dry-run correctly sent zero torque to the motor. */
-#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 1U
+/* One-shot authorization: RF ID0 pure cascade PID static-load ACTIVE test,
+ * 400 g supported load, 1.5 Nm limit, 10 s maximum. */
+#define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 0U
 #define MOTOR_TRANSPORT_LIVE_LEG         1U
 #define MOTOR_TRANSPORT_LIVE_MOTOR       0U
 
