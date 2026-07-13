@@ -15,6 +15,12 @@ typedef enum
 
 typedef enum
 {
+  Motor_Group_ProfileUniformOffset = 0,
+  Motor_Group_ProfileStandPose = 1
+} Motor_GroupProfile;
+
+typedef enum
+{
   Motor_Group_StopNone = 0,
   Motor_Group_StopOperator = 1,
   Motor_Group_StopInvalidState = 2,
@@ -32,6 +38,7 @@ typedef enum
 typedef struct
 {
   Motor_GroupMode mode;
+  Motor_GroupProfile profile;
   Motor_GroupStopReason reason;
   uint8_t ready;
   uint8_t all_at_zero;
@@ -54,6 +61,10 @@ int Motor_GroupControl_ArmZero(const Motor_StateSnapshotTypeDef states[8],
                                uint32_t now_ms);
 int Motor_GroupControl_ArmTarget(const Motor_StateSnapshotTypeDef states[8],
                                  float target_offset, uint32_t now_ms);
+int Motor_GroupControl_ArmOffsets(const Motor_StateSnapshotTypeDef states[8],
+                                  const float target_offsets[8],
+                                  Motor_GroupProfile profile,
+                                  uint32_t now_ms);
 int Motor_GroupControl_Start(uint32_t now_ms);
 void Motor_GroupControl_Update(uint8_t motor_index,
                                float rotor_position,

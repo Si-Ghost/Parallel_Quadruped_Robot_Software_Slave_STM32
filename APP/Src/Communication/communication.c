@@ -66,6 +66,7 @@ static const char motor_zero_all_arm_cmd[] = "MOTOR_ZERO_ALL_ARM";
 static const char motor_zero_all_run_cmd[] = "MOTOR_ZERO_ALL_RUN";
 static const char motor_group_arm_cmd[] = "MOTOR_GROUP_ARM";
 static const char motor_group_run_cmd[] = "MOTOR_GROUP_RUN";
+static const char motor_stand_arm_cmd[] = "MOTOR_STAND_ARM";
 static const char pid_arm_cmd[] = "PID_ARM";
 static const char pid_plan_cmd[] = "PID_PLAN";
 static const char pid_hold_dryrun_cmd[] = "PID_HOLD_DRYRUN";
@@ -520,6 +521,7 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         len < sizeof(motor_zero_all_run_cmd) - 1 &&
         len < sizeof(motor_group_arm_cmd) - 1 &&
         len < sizeof(motor_group_run_cmd) - 1 &&
+        len < sizeof(motor_stand_arm_cmd) - 1 &&
         len < sizeof(pid_arm_cmd) - 1 &&
         len < sizeof(pid_plan_cmd) - 1 &&
         len < sizeof(pid_hold_dryrun_cmd) - 1 &&
@@ -535,6 +537,17 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         len < sizeof(leg_touch_step_cmd) - 1 &&
         len < sizeof(leg_loaded_step_cmd) - 1)
         return;
+
+    for (uint16_t i = 0; i + sizeof(motor_stand_arm_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], motor_stand_arm_cmd,
+                   sizeof(motor_stand_arm_cmd) - 1) == 0) {
+            if (Leg_Control_ArmStandPose())
+                Communication_SendString("MOTOR_STAND_ARM ok\r\n");
+            else
+                Communication_SendString("MOTOR_STAND_ARM rejected\r\n");
+            return;
+        }
+    }
 
     for (uint16_t i = 0; i + sizeof(motor_group_arm_cmd) - 1 <= len; i++) {
         if (memcmp(&data[i], motor_group_arm_cmd,
@@ -1288,10 +1301,16 @@ static int append_motor_group(char *buf, size_t size, int len)
         len = append_fixed4(buf, size, len, group.position_error[i]);
         if (len > 0) {
             written = snprintf(&buf[len], size - (size_t)len,
-                               "%c", i == 7U ? '\n' : ',');
+                               "%c", i == 7U ? ' ' : ',');
             if (written < 0 || written >= (int)(size - (size_t)len)) return -1;
             len += written;
         }
+    }
+    if (len > 0) {
+        written = snprintf(&buf[len], size - (size_t)len, "profile=%u\n",
+                           (unsigned int)group.profile);
+        if (written < 0 || written >= (int)(size - (size_t)len)) return -1;
+        len += written;
     }
     return len;
 }

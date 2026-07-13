@@ -50,6 +50,8 @@ extern UART_HandleTypeDef huart8;
   (HAL_UART_ERROR_DMA | HAL_UART_ERROR_RTO)
 #define LEG_MOTOR_THETA1            0U /* ID0 drives AB after front/rear mounting swap. */
 #define LEG_MOTOR_THETA2            1U /* ID1 drives AD after front/rear mounting swap. */
+#define LEG_STAND_FOOT_X_MM          0.0f
+#define LEG_STAND_FOOT_Y_MM          205.0f
 
 static uint32_t last_service_tick = 0;
 static volatile uint8_t handshake_requested = 0;
@@ -1319,6 +1321,49 @@ int Leg_Control_ArmAllOffset(float rotor_offset)
       return 0;
   }
   return Motor_GroupControl_ArmTarget(states, rotor_offset, HAL_GetTick());
+}
+
+int Leg_Control_ArmStandPose(void)
+{
+  Motor_StateSnapshotTypeDef states[8];
+  float rotor_offsets[8];
+  const Leg_PointTypeDef stand_foot = {
+    .x = LEG_STAND_FOOT_X_MM,
+    .y = LEG_STAND_FOOT_Y_MM,
+  };
+  Leg_JointAnglesTypeDef stand_angles;
+
+  Leg_Control_ForceZeroOutput(Motor_Control_Reason_None);
+  if (!Leg_Kinematics_Inverse(&stand_foot, &stand_angles)) return 0;
+
+  for (uint8_t idx = 0U; idx < 8U; ++idx) {
+    if (!Leg_Control_GetMotorStateSnapshot(idx, &states[idx])) return 0;
+    float joint_target = (idx % 2U) == LEG_MOTOR_THETA1
+                             ? stand_angles.theta1
+                             : stand_angles.theta2;
+    rotor_offsets[idx] = Leg_Control_NormalizedMotorDir(states[idx].direction) *
+                         joint_target * LEG_REDUCTION_RATIO;
+  }
+
+  if (!Motor_GroupControl_ArmOffsets(states, rotor_offsets,
+                                     Motor_Group_ProfileStandPose,
+                                     HAL_GetTick())) return 0;
+
+  char buf[176];
+  int len = snprintf(buf, sizeof(buf), "MOTOR_STAND_PLAN foot=");
+  len = Leg_Control_AppendFixed4(buf, sizeof(buf), len, stand_foot.x);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, ",");
+  len = Leg_Control_AppendFixed4(buf, sizeof(buf), len, stand_foot.y);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, " joint=");
+  len = Leg_Control_AppendFixed4(buf, sizeof(buf), len, stand_angles.theta1);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, ",");
+  len = Leg_Control_AppendFixed4(buf, sizeof(buf), len, stand_angles.theta2);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len,
+                               " rotor_offset=");
+  len = Leg_Control_AppendFixed4(buf, sizeof(buf), len, rotor_offsets[0]);
+  if (len > 0) len += snprintf(&buf[len], sizeof(buf) - (size_t)len, "\r\n");
+  if (len > 0 && len < (int)sizeof(buf)) Communication_SendString(buf);
+  return 1;
 }
 
 int Leg_Control_StartAllZero(void)

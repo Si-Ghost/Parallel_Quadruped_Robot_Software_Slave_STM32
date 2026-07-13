@@ -10,9 +10,11 @@
 #define GROUP_OFFSET_START_ZERO_RAD       0.10f
 #define GROUP_MAX_ARM_EXCURSION_RAD       2.25f
 #define GROUP_TARGET_SPEED_RAD_S          0.25f
+#define GROUP_STAND_TARGET_SPEED_RAD_S    0.125f
 #define GROUP_TARGET_ERROR_RAD            0.08f
-#define GROUP_MIN_DT_S                    0.0002f
-#define GROUP_MAX_DT_S                    0.0100f
+#define GROUP_CONTROL_PERIOD_MS           10U
+#define GROUP_MIN_DT_S                    0.0090f
+#define GROUP_MAX_DT_S                    0.0250f
 #define GROUP_POSITION_KP                 35.9f
 #define GROUP_POSITION_KD                 1.0f
 /* Keep the cautious group target ramp above, but use the already validated
@@ -23,6 +25,7 @@
 #define GROUP_SPEED_KD                    0.0015f
 #define GROUP_SPEED_INTEGRAL_MAX          0.20f
 #define GROUP_TORQUE_MAX_NM               1.50f
+#define GROUP_FEEDBACK_SPEED_BIAS_RAD_S   0.14137188f
 
 typedef struct
 {
@@ -44,6 +47,7 @@ typedef struct
 
 static Motor_GroupChannel channels[GROUP_MOTOR_COUNT];
 static Motor_GroupMode group_mode;
+static Motor_GroupProfile group_profile;
 static Motor_GroupStopReason stop_reason;
 static uint8_t group_ready;
 static float group_target_offset;
@@ -65,6 +69,7 @@ void Motor_GroupControl_Init(void)
 {
   memset(channels, 0, sizeof(channels));
   group_mode = Motor_Group_Disabled;
+  group_profile = Motor_Group_ProfileUniformOffset;
   stop_reason = Motor_Group_StopNone;
   group_ready = 0U;
   group_target_offset = 0.0f;
@@ -91,12 +96,34 @@ int Motor_GroupControl_ArmZero(const Motor_StateSnapshotTypeDef states[8],
 int Motor_GroupControl_ArmTarget(const Motor_StateSnapshotTypeDef states[8],
                                  float target_offset, uint32_t now_ms)
 {
-  if (states == NULL || !isfinite(target_offset) ||
-      fabsf(target_offset) > GROUP_MAX_TARGET_OFFSET_RAD) return 0;
+  if (!isfinite(target_offset)) return 0;
+  float target_offsets[GROUP_MOTOR_COUNT];
+  for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i)
+    target_offsets[i] = target_offset;
+  return Motor_GroupControl_ArmOffsets(states, target_offsets,
+                                       Motor_Group_ProfileUniformOffset,
+                                       now_ms);
+}
+
+int Motor_GroupControl_ArmOffsets(const Motor_StateSnapshotTypeDef states[8],
+                                  const float target_offsets[8],
+                                  Motor_GroupProfile profile,
+                                  uint32_t now_ms)
+{
+  if (states == NULL || target_offsets == NULL ||
+      (profile != Motor_Group_ProfileUniformOffset &&
+       profile != Motor_Group_ProfileStandPose)) return 0;
 
   Motor_GroupControl_Init();
-  group_target_offset = target_offset;
+  group_profile = profile;
+  group_target_offset = target_offsets[0];
   for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i) {
+    float target_offset = target_offsets[i];
+    if (!isfinite(target_offset) ||
+        fabsf(target_offset) > GROUP_MAX_TARGET_OFFSET_RAD) {
+      Motor_GroupControl_Stop(Motor_Group_StopPositionLimit);
+      return 0;
+    }
     const Motor_StateSnapshotTypeDef *state = &states[i];
     if (!state->online || !state->angle_valid || state->timestamp == 0U ||
         (now_ms - state->timestamp) > 10U || !isfinite(state->rotor_position) ||
@@ -192,9 +219,11 @@ void Motor_GroupControl_Update(uint8_t motor_index,
     channel->previous_feedback_timestamp = feedback_timestamp;
     return;
   }
-  if (feedback_timestamp == channel->previous_feedback_timestamp) return;
+  uint32_t elapsed_ms = feedback_timestamp -
+                        channel->previous_feedback_timestamp;
+  if (elapsed_ms < GROUP_CONTROL_PERIOD_MS) return;
 
-  float dt = (float)(feedback_timestamp - channel->previous_feedback_timestamp) * 0.001f;
+  float dt = (float)elapsed_ms * 0.001f;
   channel->previous_feedback_timestamp = feedback_timestamp;
   if (!isfinite(dt) || dt < GROUP_MIN_DT_S || dt > GROUP_MAX_DT_S) {
     Motor_GroupControl_Stop(Motor_Group_StopController);
@@ -202,18 +231,24 @@ void Motor_GroupControl_Update(uint8_t motor_index,
   }
 
   float remaining = channel->target_position - channel->ramped_target;
-  float target_step = clamp_symmetric(remaining, GROUP_TARGET_SPEED_RAD_S * dt);
+  float target_speed = group_profile == Motor_Group_ProfileStandPose
+                           ? GROUP_STAND_TARGET_SPEED_RAD_S
+                           : GROUP_TARGET_SPEED_RAD_S;
+  float target_step = clamp_symmetric(remaining, target_speed * dt);
   channel->ramped_target += target_step;
-  float ramp_velocity = target_step / dt;
 
   float previous_position_error = channel->previous_position_error;
   channel->position_error = channel->ramped_target - rotor_position;
   channel->previous_position_error = channel->position_error;
   float speed_target = clamp_symmetric(
-      ramp_velocity + GROUP_POSITION_KP * channel->position_error +
+      GROUP_POSITION_KP * channel->position_error +
           GROUP_POSITION_KD * (channel->position_error - previous_position_error),
       GROUP_SPEED_TARGET_MAX_RAD_S);
-  float speed_error = speed_target - rotor_velocity;
+  /* Software_Ref applies this empirical offset before the speed PID.  Keep
+   * raw feedback/diagnostics untouched and align only the controller input. */
+  float corrected_velocity = rotor_velocity -
+                             GROUP_FEEDBACK_SPEED_BIAS_RAD_S;
+  float speed_error = speed_target - corrected_velocity;
   float speed_delta = speed_error - channel->previous_speed_error;
   channel->previous_speed_error = speed_error;
   channel->integral = clamp_symmetric(
@@ -262,6 +297,7 @@ void Motor_GroupControl_GetSnapshot(Motor_GroupSnapshot *snapshot)
   if (snapshot == NULL) return;
   memset(snapshot, 0, sizeof(*snapshot));
   snapshot->mode = group_mode;
+  snapshot->profile = group_profile;
   snapshot->reason = stop_reason;
   snapshot->ready = group_ready;
   snapshot->all_at_zero = group_mode == Motor_Group_Active ? 1U : 0U;
