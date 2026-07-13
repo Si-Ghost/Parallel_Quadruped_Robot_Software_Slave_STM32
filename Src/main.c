@@ -271,15 +271,22 @@ int main(void)
       Communication_Task();
       Leg_Control_Service(HAL_GetTick());
 #if !MOTOR_TRANSPORT_DIAG_ONLY
-      if (HAL_GetTick() - last_motor_angle_report_tick >= 100)
+      uint32_t telemetry_tick = HAL_GetTick();
+      if (telemetry_tick - last_motor_status_report_tick >= 1000)
       {
-        last_motor_angle_report_tick = HAL_GetTick();
-        Communication_SendMotorAngles();
-      }
-      if (HAL_GetTick() - last_motor_status_report_tick >= 1000)
-      {
-        last_motor_status_report_tick = HAL_GetTick();
+        /* USART6 has one non-blocking TX buffer.  The 100 ms angle report and
+           1 s status report otherwise become due in the same loop, causing
+           the later status report to be dropped while TX is busy.  Give the
+           safety/status frame priority and deliberately skip that one angle
+           sample. */
+        last_motor_status_report_tick = telemetry_tick;
+        last_motor_angle_report_tick = telemetry_tick;
         Communication_SendMotorStatus();
+      }
+      else if (telemetry_tick - last_motor_angle_report_tick >= 100)
+      {
+        last_motor_angle_report_tick = telemetry_tick;
+        Communication_SendMotorAngles();
       }
 #if MOTOR_TRANSPORT_RUNTIME_LOG_ENABLED
       /* USART6 has one non-blocking TX buffer.  Leave the angle/status frame
