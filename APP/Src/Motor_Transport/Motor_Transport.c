@@ -11,7 +11,7 @@
 #define MOTOR_TRANSPORT_OFFLINE_TIMEOUT_MS 100U
 #define MOTOR_TRANSPORT_QUIESCE_TIMEOUT_MS 5U
 
-/* Approved ACTIVE test: LF ID1 reference-style hold without motion hard stops. */
+/* Approved sequential ACTIVE tests: RF ID1, LB ID0 and RB ID0 only. */
 #define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 0U
 
 _Static_assert((MOTOR_TRANSPORT_RING_SIZE & (MOTOR_TRANSPORT_RING_SIZE - 1U)) == 0U,
@@ -123,7 +123,7 @@ static void prepare_tx_frame(Motor_TransportChannel *channel, uint8_t motor)
   command.K_P = 0.0f;
   command.K_W = 0.0f;
   uint8_t motor_index = (uint8_t)(channel->leg_index * 2U + motor);
-  if (motor_index != 1U)
+  if (motor_index != 3U && motor_index != 4U && motor_index != 6U)
     command.T = 0.0f;
 
 #if MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY
