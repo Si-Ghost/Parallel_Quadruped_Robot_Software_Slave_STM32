@@ -10,20 +10,23 @@
 #define GROUP_OFFSET_START_ZERO_RAD       0.50f
 #define GROUP_MAX_ZERO_EXCURSION_RAD      2.25f
 #define GROUP_ZERO_RETURN_EXCURSION_RAD   3.50f
-#define GROUP_GAIT_MAX_ZERO_EXCURSION_RAD 4.00f
+#define GROUP_GAIT_DEFAULT_MAX_ZERO_EXCURSION_RAD 4.00f
 #define GROUP_TARGET_SPEED_RAD_S          0.25f
 #define GROUP_STAND_TARGET_SPEED_RAD_S    0.125f
 /* The doc-sized reference slow profile (150 mm step, 50 mm lift, 300 ms
  * half-cycle) reaches about 62.5 rotor rad/s. */
-#define GROUP_GAIT_TARGET_SPEED_RAD_S     70.0f
+#define GROUP_GAIT_DEFAULT_TARGET_SPEED_RAD_S 70.0f
 #define GROUP_GAIT_RETURN_SPEED_RAD_S     40.0f
 #define GROUP_TARGET_ERROR_RAD            0.08f
 #define GROUP_GAIT_SOFT_ERROR_RAD          0.60f
 #define GROUP_GAIT_HARD_ERROR_RAD          1.00f
 #define GROUP_GAIT_SOFT_ERROR_SAMPLES       20U
 #define GROUP_GAIT_HARD_ERROR_SAMPLES        3U
-#define GROUP_GAIT_SOFT_SPEED_RAD_S       100.0f
-#define GROUP_GAIT_HARD_SPEED_RAD_S       120.0f
+#define GROUP_GAIT_DEFAULT_SOFT_SPEED_RAD_S 100.0f
+#define GROUP_GAIT_DEFAULT_HARD_SPEED_RAD_S 120.0f
+#define GROUP_GAIT_CONFIG_MAX_SPEED_RAD_S  200.0f
+#define GROUP_GAIT_CONFIG_MIN_EXCURSION_RAD 3.50f
+#define GROUP_GAIT_CONFIG_MAX_EXCURSION_RAD 4.50f
 #define GROUP_GAIT_SOFT_SPEED_SAMPLES      20U
 #define GROUP_GAIT_HARD_SPEED_SAMPLES       3U
 #define GROUP_GAIT_HOLD_SPEED_RAD_S          1.0f
@@ -87,6 +90,7 @@ static uint8_t gait_returning;
 static Motor_GaitReturnReason gait_return_reason;
 static int8_t gait_return_motor_index;
 static float gait_return_detail;
+static Motor_GroupGaitLimits gait_limits;
 
 static float clamp_symmetric(float value, float limit)
 {
@@ -118,6 +122,11 @@ void Motor_GroupControl_Init(void)
   gait_return_reason = Motor_GaitReturnNone;
   gait_return_motor_index = -1;
   gait_return_detail = 0.0f;
+  gait_limits.target_speed_rad_s = GROUP_GAIT_DEFAULT_TARGET_SPEED_RAD_S;
+  gait_limits.soft_speed_rad_s = GROUP_GAIT_DEFAULT_SOFT_SPEED_RAD_S;
+  gait_limits.hard_speed_rad_s = GROUP_GAIT_DEFAULT_HARD_SPEED_RAD_S;
+  gait_limits.max_zero_excursion_rad =
+      GROUP_GAIT_DEFAULT_MAX_ZERO_EXCURSION_RAD;
 }
 
 void Motor_GroupControl_Stop(Motor_GroupStopReason reason)
@@ -334,6 +343,29 @@ int Motor_GroupControl_Start(uint32_t now_ms)
   return 1;
 }
 
+int Motor_GroupControl_ConfigureGait(const Motor_GroupGaitLimits *limits)
+{
+  if (limits == NULL || group_mode != Motor_Group_Active ||
+      group_profile != Motor_Group_ProfileUniformOffset ||
+      fabsf(group_target_offset) > 0.0001f ||
+      !isfinite(limits->target_speed_rad_s) ||
+      !isfinite(limits->soft_speed_rad_s) ||
+      !isfinite(limits->hard_speed_rad_s) ||
+      !isfinite(limits->max_zero_excursion_rad) ||
+      limits->target_speed_rad_s <= 0.0f ||
+      limits->soft_speed_rad_s <= limits->target_speed_rad_s ||
+      limits->hard_speed_rad_s <= limits->soft_speed_rad_s ||
+      limits->hard_speed_rad_s > GROUP_GAIT_CONFIG_MAX_SPEED_RAD_S ||
+      limits->max_zero_excursion_rad <
+          GROUP_GAIT_CONFIG_MIN_EXCURSION_RAD ||
+      limits->max_zero_excursion_rad >
+          GROUP_GAIT_CONFIG_MAX_EXCURSION_RAD)
+    return 0;
+
+  gait_limits = *limits;
+  return 1;
+}
+
 int Motor_GroupControl_SetGaitTargets(const float target_positions[8])
 {
   if (target_positions == NULL || group_mode != Motor_Group_Active)
@@ -342,7 +374,7 @@ int Motor_GroupControl_SetGaitTargets(const float target_positions[8])
     float target = target_positions[i];
     if (!isfinite(target) ||
         fabsf(target - channels[i].zero_position) >
-            GROUP_GAIT_MAX_ZERO_EXCURSION_RAD) {
+            gait_limits.max_zero_excursion_rad) {
       Motor_GroupControl_StopWithContext(Motor_Group_StopPositionLimit,
                                          (int8_t)i,
                                          target - channels[i].zero_position);
@@ -440,7 +472,7 @@ void Motor_GroupControl_Update(uint8_t motor_index,
    * 2.1 rad arm-relative excursion check. */
   float zero_excursion_limit =
       group_profile == Motor_Group_ProfileGait
-          ? GROUP_GAIT_MAX_ZERO_EXCURSION_RAD
+          ? gait_limits.max_zero_excursion_rad
           : group_profile == Motor_Group_ProfileUniformOffset &&
                     fabsf(group_target_offset) <= 0.0001f
                 ? GROUP_ZERO_RETURN_EXCURSION_RAD
@@ -471,12 +503,12 @@ void Motor_GroupControl_Update(uint8_t motor_index,
   if (group_profile == Motor_Group_ProfileGait) {
     float abs_velocity = fabsf(rotor_velocity);
     channel->gait_hard_speed_samples =
-        abs_velocity > GROUP_GAIT_HARD_SPEED_RAD_S
+        abs_velocity > gait_limits.hard_speed_rad_s
             ? (uint8_t)(channel->gait_hard_speed_samples + 1U)
             : 0U;
     channel->gait_soft_speed_samples =
         (gait_returning == 0U &&
-         abs_velocity > GROUP_GAIT_SOFT_SPEED_RAD_S)
+         abs_velocity > gait_limits.soft_speed_rad_s)
             ? (uint8_t)(channel->gait_soft_speed_samples + 1U)
             : 0U;
     if (channel->gait_hard_speed_samples >=
@@ -511,7 +543,7 @@ void Motor_GroupControl_Update(uint8_t motor_index,
                            : group_profile == Motor_Group_ProfileGait
                                  ? gait_returning != 0U
                                        ? GROUP_GAIT_RETURN_SPEED_RAD_S
-                                       : GROUP_GAIT_TARGET_SPEED_RAD_S
+                                       : gait_limits.target_speed_rad_s
                                  : GROUP_TARGET_SPEED_RAD_S;
   float target_step = clamp_symmetric(remaining, target_speed * dt);
   channel->ramped_target += target_step;

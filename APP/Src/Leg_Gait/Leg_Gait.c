@@ -22,17 +22,12 @@ extern RC_DataTypeDef rc_data;
 #define LEG_SINE_FREQ_MAX_HZ        2.0f
 #define LEG_SINE_FREQ_MIN_HZ        0.1f
 #define LEG_SINE_LOG_PERIOD_MS      200U
-#define LEG_TROT_LIFT_HEIGHT_MM     50.0f
-#define LEG_TROT_START_POINT_MM     75.0f
-#define LEG_TROT_STEP_RATE_MS       300U
-#define LEG_TROT_STEP_CYCLE_MS      600U
-#define LEG_TROT_ENTRY_MS           600U
 #define LEG_TROT_RETURN_MIN_MS      200U
 #define LEG_TROT_LOG_PERIOD_MS      100U
 #define LEG_TROT_BASE_X_MM            0.0f
-#define LEG_TROT_BASE_Y_MM          220.0f
 #define LEG_TROT_ZERO_Y_MM          225.0f
 #define LEG_REMOTE_CHANNEL_DEADZONE 363
+#define LEG_TROT_PROFILE_COUNT        3U
 
 typedef struct
 {
@@ -68,8 +63,26 @@ typedef struct
 
 typedef struct
 {
+  uint8_t level;
+  uint8_t ui_s2;
+  uint8_t ref_s2;
+  float lift_height_mm;
+  float start_point_mm;
+  float base_y_mm;
+  uint32_t half_cycle_ms;
+  uint32_t cycle_ms;
+  uint32_t entry_ms;
+  float target_speed_rad_s;
+  float soft_speed_rad_s;
+  float hard_speed_rad_s;
+  float max_zero_excursion_rad;
+} Leg_TrotProfileTypeDef;
+
+typedef struct
+{
   uint8_t active;
   uint8_t stage;
+  uint8_t profile_index;
   int8_t direction;
   uint8_t stop_requested;
   uint8_t one_cycle;
@@ -88,6 +101,42 @@ static uint8_t remote_last_s1 = 0U;
 static uint8_t remote_last_s2 = 0U;
 static uint8_t remote_zero_recovering = 0U;
 static uint32_t remote_last_reject_log_tick = 0U;
+
+/* UI gears are ordered by operator speed, while Software_Ref names its
+ * profiles S2=2 slow, S2=3 medium and S2=1 fast.  Keep that mapping explicit
+ * so the reference timing is preserved without exposing its non-monotonic
+ * numbering to the operator. */
+static const Leg_TrotProfileTypeDef trot_profiles[LEG_TROT_PROFILE_COUNT] = {
+    {5U, 1U, 2U, 50.0f, 75.0f, 220.0f, 300U, 600U, 600U,
+     70.0f, 100.0f, 120.0f, 4.00f},
+    {6U, 2U, 3U, 50.0f, 75.0f, 215.0f, 220U, 440U, 440U,
+     100.0f, 135.0f, 160.0f, 4.30f},
+    {7U, 3U, 1U, 40.0f, 75.0f, 210.0f, 175U, 350U, 350U,
+     115.0f, 155.0f, 185.0f, 4.00f},
+};
+
+static uint8_t trot_profile_index_from_s2(uint8_t s2)
+{
+  return s2 >= 1U && s2 <= LEG_TROT_PROFILE_COUNT
+             ? (uint8_t)(s2 - 1U)
+             : 0U;
+}
+
+static int configure_trot_profile(const Leg_TrotProfileTypeDef *profile)
+{
+  if (profile == NULL) return 0;
+  Motor_GroupGaitLimits limits = {
+      .target_speed_rad_s = profile->target_speed_rad_s,
+      .soft_speed_rad_s = profile->soft_speed_rad_s,
+      .hard_speed_rad_s = profile->hard_speed_rad_s,
+      .max_zero_excursion_rad = profile->max_zero_excursion_rad,
+  };
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  int configured = Motor_GroupControl_ConfigureGait(&limits);
+  if (primask == 0U) __enable_irq();
+  return configured;
+}
 
 static const Leg_PointTypeDef trace_offsets[LEG_TRACE_POINT_COUNT] = {
     {0.0f, 5.0f},
@@ -540,6 +589,14 @@ void Leg_Gait_ServiceTrot(void)
 {
   if (!trot.active)
     return;
+  if (trot.profile_index >= LEG_TROT_PROFILE_COUNT) {
+    Communication_SendString("LEG_TROT abort invalid_profile\r\n");
+    trot.active = 0U;
+    remote_armed = 0U;
+    return;
+  }
+  const Leg_TrotProfileTypeDef *profile =
+      &trot_profiles[trot.profile_index];
   uint32_t now = HAL_GetTick();
   Motor_GroupSnapshot group;
   Leg_Control_GetGroupSnapshot(&group);
@@ -622,10 +679,13 @@ void Leg_Gait_ServiceTrot(void)
       trot.active = 0U;
       trot.stage = 0U;
       remote_zero_recovering = 0U;
-      char result[176];
+      char result[196];
       int len = snprintf(result, sizeof(result),
-                         "LEG_TROT_RESULT dir=%d return_zero=1 hold=1 "
+                         "LEG_TROT_RESULT level=%u s2=%u dir=%d "
+                         "return_zero=1 hold=1 "
                          "p2p=%ld vmax=%ld tq=%ld err=%ld\r\n",
+                         (unsigned int)profile->level,
+                         (unsigned int)profile->ui_s2,
                          (int)trot.direction,
                          (long)(p2p_max * 1000000.0f),
                          (long)(velocity_max * 1000000.0f),
@@ -642,20 +702,20 @@ void Leg_Gait_ServiceTrot(void)
   uint8_t enter_cycle = 0U;
   if (trot.stage == 1U) {
     uint32_t elapsed = now - trot.stage_start_tick;
-    float t = (float)elapsed / (float)LEG_TROT_ENTRY_MS;
+    float t = (float)elapsed / (float)profile->entry_ms;
     if (t > 1.0f) t = 1.0f;
     phase = 0.5f - 0.5f * cosf(LEG_PI * t);
-    if (elapsed >= LEG_TROT_ENTRY_MS) enter_cycle = 1U;
+    if (elapsed >= profile->entry_ms) enter_cycle = 1U;
   } else {
     uint32_t elapsed = now - trot.stage_start_tick;
-    uint32_t cycle_time = elapsed % LEG_TROT_STEP_CYCLE_MS;
-    phase = (float)cycle_time / (float)LEG_TROT_STEP_CYCLE_MS;
-    half_cycle = cycle_time >= LEG_TROT_STEP_RATE_MS ? 1U : 0U;
+    uint32_t cycle_time = elapsed % profile->cycle_ms;
+    phase = (float)cycle_time / (float)profile->cycle_ms;
+    half_cycle = cycle_time >= profile->half_cycle_ms ? 1U : 0U;
     if ((trot.stop_requested || trot.one_cycle) &&
         trot.stop_after_tick == 0U) {
-      uint32_t cycles = elapsed / LEG_TROT_STEP_CYCLE_MS + 1U;
+      uint32_t cycles = elapsed / profile->cycle_ms + 1U;
       trot.stop_after_tick = trot.stage_start_tick +
-                             cycles * LEG_TROT_STEP_CYCLE_MS;
+                             cycles * profile->cycle_ms;
     }
     if (trot.stop_after_tick != 0U &&
         (int32_t)(now - trot.stop_after_tick) >= 0) {
@@ -679,31 +739,31 @@ void Leg_Gait_ServiceTrot(void)
   for (uint8_t leg = 0U; leg < 4U; ++leg) {
     uint8_t pair_a = (leg == 0U || leg == 3U) ? 1U : 0U;
     float x;
-    float y = LEG_TROT_BASE_Y_MM;
+    float y = profile->base_y_mm;
     if (trot.stage == 1U) {
       float start_sign = pair_a ? -1.0f : 1.0f;
       x = LEG_TROT_BASE_X_MM +
-          (float)trot.direction * start_sign * LEG_TROT_START_POINT_MM * phase;
+          (float)trot.direction * start_sign * profile->start_point_mm * phase;
       y = LEG_TROT_ZERO_Y_MM +
-          (LEG_TROT_BASE_Y_MM - LEG_TROT_ZERO_Y_MM) * phase;
+          (profile->base_y_mm - LEG_TROT_ZERO_Y_MM) * phase;
     } else {
       uint8_t swing = pair_a ? (half_cycle == 0U) : (half_cycle != 0U);
       uint32_t cycle_time = (now - trot.stage_start_tick) %
-                            LEG_TROT_STEP_CYCLE_MS;
+                            profile->cycle_ms;
       uint32_t phase_ms = half_cycle
-                              ? cycle_time - LEG_TROT_STEP_RATE_MS
+                              ? cycle_time - profile->half_cycle_ms
                               : cycle_time;
-      float t = (float)phase_ms / (float)LEG_TROT_STEP_RATE_MS;
+      float t = (float)phase_ms / (float)profile->half_cycle_ms;
       if (t > 1.0f) t = 1.0f;
       if (swing) {
         float cycloid = t - sinf(LEG_TWO_PI * t) / LEG_TWO_PI;
-        x = -LEG_TROT_START_POINT_MM +
-            2.0f * LEG_TROT_START_POINT_MM * cycloid;
-        y -= LEG_TROT_LIFT_HEIGHT_MM *
+        x = -profile->start_point_mm +
+            2.0f * profile->start_point_mm * cycloid;
+        y -= profile->lift_height_mm *
              (0.5f - 0.5f * cosf(LEG_TWO_PI * t));
       } else {
-        x = LEG_TROT_START_POINT_MM -
-            2.0f * LEG_TROT_START_POINT_MM * t;
+        x = profile->start_point_mm -
+            2.0f * profile->start_point_mm * t;
       }
       x = LEG_TROT_BASE_X_MM + (float)trot.direction * x;
     }
@@ -739,22 +799,25 @@ void Leg_Gait_ServiceTrot(void)
     trot.stage = 2U;
     trot.stage_start_tick = now;
     if (trot.stop_requested || trot.one_cycle)
-      trot.stop_after_tick = now + LEG_TROT_STEP_CYCLE_MS;
+      trot.stop_after_tick = now + profile->cycle_ms;
     Communication_SendString("LEG_TROT entry_complete cycle_start\r\n");
   }
 
   if ((now - trot.last_log_tick) >= LEG_TROT_LOG_PERIOD_MS) {
     trot.last_log_tick = now;
-    char buf[144];
+    char buf[168];
     int len = snprintf(buf, sizeof(buf),
-                       "LEG_TROT_STATE stage=%u dir=%d phase=%ld stop=%u "
+                       "LEG_TROT_STATE level=%u s2=%u stage=%u dir=%d "
+                       "phase=%ld stop=%u "
                        "step=%d lift=%d half_ms=%u\r\n",
+                       (unsigned int)profile->level,
+                       (unsigned int)profile->ui_s2,
                        (unsigned int)trot.stage, (int)trot.direction,
                        (long)(phase * 1000000.0f),
                        (unsigned int)trot.stop_requested,
-                       (int)(LEG_TROT_START_POINT_MM * 2.0f),
-                       (int)LEG_TROT_LIFT_HEIGHT_MM,
-                       (unsigned int)LEG_TROT_STEP_RATE_MS);
+                       (int)(profile->start_point_mm * 2.0f),
+                       (int)profile->lift_height_mm,
+                       (unsigned int)profile->half_cycle_ms);
     if (len > 0 && len < (int)sizeof(buf)) Communication_SendString(buf);
   }
 }
@@ -892,29 +955,41 @@ int Leg_Gait_StartSineTest(uint8_t leg, float amplitude_mm, float freq_hz)
 
 int Leg_Gait_StartTrotTest(void)
 {
+  const Leg_TrotProfileTypeDef *profile = &trot_profiles[0];
   if (Leg_Gait_AnyActive())
     return 0;
   Motor_GroupSnapshot group;
   Leg_Control_GetGroupSnapshot(&group);
   if (group.mode != Motor_Group_Active || group.all_at_zero == 0U)
     return 0;
+  if (!configure_trot_profile(profile))
+    return 0;
   trot.active = 1U;
   trot.stage = 1U;
+  trot.profile_index = 0U;
   trot.direction = 1;
   trot.stop_requested = 0U;
   trot.one_cycle = 1U;
   trot.stage_start_tick = HAL_GetTick();
   trot.stop_after_tick = 0U;
   trot.last_log_tick = 0U;
-  char buf[160];
+  char buf[220];
   int len = snprintf(buf, sizeof(buf),
-                     "LEG_TROT start source=debug dir=1 lift=%d step=%d "
-                     "half_ms=%d entry_ms=%u torque_mNm=3500 "
+                     "LEG_TROT start source=debug level=%u s2=%u dir=1 "
+                     "lift=%d step=%d half_ms=%u entry_ms=%u "
+                     "vt=%d vsoft=%d vhard=%d xm_mrad=%d "
+                     "torque_mNm=3500 "
                      "path=ref_cycloid_sine\r\n",
-                     (int)LEG_TROT_LIFT_HEIGHT_MM,
-                     (int)(LEG_TROT_START_POINT_MM * 2.0f),
-                     (int)LEG_TROT_STEP_RATE_MS,
-                     (unsigned int)LEG_TROT_ENTRY_MS);
+                     (unsigned int)profile->level,
+                     (unsigned int)profile->ui_s2,
+                     (int)profile->lift_height_mm,
+                     (int)(profile->start_point_mm * 2.0f),
+                     (unsigned int)profile->half_cycle_ms,
+                     (unsigned int)profile->entry_ms,
+                     (int)profile->target_speed_rad_s,
+                     (int)profile->soft_speed_rad_s,
+                     (int)profile->hard_speed_rad_s,
+                     (int)(profile->max_zero_excursion_rad * 1000.0f));
   if (len > 0 && len < (int)sizeof(buf)) Communication_SendString(buf);
   return 1;
 }
@@ -933,8 +1008,10 @@ void Leg_Gait_RemoteDisarm(void)
   if (primask == 0U) __enable_irq();
 }
 
-static int start_remote_trot(int8_t direction)
+static int start_remote_trot(int8_t direction, uint8_t ui_s2)
 {
+  uint8_t profile_index = trot_profile_index_from_s2(ui_s2);
+  const Leg_TrotProfileTypeDef *profile = &trot_profiles[profile_index];
   Motor_GroupSnapshot group;
   Leg_Control_GetGroupSnapshot(&group);
   if (!remote_armed || direction == 0 || Leg_Gait_AnyActive() ||
@@ -970,26 +1047,42 @@ static int start_remote_trot(int8_t direction)
     return 0;
   }
   remote_zero_recovering = 0U;
+  if (!configure_trot_profile(profile)) {
+    Communication_SendString(
+        "LEG_REMOTE gait_rejected profile_config rearm=stand\r\n");
+    remote_armed = 0U;
+    return 0;
+  }
   trot.active = 1U;
   trot.stage = 1U;
+  trot.profile_index = profile_index;
   trot.direction = direction;
   trot.stop_requested = 0U;
   trot.one_cycle = 0U;
   trot.stage_start_tick = HAL_GetTick();
   trot.stop_after_tick = 0U;
   trot.last_log_tick = 0U;
-  char buf[256];
+  char buf[320];
   int len = snprintf(buf, sizeof(buf),
-                     "LEG_REMOTE gait_start dir=%d level=5 step=%d lift=%d "
+                     "LEG_REMOTE gait_start dir=%d level=%u s2=%u "
+                     "step=%d lift=%d "
                      "cycle_ms=%u entry_ms=%u pkp=35900 pkd=1000 skp=10 "
                      "ski=0.6 skd=1.5 tmax=3.5 err_soft=0.60 "
-                     "err_hard=1.00 vt=70 vsoft=100 vhard=120 "
-                     "return_vt=40 ref_s2=2 path=ref_cycloid_sine\r\n",
+                     "err_hard=1.00 vt=%d vsoft=%d vhard=%d "
+                     "return_vt=40 xm_mrad=%d ref_s2=%u "
+                     "path=ref_cycloid_sine\r\n",
                      (int)direction,
-                     (int)(LEG_TROT_START_POINT_MM * 2.0f),
-                     (int)LEG_TROT_LIFT_HEIGHT_MM,
-                     (unsigned int)LEG_TROT_STEP_CYCLE_MS,
-                     (unsigned int)LEG_TROT_ENTRY_MS);
+                     (unsigned int)profile->level,
+                     (unsigned int)profile->ui_s2,
+                     (int)(profile->start_point_mm * 2.0f),
+                     (int)profile->lift_height_mm,
+                     (unsigned int)profile->cycle_ms,
+                     (unsigned int)profile->entry_ms,
+                     (int)profile->target_speed_rad_s,
+                     (int)profile->soft_speed_rad_s,
+                     (int)profile->hard_speed_rad_s,
+                     (int)(profile->max_zero_excursion_rad * 1000.0f),
+                     (unsigned int)profile->ref_s2);
   if (len > 0 && len < (int)sizeof(buf)) Communication_SendString(buf);
   return 1;
 }
@@ -1034,11 +1127,24 @@ void Leg_Gait_ServiceRemote(void)
   }
 
   if (trot.active) {
+    if (trot.profile_index < LEG_TROT_PROFILE_COUNT &&
+        rc.s1 == 3U && rc.s2 >= 1U && rc.s2 <= 3U &&
+        trot.profile_index != trot_profile_index_from_s2(rc.s2) &&
+        trot.stop_requested == 0U) {
+      char level_log[96];
+      int len = snprintf(level_log, sizeof(level_log),
+                         "LEG_REMOTE level_change queued from=%u to=%u\r\n",
+                         (unsigned int)trot_profiles[trot.profile_index].ui_s2,
+                         (unsigned int)rc.s2);
+      if (len > 0 && len < (int)sizeof(level_log))
+        Communication_SendString(level_log);
+      trot.stop_requested = 1U;
+    }
     if (!Communication_IsLinkAlive() || requested_direction == 0 ||
         requested_direction != trot.direction)
       trot.stop_requested = 1U;
   } else if (requested_direction != 0) {
-    (void)start_remote_trot(requested_direction);
+    (void)start_remote_trot(requested_direction, rc.s2);
   }
 
   Leg_Gait_ServiceTrot();

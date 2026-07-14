@@ -74,6 +74,14 @@ typedef struct
   float max_abs_torque[8];
 } Motor_GroupDiagnostics;
 
+typedef struct
+{
+  float target_speed_rad_s;
+  float soft_speed_rad_s;
+  float hard_speed_rad_s;
+  float max_zero_excursion_rad;
+} Motor_GroupGaitLimits;
+
 void Motor_GroupControl_Init(void);
 int Motor_GroupControl_ArmZero(const Motor_StateSnapshotTypeDef states[8],
                                uint32_t now_ms);
@@ -84,6 +92,7 @@ int Motor_GroupControl_ArmOffsets(const Motor_StateSnapshotTypeDef states[8],
                                   Motor_GroupProfile profile,
                                   uint32_t now_ms);
 int Motor_GroupControl_Start(uint32_t now_ms);
+int Motor_GroupControl_ConfigureGait(const Motor_GroupGaitLimits *limits);
 int Motor_GroupControl_SetGaitTargets(const float target_positions[8]);
 int Motor_GroupControl_ReturnGaitToZero(void);
 int Motor_GroupControl_FinishGaitHold(void);
