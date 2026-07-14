@@ -428,6 +428,46 @@ uint8_t Motor_Transport_GetStats(uint8_t channel_index, Motor_TransportStats *st
   return 1U;
 }
 
+uint8_t Motor_Transport_HandleLineErrorIrq(UART_HandleTypeDef *huart)
+{
+  if (!transport_initialized || !transport_running || huart == NULL) return 0U;
+  for (uint8_t i = 0U; i < MOTOR_TRANSPORT_CHANNEL_COUNT; ++i) {
+    Motor_TransportChannel *channel = &channels[i];
+    if (huart != channel->uart) continue;
+
+    uint32_t isr = READ_REG(huart->Instance->ISR);
+    uint32_t hal_error_bits = HAL_UART_ERROR_NONE;
+    uint32_t clear_flags = 0U;
+    if ((isr & USART_ISR_PE) != 0U) {
+      hal_error_bits |= HAL_UART_ERROR_PE;
+      clear_flags |= UART_CLEAR_PEF;
+    }
+    if ((isr & USART_ISR_NE) != 0U) {
+      hal_error_bits |= HAL_UART_ERROR_NE;
+      clear_flags |= UART_CLEAR_NEF;
+    }
+    if ((isr & USART_ISR_FE) != 0U) {
+      hal_error_bits |= HAL_UART_ERROR_FE;
+      clear_flags |= UART_CLEAR_FEF;
+    }
+    if (clear_flags == 0U) return 0U;
+
+    /* HAL_UART_IRQHandler aborts DMA RX for every error when DMAR is set.
+     * PE/NE/FE are recoverable byte-level line errors for this permanent
+     * circular ring: keep DMA armed and let CRC/ID parsing discard damage.
+     * ORE/RTO/DMA errors are intentionally left for HAL and the existing
+     * foreground restart/fail-safe path. */
+    __HAL_UART_CLEAR_FLAG(huart, clear_flags);
+    channel->uart_error_bits |= hal_error_bits;
+    ++channel->uart_error_count;
+    if (transport_callbacks.uart_error != NULL)
+      transport_callbacks.uart_error(channel->leg_index, hal_error_bits,
+                                     HAL_GetTick());
+    return 1U;
+  }
+  return 0U;
+}
+
 uint8_t Motor_Transport_HandleTxComplete(UART_HandleTypeDef *huart)
 {
   if (!transport_initialized) return 0U;

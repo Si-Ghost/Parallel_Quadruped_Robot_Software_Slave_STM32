@@ -69,6 +69,7 @@ typedef struct
 uint8_t Motor_Transport_GetStats(uint8_t channel, Motor_TransportStats *stats);
 
 /* Return non-zero only when the UART belongs to this transport. */
+uint8_t Motor_Transport_HandleLineErrorIrq(UART_HandleTypeDef *huart);
 uint8_t Motor_Transport_HandleTxComplete(UART_HandleTypeDef *huart);
 uint8_t Motor_Transport_HandleError(UART_HandleTypeDef *huart);
 
