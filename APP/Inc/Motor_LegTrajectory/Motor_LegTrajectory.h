@@ -12,9 +12,11 @@
 #define MOTOR_LEG_TRAJECTORY_LEVEL_MIN            1U
 #define MOTOR_LEG_TRAJECTORY_LEVEL_MAX            2U
 #define MOTOR_LEG_TRAJECTORY_TORQUE_MAX_NM        1.0f
-#define MOTOR_LEG_TRAJECTORY_TARGET_SPEED_MAX     2.0f
 #define MOTOR_LEG_TRAJECTORY_ACTUAL_SPEED_MAX     3.0f
 #define MOTOR_LEG_TRAJECTORY_TRACKING_ERROR_MAX    0.35f
+#define MOTOR_LEG_TRAJECTORY_PLAN_ARM_TOLERANCE    0.10f
+#define MOTOR_LEG_TRAJECTORY_PLAN_FOOT_TOLERANCE   2.0f
+#define MOTOR_LEG_TRAJECTORY_PLAN_DELTA_TOLERANCE  0.05f
 #define MOTOR_LEG_TRAJECTORY_POSITION_KP          35.9f
 #define MOTOR_LEG_TRAJECTORY_POSITION_KD           1.0f
 #define MOTOR_LEG_TRAJECTORY_SPEED_KP              0.01f
@@ -29,6 +31,7 @@ typedef struct
   uint32_t period_ms;
   uint32_t settle_ms;
   uint32_t duration_ms;
+  float target_speed_max;
   float position_max;
   float target_delta_max;
 } Motor_LegTrajectoryProfile;
@@ -58,7 +61,8 @@ typedef enum
   Motor_LegTrajectory_StopController = 10,
   Motor_LegTrajectory_StopComplete = 11,
   Motor_LegTrajectory_StopTransport = 12,
-  Motor_LegTrajectory_StopRescan = 13
+  Motor_LegTrajectory_StopRescan = 13,
+  Motor_LegTrajectory_StopPlanMismatch = 14
 } Motor_LegTrajectoryStopReason;
 
 typedef struct
@@ -67,6 +71,8 @@ typedef struct
   Motor_LegTrajectoryStopReason reason;
   uint8_t dry_run;
   uint8_t dry_run_passed;
+  uint8_t approved_plan_available;
+  uint8_t dry_run_plan_match;
   uint8_t trajectory_complete;
   uint8_t hold_current_position;
   Motor_LegTrajectoryProfile profile;
@@ -78,6 +84,9 @@ typedef struct
   Leg_PointTypeDef base_foot;
   Leg_PointTypeDef target_foot;
   float peak_target_delta[2];
+  float plan_arm_position_diff[2];
+  Leg_PointTypeDef plan_base_foot_diff;
+  float plan_target_delta_diff[2];
   float arm_position[2];
   float zero_position[2];
   float direction[2];

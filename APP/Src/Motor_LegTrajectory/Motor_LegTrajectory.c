@@ -55,6 +55,8 @@ typedef struct
   Motor_LegTrajectoryStopReason reason;
   uint8_t dry_run;
   uint8_t dry_run_passed;
+  uint8_t approved_plan_available;
+  uint8_t dry_run_plan_match;
   uint8_t trajectory_complete;
   uint8_t hold_current_position;
   Motor_LegTrajectoryProfile profile;
@@ -68,11 +70,24 @@ typedef struct
   Leg_PointTypeDef base_foot;
   Leg_PointTypeDef target_foot;
   float peak_target_delta[LEG_TRAJ_MOTOR_COUNT];
+  float plan_arm_position_diff[LEG_TRAJ_MOTOR_COUNT];
+  Leg_PointTypeDef plan_base_foot_diff;
+  float plan_target_delta_diff[LEG_TRAJ_MOTOR_COUNT];
   Motor_LegTrajectoryChannel channel[LEG_TRAJ_MOTOR_COUNT];
 } Motor_LegTrajectoryContext;
 
+typedef struct
+{
+  uint8_t valid;
+  Motor_LegTrajectoryProfile profile;
+  Leg_PointTypeDef base_foot;
+  float arm_position[LEG_TRAJ_MOTOR_COUNT];
+  float peak_target_delta[LEG_TRAJ_MOTOR_COUNT];
+} Motor_LegTrajectoryApprovedPlan;
+
 static Motor_LegTrajectoryContext control;
-static uint8_t dry_run_pass_mask;
+static Motor_LegTrajectoryApprovedPlan approved_plans[
+    MOTOR_LEG_TRAJECTORY_LEVEL_MAX - MOTOR_LEG_TRAJECTORY_LEVEL_MIN + 1U];
 
 static const Motor_LegTrajectoryProfile profiles[] = {
     {
@@ -81,21 +96,23 @@ static const Motor_LegTrajectoryProfile profiles[] = {
         .period_ms = 4000U,
         .settle_ms = 1000U,
         .duration_ms = 5000U,
+        .target_speed_max = 2.0f,
         .position_max = 0.75f,
         .target_delta_max = 0.55f,
     },
     {
         /* The 40 mm amplitude comes from the reference project's fast gait.
-         * The 6 s period is deliberately much slower than its 350 ms cycle:
+         * The 8 s period is deliberately much slower than its 350 ms cycle:
          * this profile changes observation range without simultaneously
          * escalating speed or adding the reference +/-75 mm fore-aft step. */
         .level = 2U,
         .lift_mm = 40.0f,
-        .period_ms = 6000U,
+        .period_ms = 8000U,
         .settle_ms = 1000U,
-        .duration_ms = 7000U,
-        .position_max = 2.60f,
-        .target_delta_max = 2.40f,
+        .duration_ms = 9000U,
+        .target_speed_max = 1.10f,
+        .position_max = 2.50f,
+        .target_delta_max = 2.30f,
     },
 };
 
@@ -106,6 +123,95 @@ static int get_profile(uint8_t level, Motor_LegTrajectoryProfile *profile)
     return 0;
   *profile = profiles[level - MOTOR_LEG_TRAJECTORY_LEVEL_MIN];
   return profile->level == level;
+}
+
+static Motor_LegTrajectoryApprovedPlan *approved_plan_for_level(uint8_t level)
+{
+  if (level < MOTOR_LEG_TRAJECTORY_LEVEL_MIN ||
+      level > MOTOR_LEG_TRAJECTORY_LEVEL_MAX)
+    return NULL;
+  return &approved_plans[level - MOTOR_LEG_TRAJECTORY_LEVEL_MIN];
+}
+
+static uint8_t profiles_match(const Motor_LegTrajectoryProfile *a,
+                              const Motor_LegTrajectoryProfile *b)
+{
+  if (a == NULL || b == NULL) return 0U;
+  return (a->level == b->level && a->lift_mm == b->lift_mm &&
+          a->period_ms == b->period_ms && a->settle_ms == b->settle_ms &&
+          a->duration_ms == b->duration_ms &&
+          a->target_speed_max == b->target_speed_max &&
+          a->position_max == b->position_max &&
+          a->target_delta_max == b->target_delta_max) ? 1U : 0U;
+}
+
+static void evaluate_approved_plan(void)
+{
+  Motor_LegTrajectoryApprovedPlan *approved =
+      approved_plan_for_level(control.profile.level);
+  control.approved_plan_available =
+      approved != NULL && approved->valid != 0U ? 1U : 0U;
+  control.dry_run_passed = 0U;
+  control.dry_run_plan_match = 0U;
+  if (control.approved_plan_available == 0U) return;
+
+  control.plan_base_foot_diff.x =
+      control.base_foot.x - approved->base_foot.x;
+  control.plan_base_foot_diff.y =
+      control.base_foot.y - approved->base_foot.y;
+  uint8_t match = profiles_match(&control.profile, &approved->profile);
+  float max_arm_diff = 0.0f;
+  for (uint8_t motor = 0U; motor < LEG_TRAJ_MOTOR_COUNT; ++motor) {
+    control.plan_arm_position_diff[motor] =
+        control.channel[motor].arm_position - approved->arm_position[motor];
+    control.plan_target_delta_diff[motor] =
+        control.peak_target_delta[motor] - approved->peak_target_delta[motor];
+    float arm_diff_magnitude =
+        fabsf(control.plan_arm_position_diff[motor]);
+    if (arm_diff_magnitude > max_arm_diff)
+      max_arm_diff = arm_diff_magnitude;
+    if (fabsf(control.plan_arm_position_diff[motor]) >
+            MOTOR_LEG_TRAJECTORY_PLAN_ARM_TOLERANCE ||
+        fabsf(control.plan_target_delta_diff[motor]) >
+            MOTOR_LEG_TRAJECTORY_PLAN_DELTA_TOLERANCE)
+      match = 0U;
+  }
+  if (fabsf(control.plan_base_foot_diff.x) >
+          MOTOR_LEG_TRAJECTORY_PLAN_FOOT_TOLERANCE ||
+      fabsf(control.plan_base_foot_diff.y) >
+          MOTOR_LEG_TRAJECTORY_PLAN_FOOT_TOLERANCE)
+    match = 0U;
+
+  control.dry_run_plan_match = match;
+  control.dry_run_passed = match;
+  if (match == 0U) {
+    control.reason = Motor_LegTrajectory_StopPlanMismatch;
+    control.stop_detail = max_arm_diff;
+  }
+}
+
+static void approve_current_plan(void)
+{
+  Motor_LegTrajectoryApprovedPlan *approved =
+      approved_plan_for_level(control.profile.level);
+  if (approved == NULL) return;
+  memset(approved, 0, sizeof(*approved));
+  approved->valid = 1U;
+  approved->profile = control.profile;
+  approved->base_foot = control.base_foot;
+  for (uint8_t motor = 0U; motor < LEG_TRAJ_MOTOR_COUNT; ++motor) {
+    approved->arm_position[motor] = control.channel[motor].arm_position;
+    approved->peak_target_delta[motor] = control.peak_target_delta[motor];
+  }
+  control.approved_plan_available = 1U;
+  control.dry_run_plan_match = 1U;
+  control.dry_run_passed = 1U;
+  memset(control.plan_arm_position_diff, 0,
+         sizeof(control.plan_arm_position_diff));
+  memset(&control.plan_base_foot_diff, 0,
+         sizeof(control.plan_base_foot_diff));
+  memset(control.plan_target_delta_diff, 0,
+         sizeof(control.plan_target_delta_diff));
 }
 
 static float clamp_symmetric(float value, float limit)
@@ -160,8 +266,8 @@ static void reset_channel_controller(Motor_LegTrajectoryChannel *channel)
 void Motor_LegTrajectory_Init(void)
 {
   memset(&control, 0, sizeof(control));
+  memset(approved_plans, 0, sizeof(approved_plans));
   (void)get_profile(MOTOR_LEG_TRAJECTORY_LEVEL_MIN, &control.profile);
-  dry_run_pass_mask = 0U;
   control.mode = Motor_LegTrajectory_Disabled;
   control.stop_motor_index = -1;
 }
@@ -200,8 +306,6 @@ int Motor_LegTrajectory_Arm(const Motor_StateSnapshotTypeDef states[2],
   uint32_t stop_sequence = control.stop_sequence;
   memset(&control, 0, sizeof(control));
   control.profile = profile;
-  control.dry_run_passed =
-      (dry_run_pass_mask & (uint8_t)(1U << level)) != 0U ? 1U : 0U;
   control.stop_sequence = stop_sequence;
   control.stop_motor_index = -1;
 
@@ -275,6 +379,7 @@ int Motor_LegTrajectory_Arm(const Motor_StateSnapshotTypeDef states[2],
   control.target_foot = control.base_foot;
   control.mode = Motor_LegTrajectory_Armed;
   control.reason = Motor_LegTrajectory_StopNone;
+  evaluate_approved_plan();
   return 1;
 }
 
@@ -282,7 +387,8 @@ int Motor_LegTrajectory_Start(uint8_t dry_run, uint32_t now_ms)
 {
   if (control.mode != Motor_LegTrajectory_Armed || dry_run > 1U ||
       (dry_run == 0U && MOTOR_LEG_TRAJECTORY_ACTIVE_ENABLED == 0U) ||
-      (dry_run == 0U && control.dry_run_passed == 0U)) {
+      (dry_run == 0U && (control.dry_run_passed == 0U ||
+                        control.dry_run_plan_match == 0U))) {
     Motor_LegTrajectory_Stop(Motor_LegTrajectory_StopInvalidCommand, -1,
                              (float)dry_run);
     return 0;
@@ -301,7 +407,11 @@ int Motor_LegTrajectory_Start(uint8_t dry_run, uint32_t now_ms)
   control.stop_motor_index = -1;
   control.stop_detail = 0.0f;
   if (dry_run != 0U) {
-    dry_run_pass_mask &= (uint8_t)~(1U << control.profile.level);
+    Motor_LegTrajectoryApprovedPlan *approved =
+        approved_plan_for_level(control.profile.level);
+    if (approved != NULL) approved->valid = 0U;
+    control.approved_plan_available = 0U;
+    control.dry_run_plan_match = 0U;
     control.dry_run_passed = 0U;
   }
   for (uint8_t motor = 0U; motor < LEG_TRAJ_MOTOR_COUNT; ++motor) {
@@ -431,7 +541,7 @@ static int update_trajectory_targets(uint32_t now_ms)
       channel->target_velocity = clamp_symmetric(
           (channel->target_position - channel->previous_target_position) /
               target_dt_s,
-          MOTOR_LEG_TRAJECTORY_TARGET_SPEED_MAX);
+          control.profile.target_speed_max);
       channel->peak_abs_target_velocity = max_abs(
           channel->peak_abs_target_velocity, channel->target_velocity);
       channel->previous_target_position = channel->target_position;
@@ -533,7 +643,7 @@ void Motor_LegTrajectory_Update(uint8_t motor_index,
       channel->target_velocity + MOTOR_LEG_TRAJECTORY_POSITION_KP *
           channel->position_error +
           MOTOR_LEG_TRAJECTORY_POSITION_KD * position_delta,
-      MOTOR_LEG_TRAJECTORY_TARGET_SPEED_MAX);
+      control.profile.target_speed_max);
   channel->speed_error = channel->speed_target - rotor_velocity;
   float speed_delta = channel->speed_error - channel->previous_speed_error;
   channel->previous_speed_error = channel->speed_error;
@@ -577,8 +687,14 @@ void Motor_LegTrajectory_Stop(Motor_LegTrajectoryStopReason reason,
 
   if (reason == Motor_LegTrajectory_StopComplete &&
       previous_mode == Motor_LegTrajectory_DryRun) {
-    dry_run_pass_mask |= (uint8_t)(1U << control.profile.level);
-    control.dry_run_passed = 1U;
+    approve_current_plan();
+  } else if (previous_mode == Motor_LegTrajectory_Active) {
+    Motor_LegTrajectoryApprovedPlan *approved =
+        approved_plan_for_level(control.profile.level);
+    if (approved != NULL) approved->valid = 0U;
+    control.approved_plan_available = 0U;
+    control.dry_run_plan_match = 0U;
+    control.dry_run_passed = 0U;
   }
   control.mode = Motor_LegTrajectory_Stopped;
   control.reason = reason;
@@ -624,6 +740,8 @@ void Motor_LegTrajectory_GetSnapshot(Motor_LegTrajectorySnapshot *snapshot)
   snapshot->reason = control.reason;
   snapshot->dry_run = control.dry_run;
   snapshot->dry_run_passed = control.dry_run_passed;
+  snapshot->approved_plan_available = control.approved_plan_available;
+  snapshot->dry_run_plan_match = control.dry_run_plan_match;
   snapshot->trajectory_complete = control.trajectory_complete;
   snapshot->hold_current_position = control.hold_current_position;
   snapshot->profile = control.profile;
@@ -637,6 +755,10 @@ void Motor_LegTrajectory_GetSnapshot(Motor_LegTrajectorySnapshot *snapshot)
   for (uint8_t motor = 0U; motor < LEG_TRAJ_MOTOR_COUNT; ++motor) {
     const Motor_LegTrajectoryChannel *channel = &control.channel[motor];
     snapshot->peak_target_delta[motor] = control.peak_target_delta[motor];
+    snapshot->plan_arm_position_diff[motor] =
+        control.plan_arm_position_diff[motor];
+    snapshot->plan_target_delta_diff[motor] =
+        control.plan_target_delta_diff[motor];
     snapshot->arm_position[motor] = channel->arm_position;
     snapshot->zero_position[motor] = channel->zero_position;
     snapshot->direction[motor] = channel->direction;
@@ -672,4 +794,5 @@ void Motor_LegTrajectory_GetSnapshot(Motor_LegTrajectorySnapshot *snapshot)
     snapshot->min_dt_ms[motor] = channel->min_dt_ms;
     snapshot->max_dt_ms[motor] = channel->max_dt_ms;
   }
+  snapshot->plan_base_foot_diff = control.plan_base_foot_diff;
 }

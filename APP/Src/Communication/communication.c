@@ -530,7 +530,9 @@ static void send_leg_trajectory_arm_audit(void)
         "\"joint\":[%ld,%ld],\"ik\":[%ld,%ld],"
         "\"base\":[%ld,%ld],\"peak_y\":%ld,\"delta\":[%ld,%ld],"
         "\"temp\":[%d,%d],\"age\":[%lu,%lu],\"zero_ok\":[%u,%u],"
-        "\"active\":%u}\n",
+        "\"active\":%u,\"dry_ok\":%u,\"plan_ref\":%u,"
+        "\"plan_match\":%u,\"arm_diff\":[%ld,%ld],"
+        "\"base_diff\":[%ld,%ld],\"delta_diff\":[%ld,%ld]}\n",
         (unsigned int)(s.mode == Motor_LegTrajectory_Armed),
         (unsigned int)s.profile.level,
         (unsigned int)MOTOR_LEG_TRAJECTORY_LEG_INDEX,
@@ -554,7 +556,16 @@ static void send_leg_trajectory_arm_audit(void)
         (unsigned long)s.arm_feedback_age_ms[1],
         (unsigned int)s.arm_zero_checked[0],
         (unsigned int)s.arm_zero_checked[1],
-        (unsigned int)MOTOR_LEG_TRAJECTORY_ACTIVE_ENABLED);
+        (unsigned int)MOTOR_LEG_TRAJECTORY_ACTIVE_ENABLED,
+        (unsigned int)s.dry_run_passed,
+        (unsigned int)s.approved_plan_available,
+        (unsigned int)s.dry_run_plan_match,
+        (long)(s.plan_arm_position_diff[0] * 1000000.0f),
+        (long)(s.plan_arm_position_diff[1] * 1000000.0f),
+        (long)(s.plan_base_foot_diff.x * 1000.0f),
+        (long)(s.plan_base_foot_diff.y * 1000.0f),
+        (long)(s.plan_target_delta_diff[0] * 1000000.0f),
+        (long)(s.plan_target_delta_diff[1] * 1000000.0f));
     if (len > 0 && len < (int)sizeof(buf))
         Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
 }
@@ -594,7 +605,7 @@ static void send_leg_trajectory_plan(uint8_t dry_run)
         (long)(MOTOR_LEG_TRAJECTORY_SPEED_KI * 1000000.0f),
         (long)(MOTOR_LEG_TRAJECTORY_SPEED_KD * 1000000.0f),
         (long)(MOTOR_LEG_TRAJECTORY_TORQUE_MAX_NM * 1000000.0f),
-        (long)(MOTOR_LEG_TRAJECTORY_TARGET_SPEED_MAX * 1000000.0f),
+        (long)(s.profile.target_speed_max * 1000000.0f),
         (long)(MOTOR_LEG_TRAJECTORY_ACTUAL_SPEED_MAX * 1000000.0f),
         (long)(s.profile.position_max * 1000000.0f),
         (long)(s.profile.target_delta_max * 1000000.0f),
@@ -2047,12 +2058,15 @@ void Communication_SendLegTrajectoryStatus(void)
     int len = snprintf(
         buf, sizeof(buf),
         "LEG_TRAJ_STATUS mode=%u reason=%u dry_ok=%u guard=%u level=%u "
-        "active=%u elapsed=%lu idx=%d detail=%ld seq=%lu hold=%u\n",
+        "active=%u plan_ref=%u match=%u elapsed=%lu idx=%d detail=%ld "
+        "seq=%lu hold=%u\n",
         (unsigned int)s.mode, (unsigned int)s.reason,
         (unsigned int)s.dry_run_passed,
         (unsigned int)Motor_Transport_IsZeroOutputOnly(),
         (unsigned int)s.profile.level,
         (unsigned int)MOTOR_LEG_TRAJECTORY_ACTIVE_ENABLED,
+        (unsigned int)s.approved_plan_available,
+        (unsigned int)s.dry_run_plan_match,
         (unsigned long)s.elapsed_ms, (int)s.stop_motor_index,
         (long)(s.stop_detail * 1000000.0f),
         (unsigned long)s.stop_sequence,
@@ -2071,7 +2085,8 @@ int Communication_TrySendLegTrajectoryHoldResult(void)
     char buf[TX_IT_BUF_SIZE];
     int len = snprintf(
         buf, sizeof(buf),
-        "LEG_TRAJ_HOLD_RESULT {\"level\":%u,\"m\":%u,\"reason\":%u,\"hold\":%u,"
+        "LEG_TRAJ_HOLD_RESULT {\"level\":%u,\"m\":%u,\"reason\":%u,"
+        "\"hold\":%u,\"match\":%u,"
         "\"out\":1,\"el\":%lu,\"samples\":[%lu,%lu],"
         "\"d\":[%ld,%ld],\"tv\":[%ld,%ld],\"av\":[%ld,%ld],"
         "\"err\":[%ld,%ld],\"tq\":[%ld,%ld],\"sat\":[%lu,%lu],"
@@ -2080,6 +2095,7 @@ int Communication_TrySendLegTrajectoryHoldResult(void)
         (unsigned int)s.profile.level,
         (unsigned int)s.mode, (unsigned int)s.reason,
         (unsigned int)s.hold_current_position,
+        (unsigned int)s.dry_run_plan_match,
         (unsigned long)s.elapsed_ms,
         (unsigned long)s.feedback_count[0],
         (unsigned long)s.feedback_count[1],
@@ -2124,7 +2140,8 @@ void Communication_SendLegTrajectoryTelemetry(void)
     if (s.mode == Motor_LegTrajectory_Stopped) {
         len = snprintf(
             buf, sizeof(buf),
-            "LEG_TRAJ_RESULT {\"level\":%u,\"m\":%u,\"reason\":%u,\"dry_ok\":%u,"
+            "LEG_TRAJ_RESULT {\"level\":%u,\"m\":%u,\"reason\":%u,"
+            "\"dry_ok\":%u,\"match\":%u,"
             "\"out\":0,\"el\":%lu,\"idx\":%d,\"detail\":%ld,"
             "\"samples\":[%lu,%lu],\"d\":[%ld,%ld],"
             "\"tv\":[%ld,%ld],\"av\":[%ld,%ld],"
@@ -2133,7 +2150,9 @@ void Communication_SendLegTrajectoryTelemetry(void)
             "\"dt_max\":[%ld,%ld]}\n",
             (unsigned int)s.profile.level,
             (unsigned int)s.mode, (unsigned int)s.reason,
-            (unsigned int)s.dry_run_passed, (unsigned long)s.elapsed_ms,
+            (unsigned int)s.dry_run_passed,
+            (unsigned int)s.dry_run_plan_match,
+            (unsigned long)s.elapsed_ms,
             (int)s.stop_motor_index,
             (long)(s.stop_detail * 1000000.0f),
             (unsigned long)s.feedback_count[0],
