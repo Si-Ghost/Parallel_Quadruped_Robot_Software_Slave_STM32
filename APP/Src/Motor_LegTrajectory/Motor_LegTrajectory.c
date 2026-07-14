@@ -97,6 +97,7 @@ static const Motor_LegTrajectoryProfile profiles[] = {
         .settle_ms = 1000U,
         .duration_ms = 5000U,
         .target_speed_max = 2.0f,
+        .actual_speed_max = 4.50f,
         .position_max = 0.75f,
         .target_delta_max = 0.55f,
     },
@@ -110,6 +111,7 @@ static const Motor_LegTrajectoryProfile profiles[] = {
         .settle_ms = 1000U,
         .duration_ms = 9000U,
         .target_speed_max = 1.10f,
+        .actual_speed_max = 4.50f,
         .position_max = 2.50f,
         .target_delta_max = 2.30f,
     },
@@ -120,6 +122,7 @@ static const Motor_LegTrajectoryProfile profiles[] = {
         .settle_ms = 1000U,
         .duration_ms = 5000U,
         .target_speed_max = 2.20f,
+        .actual_speed_max = 6.00f,
         .position_max = 2.50f,
         .target_delta_max = 2.30f,
     },
@@ -130,6 +133,7 @@ static const Motor_LegTrajectoryProfile profiles[] = {
         .settle_ms = 1000U,
         .duration_ms = 3000U,
         .target_speed_max = 4.00f,
+        .actual_speed_max = 7.00f,
         .position_max = 2.50f,
         .target_delta_max = 2.30f,
     },
@@ -160,6 +164,7 @@ static uint8_t profiles_match(const Motor_LegTrajectoryProfile *a,
           a->period_ms == b->period_ms && a->settle_ms == b->settle_ms &&
           a->duration_ms == b->duration_ms &&
           a->target_speed_max == b->target_speed_max &&
+          a->actual_speed_max == b->actual_speed_max &&
           a->position_max == b->position_max &&
           a->target_delta_max == b->target_delta_max) ? 1U : 0U;
 }
@@ -643,7 +648,7 @@ void Motor_LegTrajectory_Update(uint8_t motor_index,
   } else {
     channel->hard_overspeed_count = 0U;
   }
-  if (fabsf(rotor_velocity) > MOTOR_LEG_TRAJECTORY_ACTUAL_SPEED_MAX) {
+  if (fabsf(rotor_velocity) > control.profile.actual_speed_max) {
     if (channel->overspeed_count < 255U) ++channel->overspeed_count;
     if (channel->overspeed_count >=
         MOTOR_LEG_TRAJECTORY_OVERSPEED_SAMPLES) {

@@ -607,7 +607,7 @@ static void send_leg_trajectory_plan(uint8_t dry_run)
         (long)(MOTOR_LEG_TRAJECTORY_SPEED_KD * 1000000.0f),
         (long)(MOTOR_LEG_TRAJECTORY_TORQUE_MAX_NM * 1000000.0f),
         (long)(s.profile.target_speed_max * 1000000.0f),
-        (long)(MOTOR_LEG_TRAJECTORY_ACTUAL_SPEED_MAX * 1000000.0f),
+        (long)(s.profile.actual_speed_max * 1000000.0f),
         (long)(MOTOR_LEG_TRAJECTORY_HARD_SPEED_MAX * 1000000.0f),
         (unsigned int)MOTOR_LEG_TRAJECTORY_OVERSPEED_SAMPLES,
         (unsigned int)MOTOR_LEG_TRAJECTORY_HARD_SPEED_SAMPLES,

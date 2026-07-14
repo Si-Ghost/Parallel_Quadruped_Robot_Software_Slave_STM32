@@ -13,7 +13,6 @@
 #define MOTOR_LEG_TRAJECTORY_LEVEL_MAX            4U
 #define MOTOR_LEG_TRAJECTORY_TORQUE_MAX_NM        1.0f
 #define MOTOR_LEG_TRAJECTORY_DRY_RUN_REQUIRED       0U
-#define MOTOR_LEG_TRAJECTORY_ACTUAL_SPEED_MAX     4.5f
 #define MOTOR_LEG_TRAJECTORY_HARD_SPEED_MAX       8.0f
 #define MOTOR_LEG_TRAJECTORY_OVERSPEED_SAMPLES     20U
 #define MOTOR_LEG_TRAJECTORY_HARD_SPEED_SAMPLES     3U
@@ -36,6 +35,7 @@ typedef struct
   uint32_t settle_ms;
   uint32_t duration_ms;
   float target_speed_max;
+  float actual_speed_max;
   float position_max;
   float target_delta_max;
 } Motor_LegTrajectoryProfile;
