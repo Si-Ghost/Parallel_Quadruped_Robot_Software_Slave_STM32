@@ -69,8 +69,8 @@ volatile int main_task_start = 0;
 
 /* Transport is verified with zero output; keep PC/Web telemetry enabled. */
 #define MOTOR_TRANSPORT_DIAG_ONLY 0U
-/* The ESP32 UI has priority over verbose UART6 transport diagnostics. */
-/* Telemetry has priority over transport diagnostics on the shared USART6. */
+/* The ESP32 UI has priority over verbose motor transport diagnostics. */
+/* Telemetry has priority over diagnostics on the shared ESP32 UART. */
 #define MOTOR_TRANSPORT_RUNTIME_LOG_ENABLED 0U
 #define MOTOR_TRANSPORT_LOG_GUARD_MS 30U
 
@@ -135,7 +135,7 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
   {
     // IMU
   }
-  else if (huart->Instance == USART6)
+  else if (huart->Instance == USART1)
   {
     Communication_NotifyTxComplete();
   }
@@ -159,7 +159,7 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
   {
     // IMU
   }
-  else if (huart->Instance == USART6)
+  else if (huart->Instance == USART1)
   {
     Communication_RxCallback(huart, Size);
   }
@@ -179,7 +179,7 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
-  if (huart->Instance == USART6)
+  if (huart->Instance == USART1)
   {
     Communication_HandleUartError(huart);
     return;
@@ -228,8 +228,8 @@ int main(void)
   MX_TIM7_Init();
   /* USER CODE BEGIN 2 */
 
-  // 初始化ESP32通信（USART6 DMA接收）
-  Communication_Init(&huart6);
+  // ESP32 bridge: USART1 on PA9 TX / PA10 RX, interrupt-driven at 115200 baud.
+  Communication_Init(&huart1);
   Leg_Control_InitSafe();
 
   // 等待ESP32握手（收到第一包有效数据），LED闪烁指示等待状态
@@ -274,7 +274,7 @@ int main(void)
       uint32_t telemetry_tick = HAL_GetTick();
       if (telemetry_tick - last_motor_status_report_tick >= 1000)
       {
-        /* USART6 has one non-blocking TX buffer.  The 100 ms angle report and
+        /* The ESP32 UART has one non-blocking TX buffer. The 100 ms angle report and
            1 s status report otherwise become due in the same loop, causing
            the later status report to be dropped while TX is busy.  Give the
            safety/status frame priority and deliberately skip that one angle
@@ -289,7 +289,7 @@ int main(void)
         Communication_SendMotorAngles();
       }
 #if MOTOR_TRANSPORT_RUNTIME_LOG_ENABLED
-      /* USART6 has one non-blocking TX buffer.  Leave the angle/status frame
+      /* The ESP32 UART has one non-blocking TX buffer. Leave the angle/status frame
          time to finish before emitting the low-rate transport diagnostic. */
       if (HAL_GetTick() - last_motor_transport_report_tick >= 1000 &&
           HAL_GetTick() - last_motor_angle_report_tick >= MOTOR_TRANSPORT_LOG_GUARD_MS &&
