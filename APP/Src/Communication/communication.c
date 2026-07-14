@@ -18,7 +18,7 @@ extern volatile uint32_t last_valid_packet_tick;
 
 typedef struct
 {
-    UART_HandleTypeDef *uart;                  /* 连接 ESP32 的 UART 句柄。 */
+    UART_HandleTypeDef *uart;                  /* 连接 ESP32 的 USART6 句柄。 */
     uint8_t rx_buf[RX_BUF_SIZE];               /* 当前 HAL Receive-to-Idle 缓冲。 */
     volatile uint8_t rx_rearm_pending;         /* 挂接失败时由前台任务重试。 */
     uint8_t tx_buf[TX_IT_BUF_SIZE];            /* ESP32 回复共用的中断发送缓冲区。 */
@@ -28,7 +28,7 @@ typedef struct
 #if ESP32_LINK_ECHO_TEST
     uint32_t last_echo_tick;                   /* 回显调试的上次时间戳，用于限频。 */
 #endif
-    volatile uint32_t rx_count;                /* ESP32 UART 接收回调触发次数。 */
+    volatile uint32_t rx_count;                /* USART6 接收回调触发次数。 */
     volatile uint16_t last_rx_size;            /* 最近一次接收事件的字节数。 */
     volatile uint8_t rx_snapshot[RX_SNAPSHOT_SIZE]; /* 最近一次接收数据的前几字节快照。 */
     volatile uint16_t last_calc_crc;           /* 最近一次候选遥控帧计算得到的 CRC。 */
@@ -37,7 +37,7 @@ typedef struct
 
 static Communication_ContextTypeDef comm_ctx = {0};
 /* A control state reply is operator-facing telemetry.  Unlike periodic logs,
- * retain one pending reply when the ESP32 UART is occupied by telemetry. */
+ * retain one pending reply when USART6 is occupied by angle/status telemetry. */
 static volatile uint8_t motor_control_status_pending = 0U;
 static volatile uint8_t leg_trajectory_status_pending = 0U;
 /* Receive-to-idle can split one UART text command across callbacks.  Keep a
@@ -1111,15 +1111,15 @@ static void consume_text_command_stream(const uint8_t *data, uint16_t len)
 
 void Communication_RxCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
-    /* Only the UART selected by Communication_Init carries ESP32 traffic. */
-    if (huart == NULL || huart != comm_ctx.uart) return;
+    /* USART6 承载来自 ESP32 的遥控帧和文本调试指令。 */
+    if (huart->Instance != USART6) return;
     if (Size == 0U) {
         restart_esp32_rx();
         return;
     }
 
     /* ISR work is deliberately bounded: copy this completed chunk into a
-       small foreground queue and immediately re-arm the ESP32 UART. Parsing, PID
+       small foreground queue and immediately re-arm USART6.  Parsing, PID
        state changes, snprintf, and UART replies run later in Communication_Task. */
     comm_ctx.rx_count++;
     comm_ctx.last_rx_size = Size;
@@ -1141,7 +1141,7 @@ void Communication_RxCallback(UART_HandleTypeDef *huart, uint16_t Size)
 
 void Communication_HandleUartError(UART_HandleTypeDef *huart)
 {
-    if (huart == NULL || huart != comm_ctx.uart) return;
+    if (huart == NULL || huart->Instance != USART6) return;
     __HAL_UART_CLEAR_FLAG(huart,
                           UART_CLEAR_OREF | UART_CLEAR_NEF |
                           UART_CLEAR_PEF | UART_CLEAR_FEF);
