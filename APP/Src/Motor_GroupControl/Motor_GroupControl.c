@@ -13,14 +13,17 @@
 #define GROUP_GAIT_MAX_ZERO_EXCURSION_RAD 3.50f
 #define GROUP_TARGET_SPEED_RAD_S          0.25f
 #define GROUP_STAND_TARGET_SPEED_RAD_S    0.125f
-#define GROUP_GAIT_TARGET_SPEED_RAD_S     20.0f
+/* The doc-sized 80 mm / 40 mm reference cycloid reaches about 35.14 rotor
+ * rad/s at the 300 ms half-cycle.  Keep a small margin so the target ramp
+ * preserves the reference path instead of clipping it at the old 20 rad/s. */
+#define GROUP_GAIT_TARGET_SPEED_RAD_S     40.0f
 #define GROUP_TARGET_ERROR_RAD            0.08f
 #define GROUP_GAIT_SOFT_ERROR_RAD          0.35f
 #define GROUP_GAIT_HARD_ERROR_RAD          0.80f
 #define GROUP_GAIT_SOFT_ERROR_SAMPLES       20U
 #define GROUP_GAIT_HARD_ERROR_SAMPLES        3U
-#define GROUP_GAIT_SOFT_SPEED_RAD_S        35.0f
-#define GROUP_GAIT_HARD_SPEED_RAD_S        60.0f
+#define GROUP_GAIT_SOFT_SPEED_RAD_S        50.0f
+#define GROUP_GAIT_HARD_SPEED_RAD_S        70.0f
 #define GROUP_GAIT_SOFT_SPEED_SAMPLES      20U
 #define GROUP_GAIT_HARD_SPEED_SAMPLES       3U
 #define GROUP_GAIT_HOLD_SPEED_RAD_S          1.0f
@@ -39,9 +42,8 @@
 #define GROUP_HOLD_POSITION_KP_NM_RAD     1.00f
 #define GROUP_HOLD_ENTRY_ERROR_RAD        0.0001f
 #define GROUP_TORQUE_MAX_NM               1.50f
-/* Software_Ref allows 3.5 N.m.  Keep the formal build at the 1.0 N.m limit
- * already exercised by every no-L2 single-leg reference level. */
-#define GROUP_GAIT_TORQUE_MAX_NM          1.00f
+/* Software_Ref SPEED_MAX_OUT is the final torque command limit. */
+#define GROUP_GAIT_TORQUE_MAX_NM          3.50f
 
 typedef struct
 {

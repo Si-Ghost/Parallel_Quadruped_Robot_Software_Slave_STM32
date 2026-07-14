@@ -903,7 +903,7 @@ int Leg_Gait_StartTrotTest(void)
   char buf[160];
   int len = snprintf(buf, sizeof(buf),
                      "LEG_TROT start source=debug dir=1 lift=%d step=%d "
-                     "half_ms=%d entry_ms=%u torque_mNm=1000 "
+                     "half_ms=%d entry_ms=%u torque_mNm=3500 "
                      "path=ref_cycloid_sine\r\n",
                      (int)LEG_TROT_LIFT_HEIGHT_MM,
                      (int)(LEG_TROT_START_POINT_MM * 2.0f),
@@ -945,8 +945,8 @@ static int start_remote_trot(int8_t direction)
   int len = snprintf(buf, sizeof(buf),
                      "LEG_REMOTE gait_start dir=%d level=5 step=%d lift=%d "
                      "cycle_ms=%u entry_ms=%u pkp=35900 pkd=1000 skp=10 "
-                     "ski=0.6 skd=1.5 tmax=1.0 err_soft=0.35 "
-                     "err_hard=0.80 vt=20 vsoft=35 vhard=60 "
+                     "ski=0.6 skd=1.5 tmax=3.5 err_soft=0.35 "
+                     "err_hard=0.80 vt=40 vsoft=50 vhard=70 "
                      "path=ref_cycloid_sine\r\n",
                      (int)direction,
                      (int)(LEG_TROT_START_POINT_MM * 2.0f),
