@@ -1526,10 +1526,12 @@ void Leg_Control_Service(uint32_t now_ms)
     if (stop_reason != Motor_LegTrajectory_StopNone) {
       Motor_LegTrajectory_Stop(stop_reason, stop_motor, stop_detail);
     } else if (leg_trajectory.mode == Motor_LegTrajectory_DryRun &&
-               leg_trajectory.elapsed_ms >= MOTOR_LEG_TRAJECTORY_DURATION_MS) {
+               leg_trajectory.elapsed_ms >=
+                   leg_trajectory.profile.duration_ms) {
       Motor_LegTrajectory_Stop(Motor_LegTrajectory_StopComplete, -1, 0.0f);
     } else if (leg_trajectory.mode == Motor_LegTrajectory_Active &&
-               leg_trajectory.elapsed_ms >= MOTOR_LEG_TRAJECTORY_DURATION_MS) {
+               leg_trajectory.elapsed_ms >=
+                   leg_trajectory.profile.duration_ms) {
       uint32_t primask = __get_PRIMASK();
       __disable_irq();
       int held = Motor_LegTrajectory_EnterHold(
@@ -1675,7 +1677,7 @@ int Leg_Control_ArmAllZero(void)
   return Leg_Control_ArmAllOffset(0.0f);
 }
 
-int Leg_Control_ArmRfLegTrajectory(void)
+int Leg_Control_ArmRfLegTrajectory(uint8_t level)
 {
   Motor_StateSnapshotTypeDef states[2];
   Motor_LegTrajectorySnapshot trajectory;
@@ -1691,7 +1693,7 @@ int Leg_Control_ArmRfLegTrajectory(void)
             &states[motor]))
       return 0;
   }
-  return Motor_LegTrajectory_Arm(states, HAL_GetTick());
+  return Motor_LegTrajectory_Arm(states, level, HAL_GetTick());
 }
 
 static int start_rf_leg_trajectory(uint8_t dry_run)

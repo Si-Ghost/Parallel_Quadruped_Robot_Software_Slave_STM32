@@ -57,6 +57,7 @@ typedef struct
   uint8_t dry_run_passed;
   uint8_t trajectory_complete;
   uint8_t hold_current_position;
+  Motor_LegTrajectoryProfile profile;
   int8_t stop_motor_index;
   float stop_detail;
   uint32_t stop_sequence;
@@ -71,6 +72,41 @@ typedef struct
 } Motor_LegTrajectoryContext;
 
 static Motor_LegTrajectoryContext control;
+static uint8_t dry_run_pass_mask;
+
+static const Motor_LegTrajectoryProfile profiles[] = {
+    {
+        .level = 1U,
+        .lift_mm = 5.0f,
+        .period_ms = 4000U,
+        .settle_ms = 1000U,
+        .duration_ms = 5000U,
+        .position_max = 0.75f,
+        .target_delta_max = 0.55f,
+    },
+    {
+        /* The 40 mm amplitude comes from the reference project's fast gait.
+         * The 6 s period is deliberately much slower than its 350 ms cycle:
+         * this profile changes observation range without simultaneously
+         * escalating speed or adding the reference +/-75 mm fore-aft step. */
+        .level = 2U,
+        .lift_mm = 40.0f,
+        .period_ms = 6000U,
+        .settle_ms = 1000U,
+        .duration_ms = 7000U,
+        .position_max = 2.60f,
+        .target_delta_max = 2.40f,
+    },
+};
+
+static int get_profile(uint8_t level, Motor_LegTrajectoryProfile *profile)
+{
+  if (profile == NULL || level < MOTOR_LEG_TRAJECTORY_LEVEL_MIN ||
+      level > MOTOR_LEG_TRAJECTORY_LEVEL_MAX)
+    return 0;
+  *profile = profiles[level - MOTOR_LEG_TRAJECTORY_LEVEL_MIN];
+  return profile->level == level;
+}
 
 static float clamp_symmetric(float value, float limit)
 {
@@ -124,6 +160,8 @@ static void reset_channel_controller(Motor_LegTrajectoryChannel *channel)
 void Motor_LegTrajectory_Init(void)
 {
   memset(&control, 0, sizeof(control));
+  (void)get_profile(MOTOR_LEG_TRAJECTORY_LEVEL_MIN, &control.profile);
+  dry_run_pass_mask = 0U;
   control.mode = Motor_LegTrajectory_Disabled;
   control.stop_motor_index = -1;
 }
@@ -147,20 +185,23 @@ static int compute_rotor_targets(const Leg_PointTypeDef *foot,
         LEG_TRAJ_REDUCTION_RATIO;
     if (!isfinite(rotor_targets[motor]) ||
         fabsf(rotor_targets[motor] - channel->arm_position) >
-            MOTOR_LEG_TRAJECTORY_TARGET_DELTA_MAX)
+            control.profile.target_delta_max)
       return 0;
   }
   return 1;
 }
 
 int Motor_LegTrajectory_Arm(const Motor_StateSnapshotTypeDef states[2],
+                            uint8_t level,
                             uint32_t now_ms)
 {
-  if (states == NULL) return 0;
-  uint8_t dry_run_passed = control.dry_run_passed;
+  Motor_LegTrajectoryProfile profile;
+  if (states == NULL || !get_profile(level, &profile)) return 0;
   uint32_t stop_sequence = control.stop_sequence;
   memset(&control, 0, sizeof(control));
-  control.dry_run_passed = dry_run_passed;
+  control.profile = profile;
+  control.dry_run_passed =
+      (dry_run_pass_mask & (uint8_t)(1U << level)) != 0U ? 1U : 0U;
   control.stop_sequence = stop_sequence;
   control.stop_motor_index = -1;
 
@@ -219,7 +260,7 @@ int Motor_LegTrajectory_Arm(const Motor_StateSnapshotTypeDef states[2],
 
   Leg_PointTypeDef peak_foot = {
       .x = control.base_foot.x,
-      .y = control.base_foot.y - MOTOR_LEG_TRAJECTORY_LIFT_MM,
+      .y = control.base_foot.y - control.profile.lift_mm,
   };
   float peak_targets[LEG_TRAJ_MOTOR_COUNT];
   if (!compute_rotor_targets(&peak_foot, peak_targets)) {
@@ -259,7 +300,10 @@ int Motor_LegTrajectory_Start(uint8_t dry_run, uint32_t now_ms)
   control.target_foot = control.base_foot;
   control.stop_motor_index = -1;
   control.stop_detail = 0.0f;
-  if (dry_run != 0U) control.dry_run_passed = 0U;
+  if (dry_run != 0U) {
+    dry_run_pass_mask &= (uint8_t)~(1U << control.profile.level);
+    control.dry_run_passed = 0U;
+  }
   for (uint8_t motor = 0U; motor < LEG_TRAJ_MOTOR_COUNT; ++motor) {
     Motor_LegTrajectoryChannel *channel = &control.channel[motor];
     channel->target_position = channel->arm_position;
@@ -358,19 +402,19 @@ static int update_trajectory_targets(uint32_t now_ms)
   control.elapsed_ms = now_ms - control.plan_start_ms;
 
   float shape = 0.0f;
-  if (control.elapsed_ms >= MOTOR_LEG_TRAJECTORY_PERIOD_MS) {
+  if (control.elapsed_ms >= control.profile.period_ms) {
     control.phase = 1.0f;
     control.trajectory_complete = 1U;
   } else {
     control.phase = (float)control.elapsed_ms /
-                    (float)MOTOR_LEG_TRAJECTORY_PERIOD_MS;
+                    (float)control.profile.period_ms;
     shape = 0.5f - 0.5f * cosf(LEG_TRAJ_TWO_PI * control.phase);
     control.trajectory_complete = 0U;
   }
 
   control.target_foot.x = control.base_foot.x;
   control.target_foot.y = control.base_foot.y -
-                          MOTOR_LEG_TRAJECTORY_LIFT_MM * shape;
+                          control.profile.lift_mm * shape;
   float targets[LEG_TRAJ_MOTOR_COUNT];
   if (!compute_rotor_targets(&control.target_foot, targets)) {
     Motor_LegTrajectory_Stop(Motor_LegTrajectory_StopIk, -1,
@@ -446,7 +490,7 @@ void Motor_LegTrajectory_Update(uint8_t motor_index,
   }
 
   if (fabsf(rotor_position - channel->arm_position) >
-      MOTOR_LEG_TRAJECTORY_POSITION_MAX) {
+      control.profile.position_max) {
     Motor_LegTrajectory_Stop(Motor_LegTrajectory_StopPosition,
                              (int8_t)motor_index,
                              rotor_position - channel->arm_position);
@@ -532,8 +576,10 @@ void Motor_LegTrajectory_Stop(Motor_LegTrajectoryStopReason reason,
   }
 
   if (reason == Motor_LegTrajectory_StopComplete &&
-      previous_mode == Motor_LegTrajectory_DryRun)
+      previous_mode == Motor_LegTrajectory_DryRun) {
+    dry_run_pass_mask |= (uint8_t)(1U << control.profile.level);
     control.dry_run_passed = 1U;
+  }
   control.mode = Motor_LegTrajectory_Stopped;
   control.reason = reason;
   control.stop_motor_index = motor_index;
@@ -580,6 +626,7 @@ void Motor_LegTrajectory_GetSnapshot(Motor_LegTrajectorySnapshot *snapshot)
   snapshot->dry_run_passed = control.dry_run_passed;
   snapshot->trajectory_complete = control.trajectory_complete;
   snapshot->hold_current_position = control.hold_current_position;
+  snapshot->profile = control.profile;
   snapshot->stop_motor_index = control.stop_motor_index;
   snapshot->stop_detail = control.stop_detail;
   snapshot->stop_sequence = control.stop_sequence;

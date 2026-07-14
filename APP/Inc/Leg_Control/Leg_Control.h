@@ -99,7 +99,7 @@ int  Leg_Control_StartStaticHoldDryRun(uint8_t motor_index);
 int  Leg_Control_StartStaticHoldActive(uint8_t motor_index);
 int  Leg_Control_StartSingleMotorTrajectoryDryRun(uint8_t motor_index);
 int  Leg_Control_StartSingleMotorTrajectoryActive(uint8_t motor_index);
-int  Leg_Control_ArmRfLegTrajectory(void);
+int  Leg_Control_ArmRfLegTrajectory(uint8_t level);
 int  Leg_Control_StartRfLegTrajectoryDryRun(void);
 int  Leg_Control_StartRfLegTrajectoryActive(void);
 int  Leg_Control_HoldRfLegTrajectory(void);

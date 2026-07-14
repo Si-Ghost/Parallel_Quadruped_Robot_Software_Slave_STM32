@@ -8,17 +8,12 @@
 
 #define MOTOR_LEG_TRAJECTORY_LEG_INDEX          1U
 #define MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX  2U
-#define MOTOR_LEG_TRAJECTORY_TEST_LEVEL          1U
 #define MOTOR_LEG_TRAJECTORY_ACTIVE_ENABLED      1U
-#define MOTOR_LEG_TRAJECTORY_LIFT_MM             5.0f
-#define MOTOR_LEG_TRAJECTORY_PERIOD_MS            4000U
-#define MOTOR_LEG_TRAJECTORY_SETTLE_MS            1000U
-#define MOTOR_LEG_TRAJECTORY_DURATION_MS          5000U
+#define MOTOR_LEG_TRAJECTORY_LEVEL_MIN            1U
+#define MOTOR_LEG_TRAJECTORY_LEVEL_MAX            2U
 #define MOTOR_LEG_TRAJECTORY_TORQUE_MAX_NM        1.0f
 #define MOTOR_LEG_TRAJECTORY_TARGET_SPEED_MAX     2.0f
 #define MOTOR_LEG_TRAJECTORY_ACTUAL_SPEED_MAX     3.0f
-#define MOTOR_LEG_TRAJECTORY_POSITION_MAX         0.75f
-#define MOTOR_LEG_TRAJECTORY_TARGET_DELTA_MAX     0.55f
 #define MOTOR_LEG_TRAJECTORY_TRACKING_ERROR_MAX    0.35f
 #define MOTOR_LEG_TRAJECTORY_POSITION_KP          35.9f
 #define MOTOR_LEG_TRAJECTORY_POSITION_KD           1.0f
@@ -26,6 +21,17 @@
 #define MOTOR_LEG_TRAJECTORY_SPEED_KI              0.0006f
 #define MOTOR_LEG_TRAJECTORY_SPEED_KD              0.0015f
 #define MOTOR_LEG_TRAJECTORY_INTEGRAL_MAX           0.20f
+
+typedef struct
+{
+  uint8_t level;
+  float lift_mm;
+  uint32_t period_ms;
+  uint32_t settle_ms;
+  uint32_t duration_ms;
+  float position_max;
+  float target_delta_max;
+} Motor_LegTrajectoryProfile;
 
 typedef enum
 {
@@ -63,6 +69,7 @@ typedef struct
   uint8_t dry_run_passed;
   uint8_t trajectory_complete;
   uint8_t hold_current_position;
+  Motor_LegTrajectoryProfile profile;
   int8_t stop_motor_index;
   float stop_detail;
   uint32_t stop_sequence;
@@ -105,6 +112,7 @@ typedef struct
 
 void Motor_LegTrajectory_Init(void);
 int Motor_LegTrajectory_Arm(const Motor_StateSnapshotTypeDef states[2],
+                            uint8_t level,
                             uint32_t now_ms);
 int Motor_LegTrajectory_Start(uint8_t dry_run, uint32_t now_ms);
 int Motor_LegTrajectory_EnterHold(Motor_LegTrajectoryStopReason reason,
