@@ -80,6 +80,8 @@ int Motor_GroupControl_Start(uint32_t now_ms);
 int Motor_GroupControl_SetGaitTargets(const float target_positions[8]);
 int Motor_GroupControl_ReturnGaitToZero(void);
 int Motor_GroupControl_FinishGaitHold(void);
+int Motor_GroupControl_TakeGaitReturnRequest(int8_t *motor_index,
+                                             float *velocity);
 void Motor_GroupControl_Update(uint8_t motor_index,
                                float rotor_position,
                                float rotor_velocity,

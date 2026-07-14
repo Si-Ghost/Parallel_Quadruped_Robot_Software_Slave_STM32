@@ -9,14 +9,15 @@
 #define GROUP_MAX_TARGET_DELTA_RAD        2.60f
 #define GROUP_OFFSET_START_ZERO_RAD       0.50f
 #define GROUP_MAX_ZERO_EXCURSION_RAD      2.25f
+#define GROUP_ZERO_RETURN_EXCURSION_RAD   3.50f
 #define GROUP_GAIT_MAX_ZERO_EXCURSION_RAD 3.50f
 #define GROUP_TARGET_SPEED_RAD_S          0.25f
 #define GROUP_STAND_TARGET_SPEED_RAD_S    0.125f
-#define GROUP_GAIT_TARGET_SPEED_RAD_S     35.0f
+#define GROUP_GAIT_TARGET_SPEED_RAD_S     20.0f
 #define GROUP_TARGET_ERROR_RAD            0.08f
 #define GROUP_GAIT_ERROR_LIMIT_RAD         0.35f
 #define GROUP_GAIT_SOFT_SPEED_RAD_S        35.0f
-#define GROUP_GAIT_HARD_SPEED_RAD_S        45.0f
+#define GROUP_GAIT_HARD_SPEED_RAD_S        60.0f
 #define GROUP_GAIT_SOFT_SPEED_SAMPLES      20U
 #define GROUP_GAIT_HARD_SPEED_SAMPLES       3U
 #define GROUP_GAIT_HOLD_SPEED_RAD_S          1.0f
@@ -35,7 +36,7 @@
 #define GROUP_HOLD_POSITION_KP_NM_RAD     1.00f
 #define GROUP_HOLD_ENTRY_ERROR_RAD        0.0001f
 #define GROUP_TORQUE_MAX_NM               1.50f
-#define GROUP_GAIT_TORQUE_MAX_NM          1.00f
+#define GROUP_GAIT_TORQUE_MAX_NM          0.25f
 
 typedef struct
 {
@@ -72,6 +73,9 @@ static float pending_group_target_offset;
 static int8_t stop_motor_index;
 static float stop_detail;
 static uint32_t stop_sequence;
+static uint8_t gait_return_requested;
+static int8_t gait_return_motor_index;
+static float gait_return_velocity;
 
 static float clamp_symmetric(float value, float limit)
 {
@@ -98,6 +102,9 @@ void Motor_GroupControl_Init(void)
   pending_group_target_offset = 0.0f;
   stop_motor_index = -1;
   stop_detail = 0.0f;
+  gait_return_requested = 0U;
+  gait_return_motor_index = -1;
+  gait_return_velocity = 0.0f;
 }
 
 void Motor_GroupControl_Stop(Motor_GroupStopReason reason)
@@ -226,8 +233,10 @@ int Motor_GroupControl_ArmOffsets(const Motor_StateSnapshotTypeDef states[8],
     }
     new_targets[i] = zero_position + target_offset;
     float delta = new_targets[i] - arm_positions[i];
-    if (!isfinite(new_targets[i]) ||
-        fabsf(delta) > GROUP_MAX_TARGET_DELTA_RAD) {
+    float max_target_delta = fabsf(target_offset) <= 0.0001f
+                                 ? GROUP_ZERO_RETURN_EXCURSION_RAD
+                                 : GROUP_MAX_TARGET_DELTA_RAD;
+    if (!isfinite(new_targets[i]) || fabsf(delta) > max_target_delta) {
       if (active_retarget == 0U)
         Motor_GroupControl_StopWithContext(Motor_Group_StopPositionLimit,
                                            (int8_t)i, delta);
@@ -362,6 +371,20 @@ int Motor_GroupControl_FinishGaitHold(void)
   }
   group_profile = Motor_Group_ProfileUniformOffset;
   group_target_offset = 0.0f;
+  gait_return_requested = 0U;
+  return 1;
+}
+
+int Motor_GroupControl_TakeGaitReturnRequest(int8_t *motor_index,
+                                             float *velocity)
+{
+  if (group_mode != Motor_Group_Active ||
+      group_profile != Motor_Group_ProfileGait ||
+      gait_return_requested == 0U)
+    return 0;
+  if (motor_index != NULL) *motor_index = gait_return_motor_index;
+  if (velocity != NULL) *velocity = gait_return_velocity;
+  gait_return_requested = 0U;
   return 1;
 }
 
@@ -397,7 +420,10 @@ void Motor_GroupControl_Update(uint8_t motor_index,
   float zero_excursion_limit =
       group_profile == Motor_Group_ProfileGait
           ? GROUP_GAIT_MAX_ZERO_EXCURSION_RAD
-          : GROUP_MAX_ZERO_EXCURSION_RAD;
+          : group_profile == Motor_Group_ProfileUniformOffset &&
+                    fabsf(group_target_offset) <= 0.0001f
+                ? GROUP_ZERO_RETURN_EXCURSION_RAD
+                : GROUP_MAX_ZERO_EXCURSION_RAD;
   if (fabsf(rotor_position - channel->zero_position) >
       zero_excursion_limit) {
     Motor_GroupControl_StopWithContext(
@@ -432,13 +458,22 @@ void Motor_GroupControl_Update(uint8_t motor_index,
             ? (uint8_t)(channel->gait_soft_speed_samples + 1U)
             : 0U;
     if (channel->gait_hard_speed_samples >=
-            GROUP_GAIT_HARD_SPEED_SAMPLES ||
-        channel->gait_soft_speed_samples >=
-            GROUP_GAIT_SOFT_SPEED_SAMPLES) {
+        GROUP_GAIT_HARD_SPEED_SAMPLES) {
       Motor_GroupControl_StopWithContext(Motor_Group_StopController,
                                          (int8_t)motor_index,
                                          rotor_velocity);
       return;
+    }
+    if (channel->gait_soft_speed_samples >=
+        GROUP_GAIT_SOFT_SPEED_SAMPLES) {
+      for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i)
+        channels[i].target_position = channels[i].zero_position;
+      if (gait_return_requested == 0U) {
+        gait_return_requested = 1U;
+        gait_return_motor_index = (int8_t)motor_index;
+        gait_return_velocity = rotor_velocity;
+      }
+      channel->gait_soft_speed_samples = 0U;
     }
   } else {
     channel->gait_soft_speed_samples = 0U;

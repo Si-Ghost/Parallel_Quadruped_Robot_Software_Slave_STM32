@@ -26,7 +26,7 @@ extern RC_DataTypeDef rc_data;
 #define LEG_TROT_START_POINT_MM     40.0f
 #define LEG_TROT_STEP_RATE_MS       300U
 #define LEG_TROT_STEP_CYCLE_MS      600U
-#define LEG_TROT_ENTRY_MS           300U
+#define LEG_TROT_ENTRY_MS           600U
 #define LEG_TROT_RETURN_MIN_MS      200U
 #define LEG_TROT_LOG_PERIOD_MS      100U
 #define LEG_TROT_BASE_X_MM            0.0f
@@ -547,6 +547,45 @@ void Leg_Gait_ServiceTrot(void)
     return;
   }
 
+  {
+    int8_t guard_motor = -1;
+    float guard_velocity = 0.0f;
+    uint8_t already_returning = trot.stage == 3U ? 1U : 0U;
+    uint32_t guard_primask = __get_PRIMASK();
+    __disable_irq();
+    int guard_return = Motor_GroupControl_TakeGaitReturnRequest(
+        &guard_motor, &guard_velocity);
+    int return_started = guard_return
+                             ? already_returning != 0U
+                                   ? 1
+                                   : Motor_GroupControl_ReturnGaitToZero()
+                             : 0;
+    if (guard_primask == 0U) __enable_irq();
+    if (guard_return) {
+      if (!return_started) {
+        Communication_SendString("LEG_TROT abort guard_return_zero\r\n");
+        trot.active = 0U;
+        remote_armed = 0U;
+        return;
+      }
+      if (already_returning == 0U) {
+        trot.stage = 3U;
+        trot.stage_start_tick = now;
+      }
+      trot.stop_requested = 1U;
+      remote_armed = 0U;
+      char guard_log[144];
+      int len = snprintf(
+          guard_log, sizeof(guard_log),
+          "LEG_TROT_GUARD speed_soft idx=%d velocity_urad_s=%ld "
+          "action=return_zero rearm=stand\r\n",
+          (int)guard_motor, (long)(guard_velocity * 1000000.0f));
+      if (len > 0 && len < (int)sizeof(guard_log))
+        Communication_SendString(guard_log);
+      return;
+    }
+  }
+
   if (trot.stage == 3U) {
     uint32_t finish_primask = __get_PRIMASK();
     __disable_irq();
@@ -861,10 +900,11 @@ int Leg_Gait_StartTrotTest(void)
   char buf[160];
   int len = snprintf(buf, sizeof(buf),
                      "LEG_TROT start source=debug dir=1 lift=%d step=%d "
-                     "half_ms=%d torque_mNm=1000\r\n",
+                     "half_ms=%d entry_ms=%u torque_mNm=250\r\n",
                      (int)LEG_TROT_LIFT_HEIGHT_MM,
                      (int)(LEG_TROT_START_POINT_MM * 2.0f),
-                     (int)LEG_TROT_STEP_RATE_MS);
+                     (int)LEG_TROT_STEP_RATE_MS,
+                     (unsigned int)LEG_TROT_ENTRY_MS);
   if (len > 0 && len < (int)sizeof(buf)) Communication_SendString(buf);
   return 1;
 }
@@ -900,12 +940,14 @@ static int start_remote_trot(int8_t direction)
   char buf[256];
   int len = snprintf(buf, sizeof(buf),
                      "LEG_REMOTE gait_start dir=%d level=5 step=%d lift=%d "
-                     "cycle_ms=%u pkp=35900 pkd=1000 skp=10 ski=0.6 "
-                     "skd=1.5 tmax=1.0 err=0.35 vsoft=35 vhard=45\r\n",
+                     "cycle_ms=%u entry_ms=%u pkp=35900 pkd=1000 skp=10 "
+                     "ski=0.6 skd=1.5 tmax=0.25 err=0.35 vt=20 "
+                     "vsoft=35 vhard=60\r\n",
                      (int)direction,
                      (int)(LEG_TROT_START_POINT_MM * 2.0f),
                      (int)LEG_TROT_LIFT_HEIGHT_MM,
-                     (unsigned int)LEG_TROT_STEP_CYCLE_MS);
+                     (unsigned int)LEG_TROT_STEP_CYCLE_MS,
+                     (unsigned int)LEG_TROT_ENTRY_MS);
   if (len > 0 && len < (int)sizeof(buf)) Communication_SendString(buf);
   return 1;
 }
