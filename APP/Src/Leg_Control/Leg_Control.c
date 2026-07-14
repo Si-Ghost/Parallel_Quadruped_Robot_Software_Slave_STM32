@@ -354,11 +354,34 @@ static void transport_feedback_timeout(uint8_t leg, uint8_t motor, uint32_t time
   refresh_leg_online_state(leg);
   if ((timestamp - state->io_error_last_log_tick) >= LEG_IO_ERROR_LOG_PERIOD_MS) {
     state->io_error_last_log_tick = timestamp;
-    char buf[96];
-    int len = snprintf(buf, sizeof(buf),
-                       "MOTOR_OFFLINE idx=%u age_ms=%lu last_rx=%lu err=%lu\r\n",
-                       (unsigned int)index, (unsigned long)feedback_age_ms,
-                       (unsigned long)state->timestamp, (unsigned long)state->error_count);
+    static const char *const channel_name[4] = {"LF", "RF", "LB", "RB"};
+    Motor_TransportStats stats;
+    memset(&stats, 0, sizeof(stats));
+    (void)Motor_Transport_GetStats(leg, &stats);
+    char buf[384];
+    int len = snprintf(
+        buf, sizeof(buf),
+        "MOTOR_OFFLINE idx=%u age_ms=%lu last_rx=%lu err=%lu "
+        "ch=%s tx=%lu/%lu rx=%lu/%lu miss=%lu/%lu busy=%lu txe=%lu "
+        "crc=%lu id=%lu rs=%lu uart=%lu ub=%lX rst=%lu "
+        "dma=%u%u%u rem=%u ring=%u/%u ov=%lu\r\n",
+        (unsigned int)index, (unsigned long)feedback_age_ms,
+        (unsigned long)state->timestamp, (unsigned long)state->error_count,
+        channel_name[leg],
+        (unsigned long)stats.tx_count[0], (unsigned long)stats.tx_count[1],
+        (unsigned long)stats.rx_count[0], (unsigned long)stats.rx_count[1],
+        (unsigned long)stats.miss_count[0], (unsigned long)stats.miss_count[1],
+        (unsigned long)stats.busy_count, (unsigned long)stats.tx_error_count,
+        (unsigned long)stats.crc_error_count, (unsigned long)stats.id_error_count,
+        (unsigned long)stats.resync_count, (unsigned long)stats.uart_error_count,
+        (unsigned long)stats.uart_error_bits, (unsigned long)stats.restart_count,
+        (unsigned int)stats.rx_dma_enabled,
+        (unsigned int)stats.rx_dma_circular,
+        (unsigned int)stats.uart_rx_dma_enabled,
+        (unsigned int)stats.rx_dma_remaining,
+        (unsigned int)stats.rx_read_index,
+        (unsigned int)stats.rx_write_index,
+        (unsigned long)stats.schedule_overrun_count);
     if (len > 0 && len < (int)sizeof(buf))
       Communication_SendString(buf);
   }
