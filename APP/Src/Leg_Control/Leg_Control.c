@@ -210,10 +210,10 @@ void Leg_Control_GetControlSnapshot(Motor_ControlSnapshotTypeDef *snapshot)
 }
 
 static const float default_rotor_zero_offset[4][2] = {
-  /* LF: ID0, ID1 */ { 4.4221f, 5.5321f},
-  /* RF: ID0, ID1 */ { 1.3647f, 4.5657f},
-  /* LB: ID0, ID1 */ { 0.0832f, 3.3468f},
-  /* RB: ID0, ID1 */ {-0.9794f, 3.3552f},
+  /* LF: ID0, ID1 */ {3.5261f, 4.4380f},
+  /* RF: ID0, ID1 */ {0.4491f, 3.5184f},
+  /* LB: ID0, ID1 */ {5.2506f, 2.3796f},
+  /* RB: ID0, ID1 */ {4.5151f, 2.4417f},
 };
 
 static const float default_motor_direction[4][2] = {
