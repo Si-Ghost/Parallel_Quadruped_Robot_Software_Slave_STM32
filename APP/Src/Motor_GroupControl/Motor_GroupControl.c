@@ -475,7 +475,8 @@ void Motor_GroupControl_Update(uint8_t motor_index,
             ? (uint8_t)(channel->gait_hard_speed_samples + 1U)
             : 0U;
     channel->gait_soft_speed_samples =
-        abs_velocity > GROUP_GAIT_SOFT_SPEED_RAD_S
+        (gait_returning == 0U &&
+         abs_velocity > GROUP_GAIT_SOFT_SPEED_RAD_S)
             ? (uint8_t)(channel->gait_soft_speed_samples + 1U)
             : 0U;
     if (channel->gait_hard_speed_samples >=
@@ -525,7 +526,7 @@ void Motor_GroupControl_Update(uint8_t motor_index,
             ? (uint8_t)(channel->gait_hard_error_samples + 1U)
             : 0U;
     channel->gait_soft_error_samples =
-        abs_error > GROUP_GAIT_SOFT_ERROR_RAD
+        (gait_returning == 0U && abs_error > GROUP_GAIT_SOFT_ERROR_RAD)
             ? (uint8_t)(channel->gait_soft_error_samples + 1U)
             : 0U;
     if (channel->gait_hard_error_samples >=
