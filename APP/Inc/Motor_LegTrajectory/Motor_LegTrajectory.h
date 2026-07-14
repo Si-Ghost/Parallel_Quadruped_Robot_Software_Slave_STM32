@@ -8,6 +8,8 @@
 
 #define MOTOR_LEG_TRAJECTORY_LEG_INDEX          1U
 #define MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX  2U
+#define MOTOR_LEG_TRAJECTORY_TEST_LEVEL          1U
+#define MOTOR_LEG_TRAJECTORY_ACTIVE_ENABLED      0U
 #define MOTOR_LEG_TRAJECTORY_LIFT_MM             5.0f
 #define MOTOR_LEG_TRAJECTORY_PERIOD_MS            4000U
 #define MOTOR_LEG_TRAJECTORY_SETTLE_MS            1000U
@@ -68,6 +70,13 @@ typedef struct
   Leg_PointTypeDef target_foot;
   float peak_target_delta[2];
   float arm_position[2];
+  float zero_position[2];
+  float direction[2];
+  float arm_joint_position[2];
+  float base_joint_position[2];
+  int8_t arm_temperature_c[2];
+  uint8_t arm_zero_checked[2];
+  uint32_t arm_feedback_age_ms[2];
   float target_position[2];
   float actual_position[2];
   float position_error[2];
@@ -82,6 +91,14 @@ typedef struct
   uint8_t torque_limited[2];
   uint8_t overspeed_count[2];
   uint8_t tracking_error_count[2];
+  uint32_t feedback_count[2];
+  uint32_t torque_limit_count[2];
+  float peak_abs_target_velocity[2];
+  float peak_abs_actual_velocity[2];
+  float peak_abs_position_error[2];
+  float peak_abs_torque[2];
+  float min_dt_ms[2];
+  float max_dt_ms[2];
 } Motor_LegTrajectorySnapshot;
 
 void Motor_LegTrajectory_Init(void);

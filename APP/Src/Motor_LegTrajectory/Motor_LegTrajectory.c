@@ -14,8 +14,13 @@
 typedef struct
 {
   float arm_position;
+  float zero_position;
   float direction;
+  float arm_joint_position;
   float base_joint_position;
+  int8_t arm_temperature_c;
+  uint8_t arm_zero_checked;
+  uint32_t arm_feedback_age_ms;
   float target_position;
   float previous_target_position;
   float actual_position;
@@ -33,6 +38,14 @@ typedef struct
   uint8_t torque_limited;
   uint8_t overspeed_count;
   uint8_t tracking_error_count;
+  uint32_t feedback_count;
+  uint32_t torque_limit_count;
+  float peak_abs_target_velocity;
+  float peak_abs_actual_velocity;
+  float peak_abs_position_error;
+  float peak_abs_torque;
+  float min_dt_ms;
+  float max_dt_ms;
   uint32_t previous_feedback_timestamp;
 } Motor_LegTrajectoryChannel;
 
@@ -63,6 +76,12 @@ static float clamp_symmetric(float value, float limit)
   if (value > limit) return limit;
   if (value < -limit) return -limit;
   return value;
+}
+
+static float max_abs(float current, float value)
+{
+  float magnitude = fabsf(value);
+  return magnitude > current ? magnitude : current;
 }
 
 static float normalized_direction(float direction)
@@ -148,7 +167,12 @@ int Motor_LegTrajectory_Arm(const Motor_StateSnapshotTypeDef states[2],
     }
     Motor_LegTrajectoryChannel *channel = &control.channel[motor];
     channel->arm_position = state->rotor_position;
+    channel->zero_position = state->zero_rotor_position;
     channel->direction = normalized_direction(state->direction);
+    channel->arm_joint_position = state->joint_position;
+    channel->arm_temperature_c = state->temperature_c;
+    channel->arm_zero_checked = state->zero_checked;
+    channel->arm_feedback_age_ms = now_ms - state->timestamp;
     channel->actual_position = state->rotor_position;
     channel->target_position = state->rotor_position;
     channel->previous_target_position = state->rotor_position;
@@ -190,6 +214,7 @@ int Motor_LegTrajectory_Arm(const Motor_StateSnapshotTypeDef states[2],
 int Motor_LegTrajectory_Start(uint8_t dry_run, uint32_t now_ms)
 {
   if (control.mode != Motor_LegTrajectory_Armed || dry_run > 1U ||
+      (dry_run == 0U && MOTOR_LEG_TRAJECTORY_ACTIVE_ENABLED == 0U) ||
       (dry_run == 0U && control.dry_run_passed == 0U)) {
     Motor_LegTrajectory_Stop(Motor_LegTrajectory_StopInvalidCommand, -1,
                              (float)dry_run);
@@ -226,6 +251,14 @@ int Motor_LegTrajectory_Start(uint8_t dry_run, uint32_t now_ms)
     channel->torque_limited = 0U;
     channel->overspeed_count = 0U;
     channel->tracking_error_count = 0U;
+    channel->feedback_count = 0U;
+    channel->torque_limit_count = 0U;
+    channel->peak_abs_target_velocity = 0.0f;
+    channel->peak_abs_actual_velocity = 0.0f;
+    channel->peak_abs_position_error = 0.0f;
+    channel->peak_abs_torque = 0.0f;
+    channel->min_dt_ms = 0.0f;
+    channel->max_dt_ms = 0.0f;
     channel->previous_feedback_timestamp = 0U;
   }
   return 1;
@@ -267,6 +300,8 @@ static int update_trajectory_targets(uint32_t now_ms)
           (channel->target_position - channel->previous_target_position) /
               target_dt_s,
           MOTOR_LEG_TRAJECTORY_TARGET_SPEED_MAX);
+      channel->peak_abs_target_velocity = max_abs(
+          channel->peak_abs_target_velocity, channel->target_velocity);
       channel->previous_target_position = channel->target_position;
     }
   }
@@ -298,6 +333,11 @@ void Motor_LegTrajectory_Update(uint8_t motor_index,
   channel->actual_position = rotor_position;
   channel->raw_velocity = rotor_velocity;
   channel->position_error = channel->target_position - rotor_position;
+  ++channel->feedback_count;
+  channel->peak_abs_actual_velocity = max_abs(
+      channel->peak_abs_actual_velocity, rotor_velocity);
+  channel->peak_abs_position_error = max_abs(
+      channel->peak_abs_position_error, channel->position_error);
 
   if (control.mode == Motor_LegTrajectory_Active &&
       fabsf(channel->position_error) >
@@ -347,6 +387,10 @@ void Motor_LegTrajectory_Update(uint8_t motor_index,
                              (int8_t)motor_index, dt * 1000.0f);
     return;
   }
+  float dt_ms = dt * 1000.0f;
+  if (channel->min_dt_ms == 0.0f || dt_ms < channel->min_dt_ms)
+    channel->min_dt_ms = dt_ms;
+  if (dt_ms > channel->max_dt_ms) channel->max_dt_ms = dt_ms;
 
   float position_delta = channel->position_error -
                          channel->previous_position_error;
@@ -371,6 +415,9 @@ void Motor_LegTrajectory_Update(uint8_t motor_index,
                                     MOTOR_LEG_TRAJECTORY_TORQUE_MAX_NM);
   channel->torque_limited =
       fabsf(calculated_torque - channel->torque) > 0.000001f ? 1U : 0U;
+  if (channel->torque_limited != 0U) ++channel->torque_limit_count;
+  channel->peak_abs_torque = max_abs(channel->peak_abs_torque,
+                                     channel->torque);
 }
 
 void Motor_LegTrajectory_Stop(Motor_LegTrajectoryStopReason reason,
@@ -452,6 +499,13 @@ void Motor_LegTrajectory_GetSnapshot(Motor_LegTrajectorySnapshot *snapshot)
     const Motor_LegTrajectoryChannel *channel = &control.channel[motor];
     snapshot->peak_target_delta[motor] = control.peak_target_delta[motor];
     snapshot->arm_position[motor] = channel->arm_position;
+    snapshot->zero_position[motor] = channel->zero_position;
+    snapshot->direction[motor] = channel->direction;
+    snapshot->arm_joint_position[motor] = channel->arm_joint_position;
+    snapshot->base_joint_position[motor] = channel->base_joint_position;
+    snapshot->arm_temperature_c[motor] = channel->arm_temperature_c;
+    snapshot->arm_zero_checked[motor] = channel->arm_zero_checked;
+    snapshot->arm_feedback_age_ms[motor] = channel->arm_feedback_age_ms;
     snapshot->target_position[motor] = channel->target_position;
     snapshot->actual_position[motor] = channel->actual_position;
     snapshot->position_error[motor] = channel->position_error;
@@ -467,5 +521,16 @@ void Motor_LegTrajectory_GetSnapshot(Motor_LegTrajectorySnapshot *snapshot)
     snapshot->overspeed_count[motor] = channel->overspeed_count;
     snapshot->tracking_error_count[motor] =
         channel->tracking_error_count;
+    snapshot->feedback_count[motor] = channel->feedback_count;
+    snapshot->torque_limit_count[motor] = channel->torque_limit_count;
+    snapshot->peak_abs_target_velocity[motor] =
+        channel->peak_abs_target_velocity;
+    snapshot->peak_abs_actual_velocity[motor] =
+        channel->peak_abs_actual_velocity;
+    snapshot->peak_abs_position_error[motor] =
+        channel->peak_abs_position_error;
+    snapshot->peak_abs_torque[motor] = channel->peak_abs_torque;
+    snapshot->min_dt_ms[motor] = channel->min_dt_ms;
+    snapshot->max_dt_ms[motor] = channel->max_dt_ms;
   }
 }

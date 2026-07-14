@@ -1653,9 +1653,10 @@ static int start_rf_leg_trajectory(uint8_t dry_run)
   Motor_LegTrajectorySnapshot snapshot;
   Leg_Control_GetRfLegTrajectorySnapshot(&snapshot);
   uint32_t now_ms = HAL_GetTick();
-  if (Motor_Transport_IsZeroOutputOnly() != 0U ||
+  if ((dry_run == 0U && Motor_Transport_IsZeroOutputOnly() != 0U) ||
       !Communication_IsLinkAlive() ||
       snapshot.mode != Motor_LegTrajectory_Armed ||
+      (dry_run == 0U && MOTOR_LEG_TRAJECTORY_ACTIVE_ENABLED == 0U) ||
       (dry_run == 0U && snapshot.dry_run_passed == 0U))
     return 0;
 
