@@ -6,11 +6,12 @@
 
 #include <stdint.h>
 
-#define MOTOR_LEG_TRAJECTORY_LEG_INDEX          1U
-#define MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX  2U
+#define MOTOR_LEG_TRAJECTORY_LEG_COUNT          4U
+#define MOTOR_LEG_TRAJECTORY_RF_LEG_INDEX       1U
 #define MOTOR_LEG_TRAJECTORY_ACTIVE_ENABLED      1U
 #define MOTOR_LEG_TRAJECTORY_LEVEL_MIN            1U
 #define MOTOR_LEG_TRAJECTORY_LEVEL_MAX            7U
+#define MOTOR_LEG_TRAJECTORY_REFERENCE_LEVEL_MIN  5U
 #define MOTOR_LEG_TRAJECTORY_TORQUE_MAX_NM        1.0f
 #define MOTOR_LEG_TRAJECTORY_DRY_RUN_REQUIRED       0U
 #define MOTOR_LEG_TRAJECTORY_OVERSPEED_SAMPLES     20U
@@ -81,6 +82,8 @@ typedef struct
   uint8_t dry_run_plan_match;
   uint8_t trajectory_complete;
   uint8_t hold_current_position;
+  uint8_t leg_index;
+  uint8_t first_motor_index;
   Motor_LegTrajectoryProfile profile;
   int8_t stop_motor_index;
   float stop_detail;
@@ -127,6 +130,7 @@ typedef struct
 
 void Motor_LegTrajectory_Init(void);
 int Motor_LegTrajectory_Arm(const Motor_StateSnapshotTypeDef states[2],
+                            uint8_t leg_index,
                             uint8_t level,
                             uint32_t now_ms);
 int Motor_LegTrajectory_Start(uint8_t dry_run, uint32_t now_ms);

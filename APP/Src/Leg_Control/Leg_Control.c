@@ -1495,7 +1495,7 @@ void Leg_Control_Service(uint32_t now_ms)
   }
 
   Motor_LegTrajectorySnapshot leg_trajectory;
-  Leg_Control_GetRfLegTrajectorySnapshot(&leg_trajectory);
+  Leg_Control_GetLegTrajectorySnapshot(&leg_trajectory);
   if (leg_trajectory.mode == Motor_LegTrajectory_DryRun ||
       leg_trajectory.mode == Motor_LegTrajectory_Active ||
       leg_trajectory.mode == Motor_LegTrajectory_Hold) {
@@ -1520,8 +1520,8 @@ void Leg_Control_Service(uint32_t now_ms)
       }
     }
 
-    for (uint8_t idx = MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX;
-         idx < MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX + 2U; ++idx) {
+    for (uint8_t idx = leg_trajectory.first_motor_index;
+         idx < leg_trajectory.first_motor_index + 2U; ++idx) {
       Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(idx);
       if (state == NULL || state->online != Motor_Online ||
           state->angle_valid != Motor_Angle_Valid ||
@@ -1574,7 +1574,7 @@ void Leg_Control_Service(uint32_t now_ms)
     }
   }
 
-  Leg_Control_GetRfLegTrajectorySnapshot(&leg_trajectory);
+  Leg_Control_GetLegTrajectorySnapshot(&leg_trajectory);
   if (leg_trajectory.mode == Motor_LegTrajectory_Hold &&
       leg_trajectory.stop_sequence != 0U &&
       leg_trajectory.stop_sequence != last_leg_trajectory_stop_sequence &&
@@ -1700,31 +1700,36 @@ int Leg_Control_ArmAllZero(void)
   return Leg_Control_ArmAllOffset(0.0f);
 }
 
-int Leg_Control_ArmRfLegTrajectory(uint8_t level)
+int Leg_Control_ArmLegTrajectory(uint8_t leg, uint8_t level)
 {
+  if (leg >= MOTOR_LEG_TRAJECTORY_LEG_COUNT ||
+      (leg != MOTOR_LEG_TRAJECTORY_RF_LEG_INDEX &&
+       level < MOTOR_LEG_TRAJECTORY_REFERENCE_LEVEL_MIN))
+    return 0;
   Motor_StateSnapshotTypeDef states[2];
   Motor_LegTrajectorySnapshot trajectory;
-  Leg_Control_GetRfLegTrajectorySnapshot(&trajectory);
+  Leg_Control_GetLegTrajectorySnapshot(&trajectory);
   if (trajectory.mode == Motor_LegTrajectory_DryRun ||
       trajectory.mode == Motor_LegTrajectory_Active)
     return 0;
-  /* A completed RF test remains in controlled Hold.  Re-arming the next
-   * level deliberately exits that Hold through the common zero-output path,
-   * then captures fresh multi-turn feedback as the new trajectory origin. */
+  /* A completed single-leg test remains in controlled Hold.  Re-arming the
+   * next leg/level deliberately exits that Hold through the common zero-output
+   * path, then captures fresh multi-turn feedback as the new origin. */
   Leg_Control_ForceZeroOutput(Motor_Control_Reason_None);
+  uint8_t first_motor_index = (uint8_t)(leg * 2U);
   for (uint8_t motor = 0U; motor < 2U; ++motor) {
     if (!Leg_Control_GetMotorStateSnapshot(
-            MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX + motor,
+            first_motor_index + motor,
             &states[motor]))
       return 0;
   }
-  return Motor_LegTrajectory_Arm(states, level, HAL_GetTick());
+  return Motor_LegTrajectory_Arm(states, leg, level, HAL_GetTick());
 }
 
-static int start_rf_leg_trajectory(uint8_t dry_run)
+static int start_leg_trajectory(uint8_t dry_run)
 {
   Motor_LegTrajectorySnapshot snapshot;
-  Leg_Control_GetRfLegTrajectorySnapshot(&snapshot);
+  Leg_Control_GetLegTrajectorySnapshot(&snapshot);
   uint32_t now_ms = HAL_GetTick();
   if ((dry_run == 0U && Motor_Transport_IsZeroOutputOnly() != 0U) ||
       !Communication_IsLinkAlive() ||
@@ -1736,7 +1741,7 @@ static int start_rf_leg_trajectory(uint8_t dry_run)
     return 0;
 
   for (uint8_t motor = 0U; motor < 2U; ++motor) {
-    uint8_t idx = MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX + motor;
+    uint8_t idx = snapshot.first_motor_index + motor;
     Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(idx);
     if (state == NULL || state->online != Motor_Online ||
         state->angle_valid != Motor_Angle_Valid ||
@@ -1758,17 +1763,17 @@ static int start_rf_leg_trajectory(uint8_t dry_run)
   return started;
 }
 
-int Leg_Control_StartRfLegTrajectoryDryRun(void)
+int Leg_Control_StartLegTrajectoryDryRun(void)
 {
-  return start_rf_leg_trajectory(1U);
+  return start_leg_trajectory(1U);
 }
 
-int Leg_Control_StartRfLegTrajectoryActive(void)
+int Leg_Control_StartLegTrajectoryActive(void)
 {
-  return start_rf_leg_trajectory(0U);
+  return start_leg_trajectory(0U);
 }
 
-int Leg_Control_HoldRfLegTrajectory(void)
+int Leg_Control_HoldLegTrajectory(void)
 {
   uint32_t primask = __get_PRIMASK();
   __disable_irq();
@@ -1778,7 +1783,7 @@ int Leg_Control_HoldRfLegTrajectory(void)
   return held;
 }
 
-void Leg_Control_GetRfLegTrajectorySnapshot(
+void Leg_Control_GetLegTrajectorySnapshot(
     Motor_LegTrajectorySnapshot *snapshot)
 {
   if (snapshot == NULL) return;

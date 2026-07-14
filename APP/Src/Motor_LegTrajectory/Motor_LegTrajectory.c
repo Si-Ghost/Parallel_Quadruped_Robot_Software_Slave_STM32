@@ -59,6 +59,8 @@ typedef struct
   uint8_t dry_run_plan_match;
   uint8_t trajectory_complete;
   uint8_t hold_current_position;
+  uint8_t leg_index;
+  uint8_t first_motor_index;
   Motor_LegTrajectoryProfile profile;
   int8_t stop_motor_index;
   float stop_detail;
@@ -87,7 +89,8 @@ typedef struct
 
 static Motor_LegTrajectoryContext control;
 static Motor_LegTrajectoryApprovedPlan approved_plans[
-    MOTOR_LEG_TRAJECTORY_LEVEL_MAX - MOTOR_LEG_TRAJECTORY_LEVEL_MIN + 1U];
+    MOTOR_LEG_TRAJECTORY_LEG_COUNT]
+    [MOTOR_LEG_TRAJECTORY_LEVEL_MAX - MOTOR_LEG_TRAJECTORY_LEVEL_MIN + 1U];
 
 static const Motor_LegTrajectoryProfile profiles[] = {
     {
@@ -209,12 +212,15 @@ static int get_profile(uint8_t level, Motor_LegTrajectoryProfile *profile)
   return profile->level == level;
 }
 
-static Motor_LegTrajectoryApprovedPlan *approved_plan_for_level(uint8_t level)
+static Motor_LegTrajectoryApprovedPlan *approved_plan_for_level(uint8_t leg_index,
+                                                                 uint8_t level)
 {
-  if (level < MOTOR_LEG_TRAJECTORY_LEVEL_MIN ||
+  if (leg_index >= MOTOR_LEG_TRAJECTORY_LEG_COUNT ||
+      level < MOTOR_LEG_TRAJECTORY_LEVEL_MIN ||
       level > MOTOR_LEG_TRAJECTORY_LEVEL_MAX)
     return NULL;
-  return &approved_plans[level - MOTOR_LEG_TRAJECTORY_LEVEL_MIN];
+  return &approved_plans[leg_index]
+                        [level - MOTOR_LEG_TRAJECTORY_LEVEL_MIN];
 }
 
 static uint8_t profiles_match(const Motor_LegTrajectoryProfile *a,
@@ -236,7 +242,7 @@ static uint8_t profiles_match(const Motor_LegTrajectoryProfile *a,
 static void evaluate_approved_plan(void)
 {
   Motor_LegTrajectoryApprovedPlan *approved =
-      approved_plan_for_level(control.profile.level);
+      approved_plan_for_level(control.leg_index, control.profile.level);
   control.approved_plan_available =
       approved != NULL && approved->valid != 0U ? 1U : 0U;
   control.dry_run_passed = 0U;
@@ -281,7 +287,7 @@ static void evaluate_approved_plan(void)
 static void approve_current_plan(void)
 {
   Motor_LegTrajectoryApprovedPlan *approved =
-      approved_plan_for_level(control.profile.level);
+      approved_plan_for_level(control.leg_index, control.profile.level);
   if (approved == NULL) return;
   memset(approved, 0, sizeof(*approved));
   approved->valid = 1U;
@@ -357,6 +363,9 @@ void Motor_LegTrajectory_Init(void)
   memset(&control, 0, sizeof(control));
   memset(approved_plans, 0, sizeof(approved_plans));
   (void)get_profile(MOTOR_LEG_TRAJECTORY_LEVEL_MIN, &control.profile);
+  control.leg_index = MOTOR_LEG_TRAJECTORY_RF_LEG_INDEX;
+  control.first_motor_index =
+      (uint8_t)(MOTOR_LEG_TRAJECTORY_RF_LEG_INDEX * LEG_TRAJ_MOTOR_COUNT);
   control.mode = Motor_LegTrajectory_Disabled;
   control.stop_motor_index = -1;
 }
@@ -387,13 +396,19 @@ static int compute_rotor_targets(const Leg_PointTypeDef *foot,
 }
 
 int Motor_LegTrajectory_Arm(const Motor_StateSnapshotTypeDef states[2],
+                            uint8_t leg_index,
                             uint8_t level,
                             uint32_t now_ms)
 {
   Motor_LegTrajectoryProfile profile;
-  if (states == NULL || !get_profile(level, &profile)) return 0;
+  if (states == NULL || leg_index >= MOTOR_LEG_TRAJECTORY_LEG_COUNT ||
+      (leg_index != MOTOR_LEG_TRAJECTORY_RF_LEG_INDEX &&
+       level < MOTOR_LEG_TRAJECTORY_REFERENCE_LEVEL_MIN) ||
+      !get_profile(level, &profile)) return 0;
   uint32_t stop_sequence = control.stop_sequence;
   memset(&control, 0, sizeof(control));
+  control.leg_index = leg_index;
+  control.first_motor_index = (uint8_t)(leg_index * LEG_TRAJ_MOTOR_COUNT);
   control.profile = profile;
   control.stop_sequence = stop_sequence;
   control.stop_motor_index = -1;
@@ -416,7 +431,7 @@ int Motor_LegTrajectory_Arm(const Motor_StateSnapshotTypeDef states[2],
                                  ? Motor_LegTrajectory_StopTemperature
                                  : Motor_LegTrajectory_StopOffline;
       control.stop_motor_index =
-          (int8_t)(MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX + motor);
+          (int8_t)(control.first_motor_index + motor);
       control.stop_detail = state->motor_error != 0U
                                 ? (float)state->motor_error
                                 : state->temperature_c >= 40
@@ -498,7 +513,7 @@ int Motor_LegTrajectory_Start(uint8_t dry_run, uint32_t now_ms)
   control.stop_detail = 0.0f;
   if (dry_run != 0U) {
     Motor_LegTrajectoryApprovedPlan *approved =
-        approved_plan_for_level(control.profile.level);
+        approved_plan_for_level(control.leg_index, control.profile.level);
     if (approved != NULL) approved->valid = 0U;
     control.approved_plan_available = 0U;
     control.dry_run_plan_match = 0U;
@@ -649,8 +664,8 @@ void Motor_LegTrajectory_Update(uint8_t motor_index,
                                 uint32_t now_ms)
 {
   if (controller_mode() == 0U ||
-      motor_index < MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX ||
-      motor_index >= MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX +
+      motor_index < control.first_motor_index ||
+      motor_index >= control.first_motor_index +
                          LEG_TRAJ_MOTOR_COUNT)
     return;
   if (!isfinite(rotor_position) || !isfinite(rotor_velocity) ||
@@ -662,7 +677,7 @@ void Motor_LegTrajectory_Update(uint8_t motor_index,
     return;
   }
 
-  uint8_t local = motor_index - MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX;
+  uint8_t local = motor_index - control.first_motor_index;
   Motor_LegTrajectoryChannel *channel = &control.channel[local];
   channel->actual_position = rotor_position;
   channel->raw_velocity = rotor_velocity;
@@ -797,7 +812,7 @@ void Motor_LegTrajectory_Stop(Motor_LegTrajectoryStopReason reason,
     approve_current_plan();
   } else if (previous_mode == Motor_LegTrajectory_Active) {
     Motor_LegTrajectoryApprovedPlan *approved =
-        approved_plan_for_level(control.profile.level);
+        approved_plan_for_level(control.leg_index, control.profile.level);
     if (approved != NULL) approved->valid = 0U;
     control.approved_plan_available = 0U;
     control.dry_run_plan_match = 0U;
@@ -822,11 +837,11 @@ int Motor_LegTrajectory_GetAuthorizedTorque(uint8_t motor_index,
   *torque = 0.0f;
   if ((control.mode != Motor_LegTrajectory_Active &&
        control.mode != Motor_LegTrajectory_Hold) ||
-      motor_index < MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX ||
-      motor_index >= MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX +
+      motor_index < control.first_motor_index ||
+      motor_index >= control.first_motor_index +
                          LEG_TRAJ_MOTOR_COUNT)
     return 0;
-  uint8_t local = motor_index - MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX;
+  uint8_t local = motor_index - control.first_motor_index;
   if (!isfinite(control.channel[local].torque) ||
       fabsf(control.channel[local].torque) >
           MOTOR_LEG_TRAJECTORY_TORQUE_MAX_NM) {
@@ -851,6 +866,8 @@ void Motor_LegTrajectory_GetSnapshot(Motor_LegTrajectorySnapshot *snapshot)
   snapshot->dry_run_plan_match = control.dry_run_plan_match;
   snapshot->trajectory_complete = control.trajectory_complete;
   snapshot->hold_current_position = control.hold_current_position;
+  snapshot->leg_index = control.leg_index;
+  snapshot->first_motor_index = control.first_motor_index;
   snapshot->profile = control.profile;
   snapshot->stop_motor_index = control.stop_motor_index;
   snapshot->stop_detail = control.stop_detail;
