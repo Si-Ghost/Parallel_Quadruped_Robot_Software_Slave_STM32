@@ -679,7 +679,8 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
                     return;
                 }
             }
-            (void)Leg_Control_ArmRfLegTrajectory(level);
+            if (!Leg_Control_ArmRfLegTrajectory(level))
+                Communication_SendString("LEG_TRAJ_ARM rejected\r\n");
             send_leg_trajectory_arm_audit();
             Communication_SendLegTrajectoryStatus();
             return;

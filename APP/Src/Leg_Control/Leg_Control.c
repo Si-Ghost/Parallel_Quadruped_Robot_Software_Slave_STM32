@@ -1683,9 +1683,11 @@ int Leg_Control_ArmRfLegTrajectory(uint8_t level)
   Motor_LegTrajectorySnapshot trajectory;
   Leg_Control_GetRfLegTrajectorySnapshot(&trajectory);
   if (trajectory.mode == Motor_LegTrajectory_DryRun ||
-      trajectory.mode == Motor_LegTrajectory_Active ||
-      trajectory.mode == Motor_LegTrajectory_Hold)
+      trajectory.mode == Motor_LegTrajectory_Active)
     return 0;
+  /* A completed RF test remains in controlled Hold.  Re-arming the next
+   * level deliberately exits that Hold through the common zero-output path,
+   * then captures fresh multi-turn feedback as the new trajectory origin. */
   Leg_Control_ForceZeroOutput(Motor_Control_Reason_None);
   for (uint8_t motor = 0U; motor < 2U; ++motor) {
     if (!Leg_Control_GetMotorStateSnapshot(
