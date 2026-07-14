@@ -1705,8 +1705,9 @@ static int start_rf_leg_trajectory(uint8_t dry_run)
       !Communication_IsLinkAlive() ||
       snapshot.mode != Motor_LegTrajectory_Armed ||
       (dry_run == 0U && MOTOR_LEG_TRAJECTORY_ACTIVE_ENABLED == 0U) ||
-      (dry_run == 0U && (snapshot.dry_run_passed == 0U ||
-                        snapshot.dry_run_plan_match == 0U)))
+      (dry_run == 0U && MOTOR_LEG_TRAJECTORY_DRY_RUN_REQUIRED != 0U &&
+       (snapshot.dry_run_passed == 0U ||
+        snapshot.dry_run_plan_match == 0U)))
     return 0;
 
   for (uint8_t motor = 0U; motor < 2U; ++motor) {

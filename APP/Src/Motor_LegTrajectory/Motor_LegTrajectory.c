@@ -8,7 +8,6 @@
 #define LEG_TRAJ_TWO_PI                  6.28318530717958647692f
 #define LEG_TRAJ_MIN_DT_S                0.0002f
 #define LEG_TRAJ_MAX_DT_S                0.0100f
-#define LEG_TRAJ_OVERSPEED_SAMPLES       3U
 #define LEG_TRAJ_TRACKING_ERROR_SAMPLES  3U
 
 typedef struct
@@ -37,6 +36,7 @@ typedef struct
   float torque;
   uint8_t torque_limited;
   uint8_t overspeed_count;
+  uint8_t hard_overspeed_count;
   uint8_t tracking_error_count;
   uint32_t feedback_count;
   uint32_t torque_limit_count;
@@ -259,6 +259,7 @@ static void reset_channel_controller(Motor_LegTrajectoryChannel *channel)
   channel->torque = 0.0f;
   channel->torque_limited = 0U;
   channel->overspeed_count = 0U;
+  channel->hard_overspeed_count = 0U;
   channel->tracking_error_count = 0U;
   channel->previous_feedback_timestamp = 0U;
 }
@@ -387,8 +388,9 @@ int Motor_LegTrajectory_Start(uint8_t dry_run, uint32_t now_ms)
 {
   if (control.mode != Motor_LegTrajectory_Armed || dry_run > 1U ||
       (dry_run == 0U && MOTOR_LEG_TRAJECTORY_ACTIVE_ENABLED == 0U) ||
-      (dry_run == 0U && (control.dry_run_passed == 0U ||
-                        control.dry_run_plan_match == 0U))) {
+      (dry_run == 0U && MOTOR_LEG_TRAJECTORY_DRY_RUN_REQUIRED != 0U &&
+       (control.dry_run_passed == 0U ||
+        control.dry_run_plan_match == 0U))) {
     Motor_LegTrajectory_Stop(Motor_LegTrajectory_StopInvalidCommand, -1,
                              (float)dry_run);
     return 0;
@@ -430,6 +432,7 @@ int Motor_LegTrajectory_Start(uint8_t dry_run, uint32_t now_ms)
     channel->torque = 0.0f;
     channel->torque_limited = 0U;
     channel->overspeed_count = 0U;
+    channel->hard_overspeed_count = 0U;
     channel->tracking_error_count = 0U;
     channel->feedback_count = 0U;
     channel->torque_limit_count = 0U;
@@ -606,9 +609,25 @@ void Motor_LegTrajectory_Update(uint8_t motor_index,
                              rotor_position - channel->arm_position);
     return;
   }
+  /* The motor's reported velocity contains short quantization/filter spikes.
+   * A sustained soft limit rejects real overspeed without aborting on a few
+   * noisy frames; the independent hard limit still stops a runaway quickly. */
+  if (fabsf(rotor_velocity) > MOTOR_LEG_TRAJECTORY_HARD_SPEED_MAX) {
+    if (channel->hard_overspeed_count < 255U)
+      ++channel->hard_overspeed_count;
+    if (channel->hard_overspeed_count >=
+        MOTOR_LEG_TRAJECTORY_HARD_SPEED_SAMPLES) {
+      Motor_LegTrajectory_Stop(Motor_LegTrajectory_StopVelocity,
+                               (int8_t)motor_index, rotor_velocity);
+      return;
+    }
+  } else {
+    channel->hard_overspeed_count = 0U;
+  }
   if (fabsf(rotor_velocity) > MOTOR_LEG_TRAJECTORY_ACTUAL_SPEED_MAX) {
     if (channel->overspeed_count < 255U) ++channel->overspeed_count;
-    if (channel->overspeed_count >= LEG_TRAJ_OVERSPEED_SAMPLES) {
+    if (channel->overspeed_count >=
+        MOTOR_LEG_TRAJECTORY_OVERSPEED_SAMPLES) {
       Motor_LegTrajectory_Stop(Motor_LegTrajectory_StopVelocity,
                                (int8_t)motor_index, rotor_velocity);
       return;
