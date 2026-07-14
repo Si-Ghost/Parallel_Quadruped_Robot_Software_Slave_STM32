@@ -10,20 +10,20 @@
 #define GROUP_OFFSET_START_ZERO_RAD       0.50f
 #define GROUP_MAX_ZERO_EXCURSION_RAD      2.25f
 #define GROUP_ZERO_RETURN_EXCURSION_RAD   3.50f
-#define GROUP_GAIT_MAX_ZERO_EXCURSION_RAD 3.50f
+#define GROUP_GAIT_MAX_ZERO_EXCURSION_RAD 4.00f
 #define GROUP_TARGET_SPEED_RAD_S          0.25f
 #define GROUP_STAND_TARGET_SPEED_RAD_S    0.125f
-/* The doc-sized 80 mm / 40 mm reference cycloid reaches about 35.14 rotor
- * rad/s at the 300 ms half-cycle.  Keep a small margin so the target ramp
- * preserves the reference path instead of clipping it at the old 20 rad/s. */
-#define GROUP_GAIT_TARGET_SPEED_RAD_S     40.0f
+/* The doc-sized reference slow profile (150 mm step, 50 mm lift, 300 ms
+ * half-cycle) reaches about 62.5 rotor rad/s. */
+#define GROUP_GAIT_TARGET_SPEED_RAD_S     70.0f
+#define GROUP_GAIT_RETURN_SPEED_RAD_S     40.0f
 #define GROUP_TARGET_ERROR_RAD            0.08f
-#define GROUP_GAIT_SOFT_ERROR_RAD          0.35f
-#define GROUP_GAIT_HARD_ERROR_RAD          0.80f
+#define GROUP_GAIT_SOFT_ERROR_RAD          0.60f
+#define GROUP_GAIT_HARD_ERROR_RAD          1.00f
 #define GROUP_GAIT_SOFT_ERROR_SAMPLES       20U
 #define GROUP_GAIT_HARD_ERROR_SAMPLES        3U
-#define GROUP_GAIT_SOFT_SPEED_RAD_S        50.0f
-#define GROUP_GAIT_HARD_SPEED_RAD_S        70.0f
+#define GROUP_GAIT_SOFT_SPEED_RAD_S       100.0f
+#define GROUP_GAIT_HARD_SPEED_RAD_S       120.0f
 #define GROUP_GAIT_SOFT_SPEED_SAMPLES      20U
 #define GROUP_GAIT_HARD_SPEED_SAMPLES       3U
 #define GROUP_GAIT_HOLD_SPEED_RAD_S          1.0f
@@ -83,6 +83,7 @@ static int8_t stop_motor_index;
 static float stop_detail;
 static uint32_t stop_sequence;
 static uint8_t gait_return_requested;
+static uint8_t gait_returning;
 static Motor_GaitReturnReason gait_return_reason;
 static int8_t gait_return_motor_index;
 static float gait_return_detail;
@@ -113,6 +114,7 @@ void Motor_GroupControl_Init(void)
   stop_motor_index = -1;
   stop_detail = 0.0f;
   gait_return_requested = 0U;
+  gait_returning = 0U;
   gait_return_reason = Motor_GaitReturnNone;
   gait_return_motor_index = -1;
   gait_return_detail = 0.0f;
@@ -350,6 +352,7 @@ int Motor_GroupControl_SetGaitTargets(const float target_positions[8])
   for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i)
     channels[i].target_position = target_positions[i];
   group_profile = Motor_Group_ProfileGait;
+  gait_returning = 0U;
   group_target_offset = 0.0f;
   return 1;
 }
@@ -361,6 +364,7 @@ int Motor_GroupControl_ReturnGaitToZero(void)
     return 0;
   for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i)
     channels[i].target_position = channels[i].zero_position;
+  gait_returning = 1U;
   return 1;
 }
 
@@ -385,6 +389,7 @@ int Motor_GroupControl_FinishGaitHold(void)
   group_profile = Motor_Group_ProfileUniformOffset;
   group_target_offset = 0.0f;
   gait_return_requested = 0U;
+  gait_returning = 0U;
   return 1;
 }
 
@@ -503,7 +508,9 @@ void Motor_GroupControl_Update(uint8_t motor_index,
   float target_speed = group_profile == Motor_Group_ProfileStandPose
                            ? GROUP_STAND_TARGET_SPEED_RAD_S
                            : group_profile == Motor_Group_ProfileGait
-                                 ? GROUP_GAIT_TARGET_SPEED_RAD_S
+                                 ? gait_returning != 0U
+                                       ? GROUP_GAIT_RETURN_SPEED_RAD_S
+                                       : GROUP_GAIT_TARGET_SPEED_RAD_S
                                  : GROUP_TARGET_SPEED_RAD_S;
   float target_step = clamp_symmetric(remaining, target_speed * dt);
   channel->ramped_target += target_step;

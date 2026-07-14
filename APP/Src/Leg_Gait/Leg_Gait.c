@@ -22,15 +22,16 @@ extern RC_DataTypeDef rc_data;
 #define LEG_SINE_FREQ_MAX_HZ        2.0f
 #define LEG_SINE_FREQ_MIN_HZ        0.1f
 #define LEG_SINE_LOG_PERIOD_MS      200U
-#define LEG_TROT_LIFT_HEIGHT_MM     40.0f
-#define LEG_TROT_START_POINT_MM     40.0f
+#define LEG_TROT_LIFT_HEIGHT_MM     50.0f
+#define LEG_TROT_START_POINT_MM     75.0f
 #define LEG_TROT_STEP_RATE_MS       300U
 #define LEG_TROT_STEP_CYCLE_MS      600U
 #define LEG_TROT_ENTRY_MS           600U
 #define LEG_TROT_RETURN_MIN_MS      200U
 #define LEG_TROT_LOG_PERIOD_MS      100U
 #define LEG_TROT_BASE_X_MM            0.0f
-#define LEG_TROT_BASE_Y_MM          225.0f
+#define LEG_TROT_BASE_Y_MM          220.0f
+#define LEG_TROT_ZERO_Y_MM          225.0f
 #define LEG_REMOTE_CHANNEL_DEADZONE 363
 
 typedef struct
@@ -680,6 +681,8 @@ void Leg_Gait_ServiceTrot(void)
       float start_sign = pair_a ? -1.0f : 1.0f;
       x = LEG_TROT_BASE_X_MM +
           (float)trot.direction * start_sign * LEG_TROT_START_POINT_MM * phase;
+      y = LEG_TROT_ZERO_Y_MM +
+          (LEG_TROT_BASE_Y_MM - LEG_TROT_ZERO_Y_MM) * phase;
     } else {
       uint8_t swing = pair_a ? (half_cycle == 0U) : (half_cycle != 0U);
       uint32_t cycle_time = (now - trot.stage_start_tick) %
@@ -945,9 +948,9 @@ static int start_remote_trot(int8_t direction)
   int len = snprintf(buf, sizeof(buf),
                      "LEG_REMOTE gait_start dir=%d level=5 step=%d lift=%d "
                      "cycle_ms=%u entry_ms=%u pkp=35900 pkd=1000 skp=10 "
-                     "ski=0.6 skd=1.5 tmax=3.5 err_soft=0.35 "
-                     "err_hard=0.80 vt=40 vsoft=50 vhard=70 "
-                     "path=ref_cycloid_sine\r\n",
+                     "ski=0.6 skd=1.5 tmax=3.5 err_soft=0.60 "
+                     "err_hard=1.00 vt=70 vsoft=100 vhard=120 "
+                     "return_vt=40 ref_s2=2 path=ref_cycloid_sine\r\n",
                      (int)direction,
                      (int)(LEG_TROT_START_POINT_MM * 2.0f),
                      (int)LEG_TROT_LIFT_HEIGHT_MM,
