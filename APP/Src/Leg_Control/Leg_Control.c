@@ -2,6 +2,7 @@
 #include "Motor_Transport.h"
 #include "Motor_SoftwareControl.h"
 #include "Motor_GroupControl.h"
+#include "Motor_LegTrajectory.h"
 #include "Leg_Gait.h"
 #include "communication.h"
 #include <math.h>
@@ -137,6 +138,29 @@ void Leg_Control_ForceZeroOutput(Motor_ControlReasonTypeDef reason)
   else if (reason == Motor_Control_Reason_CommandLink) sw_reason = Motor_SoftwareControl_StopCommandLink;
   else if (reason == Motor_Control_Reason_TrajectoryComplete) sw_reason = Motor_SoftwareControl_StopDuration;
   Motor_SoftwareControl_Stop(sw_reason);
+  Motor_LegTrajectoryStopReason leg_trajectory_reason =
+      Motor_LegTrajectory_StopInvalidCommand;
+  if (reason == Motor_Control_Reason_None)
+    leg_trajectory_reason = Motor_LegTrajectory_StopNone;
+  else if (reason == Motor_Control_Reason_OperatorStop)
+    leg_trajectory_reason = Motor_LegTrajectory_StopOperator;
+  else if (reason == Motor_Control_Reason_Rescan)
+    leg_trajectory_reason = Motor_LegTrajectory_StopRescan;
+  else if (reason == Motor_Control_Reason_Offline)
+    leg_trajectory_reason = Motor_LegTrajectory_StopOffline;
+  else if (reason == Motor_Control_Reason_TransportError)
+    leg_trajectory_reason = Motor_LegTrajectory_StopTransport;
+  else if (reason == Motor_Control_Reason_CommandLink)
+    leg_trajectory_reason = Motor_LegTrajectory_StopCommandLink;
+  else if (reason == Motor_Control_Reason_SafetyLimit)
+    leg_trajectory_reason = Motor_LegTrajectory_StopController;
+  else if (reason == Motor_Control_Reason_TrajectoryComplete)
+    leg_trajectory_reason = Motor_LegTrajectory_StopComplete;
+  Motor_LegTrajectorySnapshot leg_trajectory_snapshot;
+  Motor_LegTrajectory_GetSnapshot(&leg_trajectory_snapshot);
+  if (reason == Motor_Control_Reason_None ||
+      leg_trajectory_snapshot.mode != Motor_LegTrajectory_Disabled)
+    Motor_LegTrajectory_Stop(leg_trajectory_reason, -1, 0.0f);
   Motor_GroupStopReason group_reason = Motor_Group_StopInvalidState;
   if (reason == Motor_Control_Reason_None) group_reason = Motor_Group_StopNone;
   else if (reason == Motor_Control_Reason_OperatorStop) group_reason = Motor_Group_StopOperator;
@@ -144,7 +168,11 @@ void Leg_Control_ForceZeroOutput(Motor_ControlReasonTypeDef reason)
   else if (reason == Motor_Control_Reason_Offline) group_reason = Motor_Group_StopOffline;
   else if (reason == Motor_Control_Reason_TransportError) group_reason = Motor_Group_StopTransport;
   else if (reason == Motor_Control_Reason_CommandLink) group_reason = Motor_Group_StopCommandLink;
-  Motor_GroupControl_Stop(group_reason);
+  Motor_GroupSnapshot group_snapshot;
+  Motor_GroupControl_GetSnapshot(&group_snapshot);
+  if (reason == Motor_Control_Reason_None ||
+      group_snapshot.mode != Motor_Group_Disabled)
+    Motor_GroupControl_Stop(group_reason);
   if (primask == 0U) __enable_irq();
 }
 
@@ -263,6 +291,7 @@ static uint8_t transport_load_command(uint8_t leg, uint8_t motor, MOTOR_send *co
   float torque = 0.0f;
   uint8_t motor_index = Leg_Control_MotorIndex(leg, motor);
   if (Motor_GroupControl_GetAuthorizedTorque(motor_index, &torque) ||
+      Motor_LegTrajectory_GetAuthorizedTorque(motor_index, &torque) ||
       Motor_SoftwareControl_GetAuthorizedTorque(motor_index, &torque))
     command->T = torque;
   command->W = 0.0f;
@@ -285,6 +314,17 @@ static void transport_feedback_received(uint8_t leg,
                                 timestamp, LEG_REDUCTION_RATIO,
                                 LEG_ROTOR_ZERO_NEAR_RAD);
   uint8_t motor_index = Leg_Control_MotorIndex(leg, motor);
+  if (Motor_LegTrajectory_IsRunning() && feedback->MError != 0U)
+    Motor_LegTrajectory_Stop(Motor_LegTrajectory_StopMotorFault,
+                             (int8_t)motor_index,
+                             (float)feedback->MError);
+  else if (Motor_LegTrajectory_IsRunning() && feedback->Temp >= 40)
+    Motor_LegTrajectory_Stop(Motor_LegTrajectory_StopTemperature,
+                             (int8_t)motor_index,
+                             (float)feedback->Temp);
+  else
+    Motor_LegTrajectory_Update(motor_index, feedback->Pos, feedback->W,
+                               timestamp, timestamp);
   if (Motor_GroupControl_IsActive() && feedback->MError != 0U)
     Motor_GroupControl_StopWithContext(Motor_Group_StopMotorFault,
                                        (int8_t)motor_index,
@@ -1057,6 +1097,7 @@ void Leg_Control_InitSafe(void)
 {
   Motor_SoftwareControl_Init();
   Motor_GroupControl_Init();
+  Motor_LegTrajectory_Init();
   single_motor_trajectory_dry_run_passed = 0U;
   Left_Front_Leg.GPIOx = Left_Front_Leg_Control_GPIO_Port;
   Left_Front_Leg.GPIO_Pin = Left_Front_Leg_Control_Pin;
@@ -1239,6 +1280,8 @@ void Leg_Control_Start(void)
 void Leg_Control_Service(uint32_t now_ms)
 {
   static uint32_t last_sw_pid_telemetry_ms = 0U;
+  static uint32_t last_leg_trajectory_telemetry_ms = 0U;
+  static uint32_t last_leg_trajectory_stop_sequence = 0U;
   static uint32_t last_group_stop_log_sequence = 0U;
   static uint32_t pending_group_stop_log_sequence = 0U;
   static char pending_group_stop_log[256];
@@ -1426,6 +1469,78 @@ void Leg_Control_Service(uint32_t now_ms)
     pending_group_link_log = 0U;
   }
 
+  Motor_LegTrajectorySnapshot leg_trajectory;
+  Leg_Control_GetRfLegTrajectorySnapshot(&leg_trajectory);
+  if (leg_trajectory.mode == Motor_LegTrajectory_DryRun ||
+      leg_trajectory.mode == Motor_LegTrajectory_Active) {
+    Motor_LegTrajectoryStopReason stop_reason = Motor_LegTrajectory_StopNone;
+    int8_t stop_motor = -1;
+    float stop_detail = 0.0f;
+    if (command_link_alive == 0U) {
+      stop_reason = Motor_LegTrajectory_StopCommandLink;
+      stop_detail = (float)Communication_GetLinkAgeMs();
+    } else {
+      for (uint8_t idx = MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX;
+           idx < MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX + 2U; ++idx) {
+        Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(idx);
+        if (state == NULL || state->online != Motor_Online ||
+            state->angle_valid != Motor_Angle_Valid ||
+            (now_ms - state->timestamp) > 10U) {
+          stop_reason = Motor_LegTrajectory_StopOffline;
+          stop_motor = (int8_t)idx;
+          stop_detail = state == NULL ? -1.0f
+                                      : (float)(now_ms - state->timestamp);
+          break;
+        }
+        if (state->motor_error != 0U) {
+          stop_reason = Motor_LegTrajectory_StopMotorFault;
+          stop_motor = (int8_t)idx;
+          stop_detail = (float)state->motor_error;
+          break;
+        }
+        if (state->temperature_c >= 40) {
+          stop_reason = Motor_LegTrajectory_StopTemperature;
+          stop_motor = (int8_t)idx;
+          stop_detail = (float)state->temperature_c;
+          break;
+        }
+      }
+    }
+    if (stop_reason != Motor_LegTrajectory_StopNone) {
+      Motor_LegTrajectory_Stop(stop_reason, stop_motor, stop_detail);
+    } else if (leg_trajectory.elapsed_ms >=
+               MOTOR_LEG_TRAJECTORY_DURATION_MS) {
+      Motor_LegTrajectory_Stop(Motor_LegTrajectory_StopComplete, -1, 0.0f);
+    } else if ((now_ms - last_leg_trajectory_telemetry_ms) >= 100U) {
+      last_leg_trajectory_telemetry_ms = now_ms;
+      Communication_SendLegTrajectoryTelemetry();
+    }
+  }
+
+  Leg_Control_GetRfLegTrajectorySnapshot(&leg_trajectory);
+  if (leg_trajectory.mode == Motor_LegTrajectory_Stopped &&
+      leg_trajectory.stop_sequence != 0U &&
+      leg_trajectory.stop_sequence != last_leg_trajectory_stop_sequence) {
+    Motor_ControlReasonTypeDef outer_reason = Motor_Control_Reason_SafetyLimit;
+    if (leg_trajectory.reason == Motor_LegTrajectory_StopComplete)
+      outer_reason = Motor_Control_Reason_TrajectoryComplete;
+    else if (leg_trajectory.reason == Motor_LegTrajectory_StopCommandLink)
+      outer_reason = Motor_Control_Reason_CommandLink;
+    else if (leg_trajectory.reason == Motor_LegTrajectory_StopOffline)
+      outer_reason = Motor_Control_Reason_Offline;
+    else if (leg_trajectory.reason == Motor_LegTrajectory_StopTransport)
+      outer_reason = Motor_Control_Reason_TransportError;
+    else if (leg_trajectory.reason == Motor_LegTrajectory_StopOperator)
+      outer_reason = Motor_Control_Reason_OperatorStop;
+    else if (leg_trajectory.reason == Motor_LegTrajectory_StopRescan)
+      outer_reason = Motor_Control_Reason_Rescan;
+    last_leg_trajectory_stop_sequence = leg_trajectory.stop_sequence;
+    Leg_Control_ForceZeroOutput(outer_reason);
+    Communication_SendLegTrajectoryTelemetry();
+    Communication_SendLegTrajectoryStatus();
+    Communication_SendMotorControlStatus();
+  }
+
   if (single_motor_control.mode == Motor_Control_SingleMotorPosition ||
       single_motor_control.mode == Motor_Control_StaticHoldDryRun ||
       single_motor_control.mode == Motor_Control_StaticHoldActive ||
@@ -1518,6 +1633,69 @@ int Leg_Control_HoldCurrentPosition(void)
 int Leg_Control_ArmAllZero(void)
 {
   return Leg_Control_ArmAllOffset(0.0f);
+}
+
+int Leg_Control_ArmRfLegTrajectory(void)
+{
+  Motor_StateSnapshotTypeDef states[2];
+  Leg_Control_ForceZeroOutput(Motor_Control_Reason_None);
+  for (uint8_t motor = 0U; motor < 2U; ++motor) {
+    if (!Leg_Control_GetMotorStateSnapshot(
+            MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX + motor,
+            &states[motor]))
+      return 0;
+  }
+  return Motor_LegTrajectory_Arm(states, HAL_GetTick());
+}
+
+static int start_rf_leg_trajectory(uint8_t dry_run)
+{
+  Motor_LegTrajectorySnapshot snapshot;
+  Leg_Control_GetRfLegTrajectorySnapshot(&snapshot);
+  uint32_t now_ms = HAL_GetTick();
+  if (Motor_Transport_IsZeroOutputOnly() != 0U ||
+      !Communication_IsLinkAlive() ||
+      snapshot.mode != Motor_LegTrajectory_Armed ||
+      (dry_run == 0U && snapshot.dry_run_passed == 0U))
+    return 0;
+
+  for (uint8_t motor = 0U; motor < 2U; ++motor) {
+    uint8_t idx = MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX + motor;
+    Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(idx);
+    if (state == NULL || state->online != Motor_Online ||
+        state->angle_valid != Motor_Angle_Valid ||
+        (now_ms - state->timestamp) > 10U || state->motor_error != 0U ||
+        state->temperature_c >= 40 ||
+        absf_local(state->rotor_position - snapshot.arm_position[motor]) >
+            0.10f)
+      return 0;
+  }
+
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  int started = Motor_LegTrajectory_Start(dry_run, now_ms);
+  if (primask == 0U) __enable_irq();
+  return started;
+}
+
+int Leg_Control_StartRfLegTrajectoryDryRun(void)
+{
+  return start_rf_leg_trajectory(1U);
+}
+
+int Leg_Control_StartRfLegTrajectoryActive(void)
+{
+  return start_rf_leg_trajectory(0U);
+}
+
+void Leg_Control_GetRfLegTrajectorySnapshot(
+    Motor_LegTrajectorySnapshot *snapshot)
+{
+  if (snapshot == NULL) return;
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  Motor_LegTrajectory_GetSnapshot(snapshot);
+  if (primask == 0U) __enable_irq();
 }
 
 int Leg_Control_ArmAllOffset(float rotor_offset)

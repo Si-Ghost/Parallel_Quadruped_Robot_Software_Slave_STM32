@@ -39,6 +39,7 @@ static Communication_ContextTypeDef comm_ctx = {0};
 /* A control state reply is operator-facing telemetry.  Unlike periodic logs,
  * retain one pending reply when USART6 is occupied by angle/status telemetry. */
 static volatile uint8_t motor_control_status_pending = 0U;
+static volatile uint8_t leg_trajectory_status_pending = 0U;
 /* Receive-to-idle can split one UART text command across callbacks.  Keep a
  * foreground line accumulator so command recognition never depends on the
  * callback boundary chosen by the UART idle detector. */
@@ -73,6 +74,9 @@ static const char pid_hold_dryrun_cmd[] = "PID_HOLD_DRYRUN";
 static const char pid_hold_active_cmd[] = "PID_HOLD_ACTIVE";
 static const char pid_traj_dryrun_cmd[] = "PID_TRAJ_DRYRUN";
 static const char pid_traj_active_cmd[] = "PID_TRAJ_ACTIVE";
+static const char leg_traj_arm_rf_cmd[] = "LEG_TRAJ_ARM_RF";
+static const char leg_traj_dryrun_cmd[] = "LEG_TRAJ_DRYRUN";
+static const char leg_traj_active_cmd[] = "LEG_TRAJ_ACTIVE";
 static const char leg_nudge_mm_cmd[] = "LEG_NUDGE_MM";
 static const char leg_trace_cmd[] = "LEG_TRACE";
 static const char leg_snapshot_cmd[] = "LEG_SNAPSHOT";
@@ -530,6 +534,9 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         len < sizeof(pid_hold_active_cmd) - 1 &&
         len < sizeof(pid_traj_dryrun_cmd) - 1 &&
         len < sizeof(pid_traj_active_cmd) - 1 &&
+        len < sizeof(leg_traj_arm_rf_cmd) - 1 &&
+        len < sizeof(leg_traj_dryrun_cmd) - 1 &&
+        len < sizeof(leg_traj_active_cmd) - 1 &&
         len < sizeof(leg_nudge_mm_cmd) - 1 &&
         len < sizeof(leg_trace_cmd) - 1 &&
         len < sizeof(leg_snapshot_cmd) - 1 &&
@@ -541,6 +548,117 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         len < sizeof(leg_touch_step_cmd) - 1 &&
         len < sizeof(leg_loaded_step_cmd) - 1)
         return;
+
+    for (uint16_t i = 0;
+         i + sizeof(leg_traj_arm_rf_cmd) - 1 <= len; ++i) {
+        if (memcmp(&data[i], leg_traj_arm_rf_cmd,
+                   sizeof(leg_traj_arm_rf_cmd) - 1) == 0) {
+            if (Leg_Control_ArmRfLegTrajectory())
+                Communication_SendString("LEG_TRAJ_ARM_RF ok\r\n");
+            else
+                Communication_SendString("LEG_TRAJ_ARM_RF rejected\r\n");
+            Communication_SendLegTrajectoryStatus();
+            return;
+        }
+    }
+
+    for (uint16_t i = 0;
+         i + sizeof(leg_traj_dryrun_cmd) - 1 <= len; ++i) {
+        if (memcmp(&data[i], leg_traj_dryrun_cmd,
+                   sizeof(leg_traj_dryrun_cmd) - 1) == 0) {
+            if (Leg_Control_StartRfLegTrajectoryDryRun()) {
+                Motor_LegTrajectorySnapshot s;
+                Leg_Control_GetRfLegTrajectorySnapshot(&s);
+                char buf[TX_IT_BUF_SIZE];
+                int plan_len = snprintf(
+                    buf, sizeof(buf),
+                    "LEG_TRAJ_PLAN {\"dry\":1,\"leg\":1,\"lift\":5000,"
+                    "\"period\":%lu,\"settle\":%u,\"x0\":%ld,"
+                    "\"y0\":%ld,\"yp\":%ld,\"d0\":%ld,\"d1\":%ld,"
+                    "\"pkp\":%ld,\"pkd\":%ld,\"skp\":%ld,"
+                    "\"ski\":%ld,\"skd\":%ld,\"tmax\":%ld,"
+                    "\"vt\":%ld,\"vm\":%ld,\"xm\":%ld,\"em\":%ld,"
+                    "\"dur\":%u,\"guard\":%u}\n",
+                    (unsigned long)MOTOR_LEG_TRAJECTORY_PERIOD_MS,
+                    (unsigned int)MOTOR_LEG_TRAJECTORY_SETTLE_MS,
+                    (long)(s.base_foot.x * 1000.0f),
+                    (long)(s.base_foot.y * 1000.0f),
+                    (long)((s.base_foot.y - MOTOR_LEG_TRAJECTORY_LIFT_MM) *
+                           1000.0f),
+                    (long)(s.peak_target_delta[0] * 1000000.0f),
+                    (long)(s.peak_target_delta[1] * 1000000.0f),
+                    (long)(MOTOR_LEG_TRAJECTORY_POSITION_KP * 1000000.0f),
+                    (long)(MOTOR_LEG_TRAJECTORY_POSITION_KD * 1000000.0f),
+                    (long)(MOTOR_LEG_TRAJECTORY_SPEED_KP * 1000000.0f),
+                    (long)(MOTOR_LEG_TRAJECTORY_SPEED_KI * 1000000.0f),
+                    (long)(MOTOR_LEG_TRAJECTORY_SPEED_KD * 1000000.0f),
+                    (long)(MOTOR_LEG_TRAJECTORY_TORQUE_MAX_NM * 1000000.0f),
+                    (long)(MOTOR_LEG_TRAJECTORY_TARGET_SPEED_MAX * 1000000.0f),
+                    (long)(MOTOR_LEG_TRAJECTORY_ACTUAL_SPEED_MAX * 1000000.0f),
+                    (long)(MOTOR_LEG_TRAJECTORY_POSITION_MAX * 1000000.0f),
+                    (long)(MOTOR_LEG_TRAJECTORY_TRACKING_ERROR_MAX *
+                           1000000.0f),
+                    (unsigned int)MOTOR_LEG_TRAJECTORY_DURATION_MS,
+                    (unsigned int)Motor_Transport_IsZeroOutputOnly());
+                if (plan_len > 0 && plan_len < (int)sizeof(buf))
+                    Communication_SendBytes((const uint8_t *)buf,
+                                            (uint16_t)plan_len);
+            } else {
+                Communication_SendString("LEG_TRAJ_DRYRUN rejected\r\n");
+            }
+            Communication_SendLegTrajectoryStatus();
+            return;
+        }
+    }
+
+    for (uint16_t i = 0;
+         i + sizeof(leg_traj_active_cmd) - 1 <= len; ++i) {
+        if (memcmp(&data[i], leg_traj_active_cmd,
+                   sizeof(leg_traj_active_cmd) - 1) == 0) {
+            if (Leg_Control_StartRfLegTrajectoryActive()) {
+                Motor_LegTrajectorySnapshot s;
+                Leg_Control_GetRfLegTrajectorySnapshot(&s);
+                char buf[TX_IT_BUF_SIZE];
+                int plan_len = snprintf(
+                    buf, sizeof(buf),
+                    "LEG_TRAJ_PLAN {\"dry\":0,\"leg\":1,\"lift\":5000,"
+                    "\"period\":%lu,\"settle\":%u,\"x0\":%ld,"
+                    "\"y0\":%ld,\"yp\":%ld,\"d0\":%ld,\"d1\":%ld,"
+                    "\"pkp\":%ld,\"pkd\":%ld,\"skp\":%ld,"
+                    "\"ski\":%ld,\"skd\":%ld,\"tmax\":%ld,"
+                    "\"vt\":%ld,\"vm\":%ld,\"xm\":%ld,\"em\":%ld,"
+                    "\"dur\":%u,\"guard\":%u}\n",
+                    (unsigned long)MOTOR_LEG_TRAJECTORY_PERIOD_MS,
+                    (unsigned int)MOTOR_LEG_TRAJECTORY_SETTLE_MS,
+                    (long)(s.base_foot.x * 1000.0f),
+                    (long)(s.base_foot.y * 1000.0f),
+                    (long)((s.base_foot.y - MOTOR_LEG_TRAJECTORY_LIFT_MM) *
+                           1000.0f),
+                    (long)(s.peak_target_delta[0] * 1000000.0f),
+                    (long)(s.peak_target_delta[1] * 1000000.0f),
+                    (long)(MOTOR_LEG_TRAJECTORY_POSITION_KP * 1000000.0f),
+                    (long)(MOTOR_LEG_TRAJECTORY_POSITION_KD * 1000000.0f),
+                    (long)(MOTOR_LEG_TRAJECTORY_SPEED_KP * 1000000.0f),
+                    (long)(MOTOR_LEG_TRAJECTORY_SPEED_KI * 1000000.0f),
+                    (long)(MOTOR_LEG_TRAJECTORY_SPEED_KD * 1000000.0f),
+                    (long)(MOTOR_LEG_TRAJECTORY_TORQUE_MAX_NM * 1000000.0f),
+                    (long)(MOTOR_LEG_TRAJECTORY_TARGET_SPEED_MAX * 1000000.0f),
+                    (long)(MOTOR_LEG_TRAJECTORY_ACTUAL_SPEED_MAX * 1000000.0f),
+                    (long)(MOTOR_LEG_TRAJECTORY_POSITION_MAX * 1000000.0f),
+                    (long)(MOTOR_LEG_TRAJECTORY_TRACKING_ERROR_MAX *
+                           1000000.0f),
+                    (unsigned int)MOTOR_LEG_TRAJECTORY_DURATION_MS,
+                    (unsigned int)Motor_Transport_IsZeroOutputOnly());
+                if (plan_len > 0 && plan_len < (int)sizeof(buf))
+                    Communication_SendBytes((const uint8_t *)buf,
+                                            (uint16_t)plan_len);
+            } else {
+                Communication_SendString("LEG_TRAJ_ACTIVE rejected\r\n");
+            }
+            Communication_SendLegTrajectoryStatus();
+            return;
+        }
+    }
 
     for (uint16_t i = 0; i + sizeof(motor_stand_arm_cmd) - 1 <= len; i++) {
         if (memcmp(&data[i], motor_stand_arm_cmd,
@@ -1085,6 +1203,10 @@ void Communication_Task(void)
     if (motor_control_status_pending && !comm_ctx.tx_busy) {
         motor_control_status_pending = 0U;
         Communication_SendMotorControlStatus();
+    }
+    if (leg_trajectory_status_pending && !comm_ctx.tx_busy) {
+        leg_trajectory_status_pending = 0U;
+        Communication_SendLegTrajectoryStatus();
     }
 }
 
@@ -1858,6 +1980,100 @@ void Communication_SendSoftwarePidTelemetry(void)
             (long)(s.speed_target * 1000000.0f),
             (long)(s.speed_error * 1000000.0f),
             (unsigned long)s.elapsed_ms, (unsigned int)s.stop_reason);
+    }
+    phase ^= 1U;
+    if (len > 0 && len < (int)sizeof(buf))
+        Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
+}
+
+void Communication_SendLegTrajectoryStatus(void)
+{
+    if (!comm_ctx.uart || comm_ctx.tx_busy) {
+        leg_trajectory_status_pending = 1U;
+        return;
+    }
+    Motor_LegTrajectorySnapshot s;
+    Leg_Control_GetRfLegTrajectorySnapshot(&s);
+    char buf[192];
+    int len = snprintf(
+        buf, sizeof(buf),
+        "LEG_TRAJ_STATUS mode=%u reason=%u dry_ok=%u guard=%u elapsed=%lu "
+        "idx=%d detail=%ld seq=%lu\n",
+        (unsigned int)s.mode, (unsigned int)s.reason,
+        (unsigned int)s.dry_run_passed,
+        (unsigned int)Motor_Transport_IsZeroOutputOnly(),
+        (unsigned long)s.elapsed_ms, (int)s.stop_motor_index,
+        (long)(s.stop_detail * 1000000.0f),
+        (unsigned long)s.stop_sequence);
+    if (len > 0 && len < (int)sizeof(buf))
+        Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
+}
+
+void Communication_SendLegTrajectoryTelemetry(void)
+{
+    static uint8_t phase = 0U;
+    if (!comm_ctx.uart || comm_ctx.tx_busy) return;
+    Motor_LegTrajectorySnapshot s;
+    Leg_Control_GetRfLegTrajectorySnapshot(&s);
+    if (s.mode != Motor_LegTrajectory_DryRun &&
+        s.mode != Motor_LegTrajectory_Active &&
+        s.mode != Motor_LegTrajectory_Stopped) return;
+
+    char buf[TX_IT_BUF_SIZE];
+    int len;
+    if (phase == 0U) {
+        len = snprintf(
+            buf, sizeof(buf),
+            "LEG_TRAJ_STATE {\"m\":%u,\"ph\":%ld,\"done\":%u,"
+            "\"x\":%ld,\"y\":%ld,\"rt0\":%ld,\"p0\":%ld,"
+            "\"e0\":%ld,\"v0\":%ld,\"rv0\":%ld,\"rt1\":%ld,"
+            "\"p1\":%ld,\"e1\":%ld,\"v1\":%ld,\"rv1\":%ld,"
+            "\"el\":%lu,\"stop\":%u}\n",
+            (unsigned int)s.mode, (long)(s.phase * 1000000.0f),
+            (unsigned int)s.trajectory_complete,
+            (long)(s.target_foot.x * 1000.0f),
+            (long)(s.target_foot.y * 1000.0f),
+            (long)(s.target_position[0] * 1000000.0f),
+            (long)(s.actual_position[0] * 1000000.0f),
+            (long)(s.position_error[0] * 1000000.0f),
+            (long)(s.raw_velocity[0] * 1000000.0f),
+            (long)(s.target_velocity[0] * 1000000.0f),
+            (long)(s.target_position[1] * 1000000.0f),
+            (long)(s.actual_position[1] * 1000000.0f),
+            (long)(s.position_error[1] * 1000000.0f),
+            (long)(s.raw_velocity[1] * 1000000.0f),
+            (long)(s.target_velocity[1] * 1000000.0f),
+            (unsigned long)s.elapsed_ms, (unsigned int)s.reason);
+    } else {
+        int32_t tq0 = (int32_t)(s.torque[0] * 256.0f);
+        int32_t tq1 = (int32_t)(s.torque[1] * 256.0f);
+        len = snprintf(
+            buf, sizeof(buf),
+            "LEG_TRAJ_CTRL {\"m\":%u,\"P0\":%ld,\"I0\":%ld,"
+            "\"D0\":%ld,\"T0\":%ld,\"qT0\":%ld,\"lim0\":%u,"
+            "\"st0\":%ld,\"se0\":%ld,\"P1\":%ld,\"I1\":%ld,"
+            "\"D1\":%ld,\"T1\":%ld,\"qT1\":%ld,\"lim1\":%u,"
+            "\"st1\":%ld,\"se1\":%ld,\"el\":%lu,\"stop\":%u,"
+            "\"idx\":%d}\n",
+            (unsigned int)s.mode,
+            (long)(s.p_term[0] * 1000000.0f),
+            (long)(s.i_term[0] * 1000000.0f),
+            (long)(s.d_term[0] * 1000000.0f),
+            (long)(s.torque[0] * 1000000.0f),
+            (long)((float)tq0 * (1000000.0f / 256.0f)),
+            (unsigned int)s.torque_limited[0],
+            (long)(s.speed_target[0] * 1000000.0f),
+            (long)(s.speed_error[0] * 1000000.0f),
+            (long)(s.p_term[1] * 1000000.0f),
+            (long)(s.i_term[1] * 1000000.0f),
+            (long)(s.d_term[1] * 1000000.0f),
+            (long)(s.torque[1] * 1000000.0f),
+            (long)((float)tq1 * (1000000.0f / 256.0f)),
+            (unsigned int)s.torque_limited[1],
+            (long)(s.speed_target[1] * 1000000.0f),
+            (long)(s.speed_error[1] * 1000000.0f),
+            (unsigned long)s.elapsed_ms, (unsigned int)s.reason,
+            (int)s.stop_motor_index);
     }
     phase ^= 1U;
     if (len > 0 && len < (int)sizeof(buf))

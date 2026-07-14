@@ -6,6 +6,7 @@
 #include "Motor_State.h"
 #include "Motor_SoftwareControl.h"
 #include "Motor_GroupControl.h"
+#include "Motor_LegTrajectory.h"
 #include "main.h"
 
 typedef enum
@@ -98,6 +99,10 @@ int  Leg_Control_StartStaticHoldDryRun(uint8_t motor_index);
 int  Leg_Control_StartStaticHoldActive(uint8_t motor_index);
 int  Leg_Control_StartSingleMotorTrajectoryDryRun(uint8_t motor_index);
 int  Leg_Control_StartSingleMotorTrajectoryActive(uint8_t motor_index);
+int  Leg_Control_ArmRfLegTrajectory(void);
+int  Leg_Control_StartRfLegTrajectoryDryRun(void);
+int  Leg_Control_StartRfLegTrajectoryActive(void);
+void Leg_Control_GetRfLegTrajectorySnapshot(Motor_LegTrajectorySnapshot *snapshot);
 const char *Leg_Control_GetLastPlanRejectReason(void);
 void Leg_Control_ForceZeroOutput(Motor_ControlReasonTypeDef reason);
 void Leg_Control_GetControlSnapshot(Motor_ControlSnapshotTypeDef *snapshot);

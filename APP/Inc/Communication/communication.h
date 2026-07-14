@@ -44,6 +44,8 @@ void Communication_SendMotorAngles(void);
 void Communication_SendMotorStatus(void);
 void Communication_SendMotorControlStatus(void);
 void Communication_SendSoftwarePidTelemetry(void);
+void Communication_SendLegTrajectoryStatus(void);
+void Communication_SendLegTrajectoryTelemetry(void);
 void Communication_SendMotorTransportStatus(void);
 void Communication_SendMotorTransportSummaryBlocking(void);
 
