@@ -10,10 +10,9 @@
 #define MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX  2U
 #define MOTOR_LEG_TRAJECTORY_ACTIVE_ENABLED      1U
 #define MOTOR_LEG_TRAJECTORY_LEVEL_MIN            1U
-#define MOTOR_LEG_TRAJECTORY_LEVEL_MAX            4U
+#define MOTOR_LEG_TRAJECTORY_LEVEL_MAX            7U
 #define MOTOR_LEG_TRAJECTORY_TORQUE_MAX_NM        1.0f
 #define MOTOR_LEG_TRAJECTORY_DRY_RUN_REQUIRED       0U
-#define MOTOR_LEG_TRAJECTORY_HARD_SPEED_MAX       8.0f
 #define MOTOR_LEG_TRAJECTORY_OVERSPEED_SAMPLES     20U
 #define MOTOR_LEG_TRAJECTORY_HARD_SPEED_SAMPLES     3U
 #define MOTOR_LEG_TRAJECTORY_TRACKING_ERROR_MAX    0.35f
@@ -36,8 +35,11 @@ typedef struct
   uint32_t duration_ms;
   float target_speed_max;
   float actual_speed_max;
+  float hard_speed_max;
   float position_max;
   float target_delta_max;
+  uint8_t reference_s2;
+  float reference_height_mm;
 } Motor_LegTrajectoryProfile;
 
 typedef enum

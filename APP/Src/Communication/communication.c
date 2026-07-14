@@ -580,7 +580,8 @@ static void send_leg_trajectory_plan(uint8_t dry_run)
         "LEG_TRAJ_PLAN {\"level\":%u,\"dry\":%u,\"out\":%u,"
         "\"active\":%u,\"leg\":%u,\"idx\":[2,3],"
         "\"path\":\"vertical_cos\",\"lift\":%ld,\"period\":%lu,"
-        "\"settle\":%lu,\"x0\":%ld,\"y0\":%ld,"
+        "\"settle\":%lu,\"ref_s2\":%u,\"ref_h\":%ld,"
+        "\"x0\":%ld,\"y0\":%ld,"
         "\"yp\":%ld,\"d\":[%ld,%ld],\"pkp\":%ld,\"pkd\":%ld,"
         "\"skp\":%ld,\"ski\":%ld,\"skd\":%ld,\"tmax\":%ld,"
         "\"vt\":%ld,\"vm\":%ld,\"vh\":%ld,\"vs\":%u,\"vhs\":%u,"
@@ -595,6 +596,8 @@ static void send_leg_trajectory_plan(uint8_t dry_run)
         (long)(s.profile.lift_mm * 1000.0f),
         (unsigned long)s.profile.period_ms,
         (unsigned long)s.profile.settle_ms,
+        (unsigned int)s.profile.reference_s2,
+        (long)(s.profile.reference_height_mm * 1000.0f),
         (long)(s.base_foot.x * 1000.0f),
         (long)(s.base_foot.y * 1000.0f),
         (long)((s.base_foot.y - s.profile.lift_mm) * 1000.0f),
@@ -608,7 +611,7 @@ static void send_leg_trajectory_plan(uint8_t dry_run)
         (long)(MOTOR_LEG_TRAJECTORY_TORQUE_MAX_NM * 1000000.0f),
         (long)(s.profile.target_speed_max * 1000000.0f),
         (long)(s.profile.actual_speed_max * 1000000.0f),
-        (long)(MOTOR_LEG_TRAJECTORY_HARD_SPEED_MAX * 1000000.0f),
+        (long)(s.profile.hard_speed_max * 1000000.0f),
         (unsigned int)MOTOR_LEG_TRAJECTORY_OVERSPEED_SAMPLES,
         (unsigned int)MOTOR_LEG_TRAJECTORY_HARD_SPEED_SAMPLES,
         (unsigned int)MOTOR_LEG_TRAJECTORY_DRY_RUN_REQUIRED,

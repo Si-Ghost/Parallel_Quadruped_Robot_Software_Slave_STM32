@@ -98,8 +98,11 @@ static const Motor_LegTrajectoryProfile profiles[] = {
         .duration_ms = 5000U,
         .target_speed_max = 2.0f,
         .actual_speed_max = 4.50f,
+        .hard_speed_max = 8.00f,
         .position_max = 0.75f,
         .target_delta_max = 0.55f,
+        .reference_s2 = 0U,
+        .reference_height_mm = 0.0f,
     },
     {
         /* The 40 mm amplitude comes from the reference project's fastest
@@ -112,8 +115,11 @@ static const Motor_LegTrajectoryProfile profiles[] = {
         .duration_ms = 9000U,
         .target_speed_max = 1.10f,
         .actual_speed_max = 4.50f,
+        .hard_speed_max = 8.00f,
         .position_max = 2.50f,
         .target_delta_max = 2.30f,
+        .reference_s2 = 0U,
+        .reference_height_mm = 0.0f,
     },
     {
         .level = 3U,
@@ -123,8 +129,11 @@ static const Motor_LegTrajectoryProfile profiles[] = {
         .duration_ms = 5000U,
         .target_speed_max = 2.20f,
         .actual_speed_max = 6.00f,
+        .hard_speed_max = 8.00f,
         .position_max = 2.50f,
         .target_delta_max = 2.30f,
+        .reference_s2 = 0U,
+        .reference_height_mm = 0.0f,
     },
     {
         .level = 4U,
@@ -134,8 +143,60 @@ static const Motor_LegTrajectoryProfile profiles[] = {
         .duration_ms = 3000U,
         .target_speed_max = 4.00f,
         .actual_speed_max = 7.00f,
+        .hard_speed_max = 8.00f,
         .position_max = 2.50f,
         .target_delta_max = 2.30f,
+        .reference_s2 = 0U,
+        .reference_height_mm = 0.0f,
+    },
+    {
+        /* Reference S2=2: step_rate=300 ms, full cycle=600 ms,
+         * leg_high=220 mm, lift=50 mm.  The single-leg no-L2 test keeps
+         * the current arm-time base foot and applies only lift/cadence. */
+        .level = 5U,
+        .lift_mm = 50.0f,
+        .period_ms = 600U,
+        .settle_ms = 1000U,
+        .duration_ms = 1600U,
+        .target_speed_max = 18.0f,
+        .actual_speed_max = 28.0f,
+        .hard_speed_max = 36.0f,
+        .position_max = 3.50f,
+        .target_delta_max = 3.20f,
+        .reference_s2 = 2U,
+        .reference_height_mm = 220.0f,
+    },
+    {
+        /* Reference S2=3: step_rate=220 ms, full cycle=440 ms,
+         * leg_high=215 mm, lift=50 mm. */
+        .level = 6U,
+        .lift_mm = 50.0f,
+        .period_ms = 440U,
+        .settle_ms = 1000U,
+        .duration_ms = 1440U,
+        .target_speed_max = 24.0f,
+        .actual_speed_max = 35.0f,
+        .hard_speed_max = 45.0f,
+        .position_max = 3.50f,
+        .target_delta_max = 3.20f,
+        .reference_s2 = 3U,
+        .reference_height_mm = 215.0f,
+    },
+    {
+        /* Reference S2=1: step_rate=175 ms, full cycle=350 ms,
+         * leg_high=210 mm, lift=40 mm. */
+        .level = 7U,
+        .lift_mm = 40.0f,
+        .period_ms = 350U,
+        .settle_ms = 1000U,
+        .duration_ms = 1350U,
+        .target_speed_max = 24.0f,
+        .actual_speed_max = 35.0f,
+        .hard_speed_max = 45.0f,
+        .position_max = 2.50f,
+        .target_delta_max = 2.30f,
+        .reference_s2 = 1U,
+        .reference_height_mm = 210.0f,
     },
 };
 
@@ -165,8 +226,11 @@ static uint8_t profiles_match(const Motor_LegTrajectoryProfile *a,
           a->duration_ms == b->duration_ms &&
           a->target_speed_max == b->target_speed_max &&
           a->actual_speed_max == b->actual_speed_max &&
+          a->hard_speed_max == b->hard_speed_max &&
           a->position_max == b->position_max &&
-          a->target_delta_max == b->target_delta_max) ? 1U : 0U;
+          a->target_delta_max == b->target_delta_max &&
+          a->reference_s2 == b->reference_s2 &&
+          a->reference_height_mm == b->reference_height_mm) ? 1U : 0U;
 }
 
 static void evaluate_approved_plan(void)
@@ -636,7 +700,7 @@ void Motor_LegTrajectory_Update(uint8_t motor_index,
   /* The motor's reported velocity contains short quantization/filter spikes.
    * A sustained soft limit rejects real overspeed without aborting on a few
    * noisy frames; the independent hard limit still stops a runaway quickly. */
-  if (fabsf(rotor_velocity) > MOTOR_LEG_TRAJECTORY_HARD_SPEED_MAX) {
+  if (fabsf(rotor_velocity) > control.profile.hard_speed_max) {
     if (channel->hard_overspeed_count < 255U)
       ++channel->hard_overspeed_count;
     if (channel->hard_overspeed_count >=
