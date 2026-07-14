@@ -211,7 +211,7 @@ void Leg_Control_GetControlSnapshot(Motor_ControlSnapshotTypeDef *snapshot)
 
 static const float default_rotor_zero_offset[4][2] = {
   /* LF: ID0, ID1 */ { 4.4221f, 5.5321f},
-  /* RF: ID0, ID1 */ {-0.7610f, 4.5657f},
+  /* RF: ID0, ID1 */ { 1.3647f, 4.5657f},
   /* LB: ID0, ID1 */ { 0.0832f, 3.3468f},
   /* RB: ID0, ID1 */ {-0.9794f, 3.3552f},
 };
