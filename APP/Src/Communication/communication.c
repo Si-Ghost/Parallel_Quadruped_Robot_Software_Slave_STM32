@@ -664,7 +664,10 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
             uint16_t pos = i + (uint16_t)(sizeof(leg_traj_arm_rf_cmd) - 1U);
             while (pos < len && (data[pos] == ' ' || data[pos] == '\t')) ++pos;
             if (pos < len) {
-                if (data[pos] < '1' || data[pos] > '2') {
+                if (data[pos] <
+                        (uint8_t)('0' + MOTOR_LEG_TRAJECTORY_LEVEL_MIN) ||
+                    data[pos] >
+                        (uint8_t)('0' + MOTOR_LEG_TRAJECTORY_LEVEL_MAX)) {
                     Communication_SendString("LEG_TRAJ_ARM parse_fail\r\n");
                     return;
                 }

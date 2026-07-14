@@ -101,16 +101,35 @@ static const Motor_LegTrajectoryProfile profiles[] = {
         .target_delta_max = 0.55f,
     },
     {
-        /* The 40 mm amplitude comes from the reference project's fast gait.
-         * The 8 s period is deliberately much slower than its 350 ms cycle:
-         * this profile changes observation range without simultaneously
-         * escalating speed or adding the reference +/-75 mm fore-aft step. */
+        /* The 40 mm amplitude comes from the reference project's fastest
+         * 350 ms full gait cycle.  Level 2 remains the proven slow fallback;
+         * Levels 3/4 shorten only the cycle without adding its +/-75 mm step. */
         .level = 2U,
         .lift_mm = 40.0f,
         .period_ms = 8000U,
         .settle_ms = 1000U,
         .duration_ms = 9000U,
         .target_speed_max = 1.10f,
+        .position_max = 2.50f,
+        .target_delta_max = 2.30f,
+    },
+    {
+        .level = 3U,
+        .lift_mm = 40.0f,
+        .period_ms = 4000U,
+        .settle_ms = 1000U,
+        .duration_ms = 5000U,
+        .target_speed_max = 2.20f,
+        .position_max = 2.50f,
+        .target_delta_max = 2.30f,
+    },
+    {
+        .level = 4U,
+        .lift_mm = 40.0f,
+        .period_ms = 2000U,
+        .settle_ms = 1000U,
+        .duration_ms = 3000U,
+        .target_speed_max = 4.00f,
         .position_max = 2.50f,
         .target_delta_max = 2.30f,
     },
