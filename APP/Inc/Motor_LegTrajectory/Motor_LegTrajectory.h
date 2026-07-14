@@ -9,7 +9,7 @@
 #define MOTOR_LEG_TRAJECTORY_LEG_INDEX          1U
 #define MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX  2U
 #define MOTOR_LEG_TRAJECTORY_TEST_LEVEL          1U
-#define MOTOR_LEG_TRAJECTORY_ACTIVE_ENABLED      0U
+#define MOTOR_LEG_TRAJECTORY_ACTIVE_ENABLED      1U
 #define MOTOR_LEG_TRAJECTORY_LIFT_MM             5.0f
 #define MOTOR_LEG_TRAJECTORY_PERIOD_MS            4000U
 #define MOTOR_LEG_TRAJECTORY_SETTLE_MS            1000U
@@ -33,7 +33,8 @@ typedef enum
   Motor_LegTrajectory_Armed = 1,
   Motor_LegTrajectory_DryRun = 2,
   Motor_LegTrajectory_Active = 3,
-  Motor_LegTrajectory_Stopped = 4
+  Motor_LegTrajectory_Stopped = 4,
+  Motor_LegTrajectory_Hold = 5
 } Motor_LegTrajectoryMode;
 
 typedef enum
@@ -61,6 +62,7 @@ typedef struct
   uint8_t dry_run;
   uint8_t dry_run_passed;
   uint8_t trajectory_complete;
+  uint8_t hold_current_position;
   int8_t stop_motor_index;
   float stop_detail;
   uint32_t stop_sequence;
@@ -105,6 +107,9 @@ void Motor_LegTrajectory_Init(void);
 int Motor_LegTrajectory_Arm(const Motor_StateSnapshotTypeDef states[2],
                             uint32_t now_ms);
 int Motor_LegTrajectory_Start(uint8_t dry_run, uint32_t now_ms);
+int Motor_LegTrajectory_EnterHold(Motor_LegTrajectoryStopReason reason,
+                                  uint8_t hold_current_position,
+                                  float detail);
 void Motor_LegTrajectory_Update(uint8_t motor_index,
                                 float rotor_position,
                                 float rotor_velocity,

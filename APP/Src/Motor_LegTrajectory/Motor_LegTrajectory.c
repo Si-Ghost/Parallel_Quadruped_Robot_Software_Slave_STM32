@@ -56,6 +56,7 @@ typedef struct
   uint8_t dry_run;
   uint8_t dry_run_passed;
   uint8_t trajectory_complete;
+  uint8_t hold_current_position;
   int8_t stop_motor_index;
   float stop_detail;
   uint32_t stop_sequence;
@@ -89,10 +90,35 @@ static float normalized_direction(float direction)
   return direction < 0.0f ? -1.0f : 1.0f;
 }
 
-static uint8_t running_mode(void)
+static uint8_t trajectory_mode(void)
 {
   return (control.mode == Motor_LegTrajectory_DryRun ||
           control.mode == Motor_LegTrajectory_Active) ? 1U : 0U;
+}
+
+static uint8_t controller_mode(void)
+{
+  return (trajectory_mode() != 0U ||
+          control.mode == Motor_LegTrajectory_Hold) ? 1U : 0U;
+}
+
+static void reset_channel_controller(Motor_LegTrajectoryChannel *channel)
+{
+  if (channel == NULL) return;
+  channel->target_velocity = 0.0f;
+  channel->speed_target = 0.0f;
+  channel->speed_error = 0.0f;
+  channel->previous_position_error =
+      channel->target_position - channel->actual_position;
+  channel->previous_speed_error = 0.0f;
+  channel->p_term = 0.0f;
+  channel->i_term = 0.0f;
+  channel->d_term = 0.0f;
+  channel->torque = 0.0f;
+  channel->torque_limited = 0U;
+  channel->overspeed_count = 0U;
+  channel->tracking_error_count = 0U;
+  channel->previous_feedback_timestamp = 0U;
 }
 
 void Motor_LegTrajectory_Init(void)
@@ -233,7 +259,7 @@ int Motor_LegTrajectory_Start(uint8_t dry_run, uint32_t now_ms)
   control.target_foot = control.base_foot;
   control.stop_motor_index = -1;
   control.stop_detail = 0.0f;
-  control.dry_run_passed = 0U;
+  if (dry_run != 0U) control.dry_run_passed = 0U;
   for (uint8_t motor = 0U; motor < LEG_TRAJ_MOTOR_COUNT; ++motor) {
     Motor_LegTrajectoryChannel *channel = &control.channel[motor];
     channel->target_position = channel->arm_position;
@@ -264,9 +290,71 @@ int Motor_LegTrajectory_Start(uint8_t dry_run, uint32_t now_ms)
   return 1;
 }
 
+int Motor_LegTrajectory_EnterHold(Motor_LegTrajectoryStopReason reason,
+                                  uint8_t hold_current_position,
+                                  float detail)
+{
+  if ((control.mode != Motor_LegTrajectory_Active &&
+       control.mode != Motor_LegTrajectory_Hold) ||
+      (reason != Motor_LegTrajectory_StopComplete &&
+       reason != Motor_LegTrajectory_StopOperator &&
+       reason != Motor_LegTrajectory_StopCommandLink))
+    return 0;
+
+  if (control.mode == Motor_LegTrajectory_Hold) return 1;
+
+  /* Normal completion returns to the arm-time multi-turn targets.  An
+   * operator or command-link interruption freezes the latest validated raw
+   * feedback instead, preventing the remainder of the foot trajectory from
+   * continuing without an operator while still preserving controlled torque. */
+  for (uint8_t motor = 0U; motor < LEG_TRAJ_MOTOR_COUNT; ++motor) {
+    Motor_LegTrajectoryChannel *channel = &control.channel[motor];
+    channel->target_position = hold_current_position != 0U
+                                   ? channel->actual_position
+                                   : channel->arm_position;
+    channel->previous_target_position = channel->target_position;
+    channel->position_error =
+        channel->target_position - channel->actual_position;
+    reset_channel_controller(channel);
+  }
+
+  if (hold_current_position == 0U) {
+    control.target_foot = control.base_foot;
+  } else {
+    Leg_JointAnglesTypeDef hold_angles = {
+        .theta1 = control.channel[0].base_joint_position +
+                  control.channel[0].direction *
+                      (control.channel[0].target_position -
+                       control.channel[0].arm_position) /
+                      LEG_TRAJ_REDUCTION_RATIO,
+        .theta2 = control.channel[1].base_joint_position +
+                  control.channel[1].direction *
+                      (control.channel[1].target_position -
+                       control.channel[1].arm_position) /
+                      LEG_TRAJ_REDUCTION_RATIO,
+    };
+    Leg_PointTypeDef hold_foot;
+    if (Leg_Kinematics_Forward(&hold_angles, &hold_foot))
+      control.target_foot = hold_foot;
+  }
+
+  control.mode = Motor_LegTrajectory_Hold;
+  control.reason = reason;
+  control.dry_run = 0U;
+  control.trajectory_complete =
+      reason == Motor_LegTrajectory_StopComplete ? 1U : 0U;
+  control.hold_current_position = hold_current_position != 0U ? 1U : 0U;
+  control.phase = reason == Motor_LegTrajectory_StopComplete ? 1.0f
+                                                              : control.phase;
+  control.stop_motor_index = -1;
+  control.stop_detail = isfinite(detail) ? detail : 0.0f;
+  ++control.stop_sequence;
+  return 1;
+}
+
 static int update_trajectory_targets(uint32_t now_ms)
 {
-  if (running_mode() == 0U) return 0;
+  if (trajectory_mode() == 0U) return 0;
   control.elapsed_ms = now_ms - control.plan_start_ms;
 
   float shape = 0.0f;
@@ -315,13 +403,14 @@ void Motor_LegTrajectory_Update(uint8_t motor_index,
                                 uint32_t feedback_timestamp,
                                 uint32_t now_ms)
 {
-  if (running_mode() == 0U ||
+  if (controller_mode() == 0U ||
       motor_index < MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX ||
       motor_index >= MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX +
                          LEG_TRAJ_MOTOR_COUNT)
     return;
   if (!isfinite(rotor_position) || !isfinite(rotor_velocity) ||
-      feedback_timestamp == 0U || !update_trajectory_targets(now_ms)) {
+      feedback_timestamp == 0U ||
+      (trajectory_mode() != 0U && !update_trajectory_targets(now_ms))) {
     if (control.mode != Motor_LegTrajectory_Stopped)
       Motor_LegTrajectory_Stop(Motor_LegTrajectory_StopController,
                                (int8_t)motor_index, 0.0f);
@@ -339,7 +428,8 @@ void Motor_LegTrajectory_Update(uint8_t motor_index,
   channel->peak_abs_position_error = max_abs(
       channel->peak_abs_position_error, channel->position_error);
 
-  if (control.mode == Motor_LegTrajectory_Active &&
+  if ((control.mode == Motor_LegTrajectory_Active ||
+       control.mode == Motor_LegTrajectory_Hold) &&
       fabsf(channel->position_error) >
           MOTOR_LEG_TRAJECTORY_TRACKING_ERROR_MAX) {
     if (channel->tracking_error_count < 255U)
@@ -453,7 +543,7 @@ void Motor_LegTrajectory_Stop(Motor_LegTrajectoryStopReason reason,
 
 uint8_t Motor_LegTrajectory_IsRunning(void)
 {
-  return running_mode();
+  return controller_mode();
 }
 
 int Motor_LegTrajectory_GetAuthorizedTorque(uint8_t motor_index,
@@ -461,7 +551,8 @@ int Motor_LegTrajectory_GetAuthorizedTorque(uint8_t motor_index,
 {
   if (torque == NULL) return 0;
   *torque = 0.0f;
-  if (control.mode != Motor_LegTrajectory_Active ||
+  if ((control.mode != Motor_LegTrajectory_Active &&
+       control.mode != Motor_LegTrajectory_Hold) ||
       motor_index < MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX ||
       motor_index >= MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX +
                          LEG_TRAJ_MOTOR_COUNT)
@@ -488,6 +579,7 @@ void Motor_LegTrajectory_GetSnapshot(Motor_LegTrajectorySnapshot *snapshot)
   snapshot->dry_run = control.dry_run;
   snapshot->dry_run_passed = control.dry_run_passed;
   snapshot->trajectory_complete = control.trajectory_complete;
+  snapshot->hold_current_position = control.hold_current_position;
   snapshot->stop_motor_index = control.stop_motor_index;
   snapshot->stop_detail = control.stop_detail;
   snapshot->stop_sequence = control.stop_sequence;

@@ -102,6 +102,7 @@ int  Leg_Control_StartSingleMotorTrajectoryActive(uint8_t motor_index);
 int  Leg_Control_ArmRfLegTrajectory(void);
 int  Leg_Control_StartRfLegTrajectoryDryRun(void);
 int  Leg_Control_StartRfLegTrajectoryActive(void);
+int  Leg_Control_HoldRfLegTrajectory(void);
 void Leg_Control_GetRfLegTrajectorySnapshot(Motor_LegTrajectorySnapshot *snapshot);
 const char *Leg_Control_GetLastPlanRejectReason(void);
 void Leg_Control_ForceZeroOutput(Motor_ControlReasonTypeDef reason);

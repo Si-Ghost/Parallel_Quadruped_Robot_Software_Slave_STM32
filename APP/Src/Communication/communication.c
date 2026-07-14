@@ -77,6 +77,7 @@ static const char pid_traj_active_cmd[] = "PID_TRAJ_ACTIVE";
 static const char leg_traj_arm_rf_cmd[] = "LEG_TRAJ_ARM_RF";
 static const char leg_traj_dryrun_cmd[] = "LEG_TRAJ_DRYRUN";
 static const char leg_traj_active_cmd[] = "LEG_TRAJ_ACTIVE";
+static const char leg_traj_hold_cmd[] = "LEG_TRAJ_HOLD";
 static const char leg_nudge_mm_cmd[] = "LEG_NUDGE_MM";
 static const char leg_trace_cmd[] = "LEG_TRACE";
 static const char leg_snapshot_cmd[] = "LEG_SNAPSHOT";
@@ -572,7 +573,7 @@ static void send_leg_trajectory_plan(uint8_t dry_run)
         "\"skp\":%ld,\"ski\":%ld,\"skd\":%ld,\"tmax\":%ld,"
         "\"vt\":%ld,\"vm\":%ld,\"xm\":%ld,\"tdm\":%ld,"
         "\"em\":%ld,\"dt_us\":[200,10000],\"fb_ms\":10,"
-        "\"temp\":40,\"dur\":%u,\"end\":\"zero_output\"}\n",
+        "\"temp\":40,\"dur\":%u,\"end\":\"%s\"}\n",
         (unsigned int)MOTOR_LEG_TRAJECTORY_TEST_LEVEL,
         (unsigned int)dry_run,
         (unsigned int)(dry_run != 0U ? 0U : 1U),
@@ -596,7 +597,8 @@ static void send_leg_trajectory_plan(uint8_t dry_run)
         (long)(MOTOR_LEG_TRAJECTORY_POSITION_MAX * 1000000.0f),
         (long)(MOTOR_LEG_TRAJECTORY_TARGET_DELTA_MAX * 1000000.0f),
         (long)(MOTOR_LEG_TRAJECTORY_TRACKING_ERROR_MAX * 1000000.0f),
-        (unsigned int)MOTOR_LEG_TRAJECTORY_DURATION_MS);
+        (unsigned int)MOTOR_LEG_TRAJECTORY_DURATION_MS,
+        dry_run != 0U ? "zero_output" : "hold_arm");
     if (len > 0 && len < (int)sizeof(buf))
         Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
 }
@@ -622,6 +624,7 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         len < sizeof(leg_traj_arm_rf_cmd) - 1 &&
         len < sizeof(leg_traj_dryrun_cmd) - 1 &&
         len < sizeof(leg_traj_active_cmd) - 1 &&
+        len < sizeof(leg_traj_hold_cmd) - 1 &&
         len < sizeof(leg_nudge_mm_cmd) - 1 &&
         len < sizeof(leg_trace_cmd) - 1 &&
         len < sizeof(leg_snapshot_cmd) - 1 &&
@@ -663,8 +666,25 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
          i + sizeof(leg_traj_active_cmd) - 1 <= len; ++i) {
         if (memcmp(&data[i], leg_traj_active_cmd,
                    sizeof(leg_traj_active_cmd) - 1) == 0) {
-            Communication_SendString(
-                "LEG_TRAJ_ACTIVE blocked: dryrun_review_and_hold_required\r\n");
+            if (Leg_Control_StartRfLegTrajectoryActive()) {
+                send_leg_trajectory_plan(0U);
+            } else {
+                Communication_SendString("LEG_TRAJ_ACTIVE rejected\r\n");
+            }
+            Communication_SendLegTrajectoryStatus();
+            return;
+        }
+    }
+
+    for (uint16_t i = 0;
+         i + sizeof(leg_traj_hold_cmd) - 1 <= len; ++i) {
+        if (memcmp(&data[i], leg_traj_hold_cmd,
+                   sizeof(leg_traj_hold_cmd) - 1) == 0) {
+            if (Leg_Control_HoldRfLegTrajectory())
+                Communication_SendString("LEG_TRAJ_HOLD ok\r\n");
+            else
+                Communication_SendString("LEG_TRAJ_HOLD rejected\r\n");
+            Communication_SendLegTrajectoryTelemetry();
             Communication_SendLegTrajectoryStatus();
             return;
         }
@@ -2008,7 +2028,7 @@ void Communication_SendLegTrajectoryStatus(void)
     int len = snprintf(
         buf, sizeof(buf),
         "LEG_TRAJ_STATUS mode=%u reason=%u dry_ok=%u guard=%u level=%u "
-        "active=%u elapsed=%lu idx=%d detail=%ld seq=%lu\n",
+        "active=%u elapsed=%lu idx=%d detail=%ld seq=%lu hold=%u\n",
         (unsigned int)s.mode, (unsigned int)s.reason,
         (unsigned int)s.dry_run_passed,
         (unsigned int)Motor_Transport_IsZeroOutputOnly(),
@@ -2016,9 +2036,56 @@ void Communication_SendLegTrajectoryStatus(void)
         (unsigned int)MOTOR_LEG_TRAJECTORY_ACTIVE_ENABLED,
         (unsigned long)s.elapsed_ms, (int)s.stop_motor_index,
         (long)(s.stop_detail * 1000000.0f),
-        (unsigned long)s.stop_sequence);
+        (unsigned long)s.stop_sequence,
+        (unsigned int)s.hold_current_position);
     if (len > 0 && len < (int)sizeof(buf))
         Communication_SendBytes((const uint8_t *)buf, (uint16_t)len);
+}
+
+int Communication_TrySendLegTrajectoryHoldResult(void)
+{
+    Motor_LegTrajectorySnapshot s;
+    Leg_Control_GetRfLegTrajectorySnapshot(&s);
+    if (s.mode != Motor_LegTrajectory_Hold)
+        return 0;
+
+    char buf[TX_IT_BUF_SIZE];
+    int len = snprintf(
+        buf, sizeof(buf),
+        "LEG_TRAJ_HOLD_RESULT {\"m\":%u,\"reason\":%u,\"hold\":%u,"
+        "\"out\":1,\"el\":%lu,\"samples\":[%lu,%lu],"
+        "\"d\":[%ld,%ld],\"tv\":[%ld,%ld],\"av\":[%ld,%ld],"
+        "\"err\":[%ld,%ld],\"tq\":[%ld,%ld],\"sat\":[%lu,%lu],"
+        "\"dt_min\":[%ld,%ld],\"dt_max\":[%ld,%ld],"
+        "\"target\":[%ld,%ld],\"actual\":[%ld,%ld]}\n",
+        (unsigned int)s.mode, (unsigned int)s.reason,
+        (unsigned int)s.hold_current_position,
+        (unsigned long)s.elapsed_ms,
+        (unsigned long)s.feedback_count[0],
+        (unsigned long)s.feedback_count[1],
+        (long)(s.peak_target_delta[0] * 1000000.0f),
+        (long)(s.peak_target_delta[1] * 1000000.0f),
+        (long)(s.peak_abs_target_velocity[0] * 1000000.0f),
+        (long)(s.peak_abs_target_velocity[1] * 1000000.0f),
+        (long)(s.peak_abs_actual_velocity[0] * 1000000.0f),
+        (long)(s.peak_abs_actual_velocity[1] * 1000000.0f),
+        (long)(s.peak_abs_position_error[0] * 1000000.0f),
+        (long)(s.peak_abs_position_error[1] * 1000000.0f),
+        (long)(s.peak_abs_torque[0] * 1000000.0f),
+        (long)(s.peak_abs_torque[1] * 1000000.0f),
+        (unsigned long)s.torque_limit_count[0],
+        (unsigned long)s.torque_limit_count[1],
+        (long)(s.min_dt_ms[0] * 1000.0f),
+        (long)(s.min_dt_ms[1] * 1000.0f),
+        (long)(s.max_dt_ms[0] * 1000.0f),
+        (long)(s.max_dt_ms[1] * 1000.0f),
+        (long)(s.target_position[0] * 1000000.0f),
+        (long)(s.target_position[1] * 1000000.0f),
+        (long)(s.actual_position[0] * 1000000.0f),
+        (long)(s.actual_position[1] * 1000000.0f));
+    if (len <= 0 || len >= (int)sizeof(buf))
+        return 0;
+    return Communication_TrySendString(buf);
 }
 
 void Communication_SendLegTrajectoryTelemetry(void)
@@ -2029,6 +2096,7 @@ void Communication_SendLegTrajectoryTelemetry(void)
     Leg_Control_GetRfLegTrajectorySnapshot(&s);
     if (s.mode != Motor_LegTrajectory_DryRun &&
         s.mode != Motor_LegTrajectory_Active &&
+        s.mode != Motor_LegTrajectory_Hold &&
         s.mode != Motor_LegTrajectory_Stopped) return;
 
     char buf[TX_IT_BUF_SIZE];

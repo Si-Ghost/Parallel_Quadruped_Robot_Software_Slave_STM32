@@ -47,6 +47,8 @@ extern UART_HandleTypeDef huart8;
 #define LEG_SINGLE_MOTOR_MAX_VELOCITY_RAD_S   3.0f
 #define LEG_STATIC_HOLD_DRY_RUN_DURATION_MS     10000U
 #define LEG_STATIC_HOLD_ACTIVE_DURATION_MS          0U
+#define LEG_TRAJECTORY_ACTIVE_TELEMETRY_MS         100U
+#define LEG_TRAJECTORY_HOLD_TELEMETRY_MS          1000U
 #define LEG_UART_HARD_ERROR_MASK \
   (HAL_UART_ERROR_DMA | HAL_UART_ERROR_RTO)
 #define LEG_MOTOR_THETA1            0U /* ID0 drives AB after front/rear mounting swap. */
@@ -1472,52 +1474,90 @@ void Leg_Control_Service(uint32_t now_ms)
   Motor_LegTrajectorySnapshot leg_trajectory;
   Leg_Control_GetRfLegTrajectorySnapshot(&leg_trajectory);
   if (leg_trajectory.mode == Motor_LegTrajectory_DryRun ||
-      leg_trajectory.mode == Motor_LegTrajectory_Active) {
+      leg_trajectory.mode == Motor_LegTrajectory_Active ||
+      leg_trajectory.mode == Motor_LegTrajectory_Hold) {
     Motor_LegTrajectoryStopReason stop_reason = Motor_LegTrajectory_StopNone;
     int8_t stop_motor = -1;
     float stop_detail = 0.0f;
     if (command_link_alive == 0U) {
-      stop_reason = Motor_LegTrajectory_StopCommandLink;
-      stop_detail = (float)Communication_GetLinkAgeMs();
-    } else {
-      for (uint8_t idx = MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX;
-           idx < MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX + 2U; ++idx) {
-        Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(idx);
-        if (state == NULL || state->online != Motor_Online ||
-            state->angle_valid != Motor_Angle_Valid ||
-            (now_ms - state->timestamp) > 10U) {
-          stop_reason = Motor_LegTrajectory_StopOffline;
-          stop_motor = (int8_t)idx;
-          stop_detail = state == NULL ? -1.0f
-                                      : (float)(now_ms - state->timestamp);
-          break;
-        }
-        if (state->motor_error != 0U) {
-          stop_reason = Motor_LegTrajectory_StopMotorFault;
-          stop_motor = (int8_t)idx;
-          stop_detail = (float)state->motor_error;
-          break;
-        }
-        if (state->temperature_c >= 40) {
-          stop_reason = Motor_LegTrajectory_StopTemperature;
-          stop_motor = (int8_t)idx;
-          stop_detail = (float)state->temperature_c;
-          break;
+      uint32_t link_age_ms = Communication_GetLinkAgeMs();
+      if (leg_trajectory.mode == Motor_LegTrajectory_DryRun) {
+        stop_reason = Motor_LegTrajectory_StopCommandLink;
+        stop_detail = (float)link_age_ms;
+      } else if (leg_trajectory.mode == Motor_LegTrajectory_Active) {
+        uint32_t primask = __get_PRIMASK();
+        __disable_irq();
+        int held = Motor_LegTrajectory_EnterHold(
+            Motor_LegTrajectory_StopCommandLink, 1U, (float)link_age_ms);
+        if (primask == 0U) __enable_irq();
+        if (!held) {
+          stop_reason = Motor_LegTrajectory_StopCommandLink;
+          stop_detail = (float)link_age_ms;
         }
       }
     }
+
+    for (uint8_t idx = MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX;
+         idx < MOTOR_LEG_TRAJECTORY_FIRST_MOTOR_INDEX + 2U; ++idx) {
+      Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(idx);
+      if (state == NULL || state->online != Motor_Online ||
+          state->angle_valid != Motor_Angle_Valid ||
+          (now_ms - state->timestamp) > 10U) {
+        stop_reason = Motor_LegTrajectory_StopOffline;
+        stop_motor = (int8_t)idx;
+        stop_detail = state == NULL ? -1.0f
+                                    : (float)(now_ms - state->timestamp);
+        break;
+      }
+      if (state->motor_error != 0U) {
+        stop_reason = Motor_LegTrajectory_StopMotorFault;
+        stop_motor = (int8_t)idx;
+        stop_detail = (float)state->motor_error;
+        break;
+      }
+      if (state->temperature_c >= 40) {
+        stop_reason = Motor_LegTrajectory_StopTemperature;
+        stop_motor = (int8_t)idx;
+        stop_detail = (float)state->temperature_c;
+        break;
+      }
+    }
+
     if (stop_reason != Motor_LegTrajectory_StopNone) {
       Motor_LegTrajectory_Stop(stop_reason, stop_motor, stop_detail);
-    } else if (leg_trajectory.elapsed_ms >=
-               MOTOR_LEG_TRAJECTORY_DURATION_MS) {
+    } else if (leg_trajectory.mode == Motor_LegTrajectory_DryRun &&
+               leg_trajectory.elapsed_ms >= MOTOR_LEG_TRAJECTORY_DURATION_MS) {
       Motor_LegTrajectory_Stop(Motor_LegTrajectory_StopComplete, -1, 0.0f);
-    } else if ((now_ms - last_leg_trajectory_telemetry_ms) >= 100U) {
+    } else if (leg_trajectory.mode == Motor_LegTrajectory_Active &&
+               leg_trajectory.elapsed_ms >= MOTOR_LEG_TRAJECTORY_DURATION_MS) {
+      uint32_t primask = __get_PRIMASK();
+      __disable_irq();
+      int held = Motor_LegTrajectory_EnterHold(
+          Motor_LegTrajectory_StopComplete, 0U, 0.0f);
+      if (primask == 0U) __enable_irq();
+      if (!held)
+        Motor_LegTrajectory_Stop(Motor_LegTrajectory_StopController, -1,
+                                 -1.0f);
+    } else if ((now_ms - last_leg_trajectory_telemetry_ms) >=
+               (leg_trajectory.mode == Motor_LegTrajectory_Hold
+                    ? LEG_TRAJECTORY_HOLD_TELEMETRY_MS
+                    : LEG_TRAJECTORY_ACTIVE_TELEMETRY_MS)) {
       last_leg_trajectory_telemetry_ms = now_ms;
       Communication_SendLegTrajectoryTelemetry();
+      if (leg_trajectory.mode == Motor_LegTrajectory_Hold)
+        Communication_SendLegTrajectoryStatus();
     }
   }
 
   Leg_Control_GetRfLegTrajectorySnapshot(&leg_trajectory);
+  if (leg_trajectory.mode == Motor_LegTrajectory_Hold &&
+      leg_trajectory.stop_sequence != 0U &&
+      leg_trajectory.stop_sequence != last_leg_trajectory_stop_sequence &&
+      command_link_alive != 0U &&
+      Communication_TrySendLegTrajectoryHoldResult()) {
+    last_leg_trajectory_stop_sequence = leg_trajectory.stop_sequence;
+    Communication_SendLegTrajectoryStatus();
+  }
   if (leg_trajectory.mode == Motor_LegTrajectory_Stopped &&
       leg_trajectory.stop_sequence != 0U &&
       leg_trajectory.stop_sequence != last_leg_trajectory_stop_sequence) {
@@ -1638,6 +1678,12 @@ int Leg_Control_ArmAllZero(void)
 int Leg_Control_ArmRfLegTrajectory(void)
 {
   Motor_StateSnapshotTypeDef states[2];
+  Motor_LegTrajectorySnapshot trajectory;
+  Leg_Control_GetRfLegTrajectorySnapshot(&trajectory);
+  if (trajectory.mode == Motor_LegTrajectory_DryRun ||
+      trajectory.mode == Motor_LegTrajectory_Active ||
+      trajectory.mode == Motor_LegTrajectory_Hold)
+    return 0;
   Leg_Control_ForceZeroOutput(Motor_Control_Reason_None);
   for (uint8_t motor = 0U; motor < 2U; ++motor) {
     if (!Leg_Control_GetMotorStateSnapshot(
@@ -1667,6 +1713,10 @@ static int start_rf_leg_trajectory(uint8_t dry_run)
         state->angle_valid != Motor_Angle_Valid ||
         (now_ms - state->timestamp) > 10U || state->motor_error != 0U ||
         state->temperature_c >= 40 ||
+        (dry_run == 0U &&
+         (snapshot.arm_zero_checked[motor] == 0U ||
+          state->zero_checked == 0U ||
+          snapshot.peak_target_delta[motor] >= 0.0f)) ||
         absf_local(state->rotor_position - snapshot.arm_position[motor]) >
             0.10f)
       return 0;
@@ -1687,6 +1737,16 @@ int Leg_Control_StartRfLegTrajectoryDryRun(void)
 int Leg_Control_StartRfLegTrajectoryActive(void)
 {
   return start_rf_leg_trajectory(0U);
+}
+
+int Leg_Control_HoldRfLegTrajectory(void)
+{
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  int held = Motor_LegTrajectory_EnterHold(
+      Motor_LegTrajectory_StopOperator, 1U, 0.0f);
+  if (primask == 0U) __enable_irq();
+  return held;
 }
 
 void Leg_Control_GetRfLegTrajectorySnapshot(
