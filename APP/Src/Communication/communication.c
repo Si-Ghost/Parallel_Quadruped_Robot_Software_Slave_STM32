@@ -630,6 +630,9 @@ static void send_leg_trajectory_plan(uint8_t dry_run)
 
 static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
 {
+    /* Text/debug control and the virtual/physical RC source are mutually
+       exclusive.  A new Stand edge is required to re-arm RC control. */
+    Leg_Gait_RemoteDisarm();
     if (len < sizeof(motor_set_cmd) - 1 &&
         len < sizeof(motor_set_mrad_cmd) - 1 &&
         len < sizeof(motor_rescan_cmd) - 1 &&

@@ -23,7 +23,8 @@ typedef enum
 typedef enum
 {
   Motor_Group_ProfileUniformOffset = 0,
-  Motor_Group_ProfileStandPose = 1
+  Motor_Group_ProfileStandPose = 1,
+  Motor_Group_ProfileGait = 2
 } Motor_GroupProfile;
 
 typedef enum
@@ -76,6 +77,9 @@ int Motor_GroupControl_ArmOffsets(const Motor_StateSnapshotTypeDef states[8],
                                   Motor_GroupProfile profile,
                                   uint32_t now_ms);
 int Motor_GroupControl_Start(uint32_t now_ms);
+int Motor_GroupControl_SetGaitTargets(const float target_positions[8]);
+int Motor_GroupControl_ReturnGaitToZero(void);
+int Motor_GroupControl_FinishGaitHold(void);
 void Motor_GroupControl_Update(uint8_t motor_index,
                                float rotor_position,
                                float rotor_velocity,

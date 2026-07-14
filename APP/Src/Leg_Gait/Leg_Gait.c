@@ -7,6 +7,7 @@
 #include <stdio.h>
 
 extern Leg_HandlerTypeDef* Legs[4];
+extern RC_DataTypeDef rc_data;
 
 #define LEG_TARGET_RAMP_MS          1200U
 #define LEG_ALL_MICRO_DY_MM         3.0f
@@ -21,13 +22,16 @@ extern Leg_HandlerTypeDef* Legs[4];
 #define LEG_SINE_FREQ_MAX_HZ        2.0f
 #define LEG_SINE_FREQ_MIN_HZ        0.1f
 #define LEG_SINE_LOG_PERIOD_MS      200U
-#define LEG_TROT_LIFT_HEIGHT_MM     80.0f
-#define LEG_TROT_START_POINT_MM     50.0f
-#define LEG_TROT_STEP_RATE_MS       400U
-#define LEG_TROT_STEP_CYCLE_MS      800U
-#define LEG_TROT_LOG_PERIOD_MS      500U
-#define LEG_TROT_KP                 6.0f
-#define LEG_TROT_KW                 0.35f
+#define LEG_TROT_LIFT_HEIGHT_MM     40.0f
+#define LEG_TROT_START_POINT_MM     40.0f
+#define LEG_TROT_STEP_RATE_MS       300U
+#define LEG_TROT_STEP_CYCLE_MS      600U
+#define LEG_TROT_ENTRY_MS           300U
+#define LEG_TROT_RETURN_MIN_MS      200U
+#define LEG_TROT_LOG_PERIOD_MS      100U
+#define LEG_TROT_BASE_X_MM            0.0f
+#define LEG_TROT_BASE_Y_MM          225.0f
+#define LEG_REMOTE_CHANNEL_DEADZONE 363
 
 typedef struct
 {
@@ -64,9 +68,13 @@ typedef struct
 typedef struct
 {
   uint8_t active;
-  uint32_t start_tick;
+  uint8_t stage;
+  int8_t direction;
+  uint8_t stop_requested;
+  uint8_t one_cycle;
+  uint32_t stage_start_tick;
+  uint32_t stop_after_tick;
   uint32_t last_log_tick;
-  float leg_high[4];
 } Leg_TrotTypeDef;
 
 static Leg_DebugTraceTypeDef debug_trace = {0};
@@ -74,6 +82,9 @@ static Leg_AllMicroTypeDef all_micro = {0};
 static Leg_PrepPoseTypeDef prep_pose = {0};
 static Leg_SineTypeDef sine_test = {0};
 static Leg_TrotTypeDef trot = {0};
+static uint8_t remote_armed = 0U;
+static uint8_t remote_last_s1 = 0U;
+static uint8_t remote_last_s2 = 0U;
 
 static const Leg_PointTypeDef trace_offsets[LEG_TRACE_POINT_COUNT] = {
     {0.0f, 5.0f},
@@ -526,97 +537,177 @@ void Leg_Gait_ServiceTrot(void)
 {
   if (!trot.active)
     return;
+  uint32_t now = HAL_GetTick();
+  Motor_GroupSnapshot group;
+  Leg_Control_GetGroupSnapshot(&group);
+  if (group.mode != Motor_Group_Active) {
+    Communication_SendString("LEG_TROT abort group_inactive\r\n");
+    trot.active = 0U;
+    remote_armed = 0U;
+    return;
+  }
 
-  for (uint8_t i = 0; i < 8; i++)
-  {
-    Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(i);
-    if (state->online != Motor_Online || state->angle_valid != Motor_Angle_Valid)
-    {
-      Communication_SendString("LEG_TROT abort offline\r\n");
+  if (trot.stage == 3U) {
+    uint32_t finish_primask = __get_PRIMASK();
+    __disable_irq();
+    int hold_finished =
+        (now - trot.stage_start_tick) >= LEG_TROT_RETURN_MIN_MS
+            ? Motor_GroupControl_FinishGaitHold()
+            : 0;
+    if (finish_primask == 0U) __enable_irq();
+    if (hold_finished) {
+      Motor_GroupDiagnostics diagnostics;
+      Motor_GroupSnapshot result_group;
+      Leg_Control_GetGroupDiagnostics(&diagnostics, 0U);
+      Leg_Control_GetGroupSnapshot(&result_group);
+      float p2p_max = 0.0f;
+      float velocity_max = 0.0f;
+      float torque_max = 0.0f;
+      float error_max = 0.0f;
+      for (uint8_t i = 0U; i < 8U; ++i) {
+        if (diagnostics.position_peak_to_peak[i] > p2p_max)
+          p2p_max = diagnostics.position_peak_to_peak[i];
+        if (diagnostics.max_abs_velocity[i] > velocity_max)
+          velocity_max = diagnostics.max_abs_velocity[i];
+        if (diagnostics.max_abs_torque[i] > torque_max)
+          torque_max = diagnostics.max_abs_torque[i];
+        if (fabsf(result_group.position_error[i]) > error_max)
+          error_max = fabsf(result_group.position_error[i]);
+      }
       trot.active = 0U;
+      trot.stage = 0U;
+      char result[176];
+      int len = snprintf(result, sizeof(result),
+                         "LEG_TROT_RESULT dir=%d return_zero=1 hold=1 "
+                         "p2p=%ld vmax=%ld tq=%ld err=%ld\r\n",
+                         (int)trot.direction,
+                         (long)(p2p_max * 1000000.0f),
+                         (long)(velocity_max * 1000000.0f),
+                         (long)(torque_max * 1000000.0f),
+                         (long)(error_max * 1000000.0f));
+      if (len > 0 && len < (int)sizeof(result)) Communication_SendString(result);
+    }
+    return;
+  }
+
+  float rotor_targets[8];
+  float phase = 0.0f;
+  uint8_t half_cycle = 0U;
+  uint8_t enter_cycle = 0U;
+  if (trot.stage == 1U) {
+    uint32_t elapsed = now - trot.stage_start_tick;
+    float t = (float)elapsed / (float)LEG_TROT_ENTRY_MS;
+    if (t > 1.0f) t = 1.0f;
+    phase = 0.5f - 0.5f * cosf(LEG_PI * t);
+    if (elapsed >= LEG_TROT_ENTRY_MS) enter_cycle = 1U;
+  } else {
+    uint32_t elapsed = now - trot.stage_start_tick;
+    uint32_t cycle_time = elapsed % LEG_TROT_STEP_CYCLE_MS;
+    phase = (float)cycle_time / (float)LEG_TROT_STEP_CYCLE_MS;
+    half_cycle = cycle_time >= LEG_TROT_STEP_RATE_MS ? 1U : 0U;
+    if ((trot.stop_requested || trot.one_cycle) &&
+        trot.stop_after_tick == 0U) {
+      uint32_t cycles = elapsed / LEG_TROT_STEP_CYCLE_MS + 1U;
+      trot.stop_after_tick = trot.stage_start_tick +
+                             cycles * LEG_TROT_STEP_CYCLE_MS;
+    }
+    if (trot.stop_after_tick != 0U &&
+        (int32_t)(now - trot.stop_after_tick) >= 0) {
+      uint32_t return_primask = __get_PRIMASK();
+      __disable_irq();
+      int return_started = Motor_GroupControl_ReturnGaitToZero();
+      if (return_primask == 0U) __enable_irq();
+      if (!return_started) {
+        Communication_SendString("LEG_TROT abort return_zero\r\n");
+        trot.active = 0U;
+        remote_armed = 0U;
+        return;
+      }
+      trot.stage = 3U;
+      trot.stage_start_tick = now;
+      Communication_SendString("LEG_TROT finish_cycle return_zero\r\n");
       return;
     }
   }
 
-  uint32_t now = HAL_GetTick();
-  uint32_t cycle_time = (now - trot.start_tick) % LEG_TROT_STEP_CYCLE_MS;
-  uint8_t half_cycle = (cycle_time >= LEG_TROT_STEP_RATE_MS) ? 1U : 0U;
-  uint32_t phase_ms = half_cycle ? (cycle_time - LEG_TROT_STEP_RATE_MS) : cycle_time;
-  float t = (float)phase_ms / (float)LEG_TROT_STEP_RATE_MS;
-  if (t > 1.0f) t = 1.0f;
-
-  uint8_t pair_a_swing = half_cycle;
-  float foot_x_saved[4];
-  float foot_y_saved[4];
-
-  for (uint8_t leg = 0; leg < 4; leg++)
-  {
-    uint8_t in_pair_a = (leg == 0U || leg == 3U) ? 1U : 0U;
-    uint8_t is_swing = in_pair_a ? pair_a_swing : (1U - pair_a_swing);
-
-    float foot_x, foot_y;
-    if (is_swing)
-    {
-      float len = 2.0f * LEG_TROT_START_POINT_MM;
-      foot_x = -LEG_TROT_START_POINT_MM + len * (t - sinf(LEG_TWO_PI * t) / LEG_TWO_PI);
-      foot_y = trot.leg_high[leg] - LEG_TROT_LIFT_HEIGHT_MM * (0.5f - 0.5f * cosf(LEG_TWO_PI * t));
+  for (uint8_t leg = 0U; leg < 4U; ++leg) {
+    uint8_t pair_a = (leg == 0U || leg == 3U) ? 1U : 0U;
+    float x;
+    float y = LEG_TROT_BASE_Y_MM;
+    if (trot.stage == 1U) {
+      float start_sign = pair_a ? -1.0f : 1.0f;
+      x = LEG_TROT_BASE_X_MM +
+          (float)trot.direction * start_sign * LEG_TROT_START_POINT_MM * phase;
+    } else {
+      uint8_t swing = pair_a ? (half_cycle == 0U) : (half_cycle != 0U);
+      uint32_t cycle_time = (now - trot.stage_start_tick) %
+                            LEG_TROT_STEP_CYCLE_MS;
+      uint32_t phase_ms = half_cycle
+                              ? cycle_time - LEG_TROT_STEP_RATE_MS
+                              : cycle_time;
+      float t = (float)phase_ms / (float)LEG_TROT_STEP_RATE_MS;
+      if (t > 1.0f) t = 1.0f;
+      if (swing) {
+        float cycloid = t - sinf(LEG_TWO_PI * t) / LEG_TWO_PI;
+        x = -LEG_TROT_START_POINT_MM +
+            2.0f * LEG_TROT_START_POINT_MM * cycloid;
+        y -= LEG_TROT_LIFT_HEIGHT_MM *
+             (0.5f - 0.5f * cosf(LEG_TWO_PI * t));
+      } else {
+        x = LEG_TROT_START_POINT_MM -
+            2.0f * LEG_TROT_START_POINT_MM * t;
+      }
+      x = LEG_TROT_BASE_X_MM + (float)trot.direction * x;
     }
-    else
-    {
-      foot_x = LEG_TROT_START_POINT_MM - 2.0f * LEG_TROT_START_POINT_MM * t;
-      foot_y = trot.leg_high[leg];
+
+    Leg_PointTypeDef foot = {.x = x, .y = y};
+    Leg_JointAnglesTypeDef angles;
+    float leg_targets[2];
+    if (!Leg_Kinematics_Inverse(&foot, &angles) ||
+        !Leg_Control_JointToRotorTargets(leg, &angles, leg_targets)) {
+      Motor_GroupControl_StopWithContext(Motor_Group_StopController,
+                                         (int8_t)(leg * 2U), y);
+      trot.active = 0U;
+      remote_armed = 0U;
+      Communication_SendString("LEG_TROT abort ik\r\n");
+      return;
     }
-
-    foot_x_saved[leg] = foot_x;
-    foot_y_saved[leg] = foot_y;
-
-    Leg_PointTypeDef target = { .x = foot_x, .y = foot_y };
-    Leg_JointAnglesTypeDef target_angles;
-    if (!Leg_Kinematics_Inverse(&target, &target_angles))
-      continue;
-
-    float rotor_targets[2];
-    if (!Leg_Control_JointToRotorTargets(leg, &target_angles, rotor_targets))
-      continue;
-
-    for (uint8_t motor = 0; motor < 2; motor++)
-    {
-      float rotor_target = rotor_targets[motor];
-      MOTOR_send *cmd = &Legs[leg]->motor_cmd[motor];
-      cmd->mode = 1;
-      cmd->T = 0.0f;
-      cmd->W = 0.0f;
-      cmd->Pos = rotor_target;
-      cmd->K_P = LEG_TROT_KP;
-      cmd->K_W = LEG_TROT_KW;
-      modify_data(cmd);
-    }
+    rotor_targets[leg * 2U] = leg_targets[0];
+    rotor_targets[leg * 2U + 1U] = leg_targets[1];
   }
 
-  if ((now - trot.last_log_tick) >= LEG_TROT_LOG_PERIOD_MS)
-  {
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  int target_ok = Motor_GroupControl_SetGaitTargets(rotor_targets);
+  if (primask == 0U) __enable_irq();
+  if (!target_ok) {
+    trot.active = 0U;
+    remote_armed = 0U;
+    Communication_SendString("LEG_TROT abort target_guard\r\n");
+    return;
+  }
+
+  if (enter_cycle) {
+    trot.stage = 2U;
+    trot.stage_start_tick = now;
+    if (trot.stop_requested || trot.one_cycle)
+      trot.stop_after_tick = now + LEG_TROT_STEP_CYCLE_MS;
+    Communication_SendString("LEG_TROT entry_complete cycle_start\r\n");
+  }
+
+  if ((now - trot.last_log_tick) >= LEG_TROT_LOG_PERIOD_MS) {
     trot.last_log_tick = now;
-    char buf[320];
-    int len = snprintf(buf, sizeof(buf), "LEG_TROT_LOG hc=%u t=", half_cycle);
-    if (len > 0 && len < (int)sizeof(buf))
-    {
-      char *bp = buf + len;
-      size_t rem = sizeof(buf) - (size_t)len;
-      int n = snprintf(bp, rem, "%ld.%03ld", (long)((int)t), (long)((int)(t * 1000) % 1000));
-      if (n > 0 && n < (int)rem) { bp += n; rem -= n; } else rem = 0;
-      for (uint8_t lg = 0; lg < 4 && rem > 10; lg++)
-      {
-        uint8_t in_pair_a = (lg == 0U || lg == 3U) ? 1U : 0U;
-        uint8_t is_swing = in_pair_a ? pair_a_swing : (1U - pair_a_swing);
-        n = snprintf(bp, rem, " L%u:%c(%ld,%ld)",
-                     lg, is_swing ? 'S' : 'G',
-                     (long)(int)foot_x_saved[lg], (long)(int)foot_y_saved[lg]);
-        if (n > 0 && n < (int)rem) { bp += n; rem -= n; }
-      }
-      if (rem > 2) { *bp++ = '\r'; *bp++ = '\n'; rem -= 2; }
-      *bp = '\0';
-      Communication_SendString(buf);
-    }
+    char buf[144];
+    int len = snprintf(buf, sizeof(buf),
+                       "LEG_TROT_STATE stage=%u dir=%d phase=%ld stop=%u "
+                       "step=%d lift=%d half_ms=%u\r\n",
+                       (unsigned int)trot.stage, (int)trot.direction,
+                       (long)(phase * 1000000.0f),
+                       (unsigned int)trot.stop_requested,
+                       (int)(LEG_TROT_START_POINT_MM * 2.0f),
+                       (int)LEG_TROT_LIFT_HEIGHT_MM,
+                       (unsigned int)LEG_TROT_STEP_RATE_MS);
+    if (len > 0 && len < (int)sizeof(buf)) Communication_SendString(buf);
   }
 }
 
@@ -755,39 +846,114 @@ int Leg_Gait_StartTrotTest(void)
 {
   if (Leg_Gait_AnyActive())
     return 0;
-
-  for (uint8_t idx = 0; idx < 8; idx++)
-  {
-    Motor_RuntimeStateTypeDef *state = Leg_Control_MotorState(idx);
-    if (state == NULL || state->target_active == Motor_Target_Active)
-      return 0;
-  }
-
-  for (uint8_t leg = 0; leg < 4; leg++)
-  {
-    Leg_PointTypeDef foot;
-    if (!Leg_Control_GetCurrentFoot(leg, &foot))
-      return 0;
-    trot.leg_high[leg] = foot.y;
-  }
-
+  Motor_GroupSnapshot group;
+  Leg_Control_GetGroupSnapshot(&group);
+  if (group.mode != Motor_Group_Active || group.all_at_zero == 0U)
+    return 0;
   trot.active = 1U;
-  trot.start_tick = HAL_GetTick();
-  trot.last_log_tick = 0;
-
-  char buf[128];
+  trot.stage = 1U;
+  trot.direction = 1;
+  trot.stop_requested = 0U;
+  trot.one_cycle = 1U;
+  trot.stage_start_tick = HAL_GetTick();
+  trot.stop_after_tick = 0U;
+  trot.last_log_tick = 0U;
+  char buf[160];
   int len = snprintf(buf, sizeof(buf),
-                     "LEG_TROT start lift=%d step=%d rate=%dms kp=%d kw=%d\r\n",
+                     "LEG_TROT start source=debug dir=1 lift=%d step=%d "
+                     "half_ms=%d torque_mNm=1000\r\n",
                      (int)LEG_TROT_LIFT_HEIGHT_MM,
                      (int)(LEG_TROT_START_POINT_MM * 2.0f),
-                     (int)LEG_TROT_STEP_RATE_MS,
-                     (int)(LEG_TROT_KP * 1000),
-                     (int)(LEG_TROT_KW * 1000));
-  if (len > 0 && len < (int)sizeof(buf))
-  {
-    buf[len] = '\0';
-    Communication_SendString(buf);
+                     (int)LEG_TROT_STEP_RATE_MS);
+  if (len > 0 && len < (int)sizeof(buf)) Communication_SendString(buf);
+  return 1;
+}
+
+void Leg_Gait_RemoteDisarm(void)
+{
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  if (trot.active) (void)Motor_GroupControl_ReturnGaitToZero();
+  remote_armed = 0U;
+  trot.active = 0U;
+  trot.stage = 0U;
+  trot.stop_requested = 0U;
+  trot.stop_after_tick = 0U;
+  if (primask == 0U) __enable_irq();
+}
+
+static int start_remote_trot(int8_t direction)
+{
+  Motor_GroupSnapshot group;
+  Leg_Control_GetGroupSnapshot(&group);
+  if (!remote_armed || direction == 0 || Leg_Gait_AnyActive() ||
+      group.mode != Motor_Group_Active || group.all_at_zero == 0U)
+    return 0;
+  trot.active = 1U;
+  trot.stage = 1U;
+  trot.direction = direction;
+  trot.stop_requested = 0U;
+  trot.one_cycle = 0U;
+  trot.stage_start_tick = HAL_GetTick();
+  trot.stop_after_tick = 0U;
+  trot.last_log_tick = 0U;
+  char buf[256];
+  int len = snprintf(buf, sizeof(buf),
+                     "LEG_REMOTE gait_start dir=%d level=5 step=%d lift=%d "
+                     "cycle_ms=%u pkp=35900 pkd=1000 skp=10 ski=0.6 "
+                     "skd=1.5 tmax=1.0 err=0.35 vsoft=35 vhard=45\r\n",
+                     (int)direction,
+                     (int)(LEG_TROT_START_POINT_MM * 2.0f),
+                     (int)LEG_TROT_LIFT_HEIGHT_MM,
+                     (unsigned int)LEG_TROT_STEP_CYCLE_MS);
+  if (len > 0 && len < (int)sizeof(buf)) Communication_SendString(buf);
+  return 1;
+}
+
+void Leg_Gait_ServiceRemote(void)
+{
+  RC_DataTypeDef rc;
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  rc = rc_data;
+  if (primask == 0U) __enable_irq();
+
+  uint8_t stand_edge =
+      rc.s1 == 2U && rc.s2 == 1U &&
+      (remote_last_s1 != 2U || remote_last_s2 != 1U);
+  remote_last_s1 = rc.s1;
+  remote_last_s2 = rc.s2;
+
+  if (stand_edge) {
+    if (trot.active) {
+      trot.stop_requested = 1U;
+      Communication_SendString("LEG_REMOTE stand queued_after_cycle\r\n");
+    } else if (Leg_Control_ArmAllZero() && Leg_Control_StartAllZero()) {
+      remote_armed = 1U;
+      Communication_SendString("LEG_REMOTE stand zero_target hold=1 armed=1\r\n");
+    } else {
+      remote_armed = 0U;
+      Communication_SendString("LEG_REMOTE stand rejected\r\n");
+    }
   }
 
-  return 1;
+  int8_t requested_direction = 0;
+  if (rc.s1 == 3U) {
+    /* The web joystick reports upward/forward motion below 1024, so its
+     * centered ch3 is negative when the operator pushes forward. */
+    if (rc.ch3 < -LEG_REMOTE_CHANNEL_DEADZONE)
+      requested_direction = 1;
+    else if (rc.ch3 > LEG_REMOTE_CHANNEL_DEADZONE)
+      requested_direction = -1;
+  }
+
+  if (trot.active) {
+    if (!Communication_IsLinkAlive() || requested_direction == 0 ||
+        requested_direction != trot.direction)
+      trot.stop_requested = 1U;
+  } else if (requested_direction != 0) {
+    (void)start_remote_trot(requested_direction);
+  }
+
+  Leg_Gait_ServiceTrot();
 }

@@ -9,9 +9,17 @@
 #define GROUP_MAX_TARGET_DELTA_RAD        2.60f
 #define GROUP_OFFSET_START_ZERO_RAD       0.50f
 #define GROUP_MAX_ZERO_EXCURSION_RAD      2.25f
+#define GROUP_GAIT_MAX_ZERO_EXCURSION_RAD 3.50f
 #define GROUP_TARGET_SPEED_RAD_S          0.25f
 #define GROUP_STAND_TARGET_SPEED_RAD_S    0.125f
+#define GROUP_GAIT_TARGET_SPEED_RAD_S     35.0f
 #define GROUP_TARGET_ERROR_RAD            0.08f
+#define GROUP_GAIT_ERROR_LIMIT_RAD         0.35f
+#define GROUP_GAIT_SOFT_SPEED_RAD_S        35.0f
+#define GROUP_GAIT_HARD_SPEED_RAD_S        45.0f
+#define GROUP_GAIT_SOFT_SPEED_SAMPLES      20U
+#define GROUP_GAIT_HARD_SPEED_SAMPLES       3U
+#define GROUP_GAIT_HOLD_SPEED_RAD_S          1.0f
 #define GROUP_MIN_DT_S                    0.0002f
 #define GROUP_MAX_DT_S                    \
   ((float)MOTOR_GROUP_ACTIVE_FEEDBACK_TIMEOUT_MS * 0.001f)
@@ -27,6 +35,7 @@
 #define GROUP_HOLD_POSITION_KP_NM_RAD     1.00f
 #define GROUP_HOLD_ENTRY_ERROR_RAD        0.0001f
 #define GROUP_TORQUE_MAX_NM               1.50f
+#define GROUP_GAIT_TORQUE_MAX_NM          1.00f
 
 typedef struct
 {
@@ -37,6 +46,7 @@ typedef struct
   float pending_target_position;
   float ramped_target;
   float actual_position;
+  float actual_velocity;
   float position_error;
   float previous_position_error;
   float previous_speed_error;
@@ -47,6 +57,8 @@ typedef struct
   float diagnostic_max_abs_velocity;
   float diagnostic_max_abs_torque;
   uint32_t previous_feedback_timestamp;
+  uint8_t gait_soft_speed_samples;
+  uint8_t gait_hard_speed_samples;
 } Motor_GroupChannel;
 
 static Motor_GroupChannel channels[GROUP_MOTOR_COUNT];
@@ -300,6 +312,59 @@ int Motor_GroupControl_Start(uint32_t now_ms)
   return 1;
 }
 
+int Motor_GroupControl_SetGaitTargets(const float target_positions[8])
+{
+  if (target_positions == NULL || group_mode != Motor_Group_Active)
+    return 0;
+  for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i) {
+    float target = target_positions[i];
+    if (!isfinite(target) ||
+        fabsf(target - channels[i].zero_position) >
+            GROUP_GAIT_MAX_ZERO_EXCURSION_RAD) {
+      Motor_GroupControl_StopWithContext(Motor_Group_StopPositionLimit,
+                                         (int8_t)i,
+                                         target - channels[i].zero_position);
+      return 0;
+    }
+  }
+  for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i)
+    channels[i].target_position = target_positions[i];
+  group_profile = Motor_Group_ProfileGait;
+  group_target_offset = 0.0f;
+  return 1;
+}
+
+int Motor_GroupControl_ReturnGaitToZero(void)
+{
+  if (group_mode != Motor_Group_Active ||
+      group_profile != Motor_Group_ProfileGait)
+    return 0;
+  for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i)
+    channels[i].target_position = channels[i].zero_position;
+  return 1;
+}
+
+int Motor_GroupControl_FinishGaitHold(void)
+{
+  if (group_mode != Motor_Group_Active ||
+      group_profile != Motor_Group_ProfileGait)
+    return 0;
+  for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i) {
+    if (fabsf(channels[i].zero_position - channels[i].actual_position) >
+            GROUP_TARGET_ERROR_RAD ||
+        fabsf(channels[i].actual_velocity) > GROUP_GAIT_HOLD_SPEED_RAD_S)
+      return 0;
+    channels[i].target_position = channels[i].zero_position;
+    channels[i].ramped_target = channels[i].zero_position;
+    channels[i].integral = 0.0f;
+    channels[i].gait_soft_speed_samples = 0U;
+    channels[i].gait_hard_speed_samples = 0U;
+  }
+  group_profile = Motor_Group_ProfileUniformOffset;
+  group_target_offset = 0.0f;
+  return 1;
+}
+
 void Motor_GroupControl_Update(uint8_t motor_index,
                                float rotor_position,
                                float rotor_velocity,
@@ -318,6 +383,7 @@ void Motor_GroupControl_Update(uint8_t motor_index,
 
   Motor_GroupChannel *channel = &channels[motor_index];
   channel->actual_position = rotor_position;
+  channel->actual_velocity = rotor_velocity;
   if (rotor_position < channel->diagnostic_position_min)
     channel->diagnostic_position_min = rotor_position;
   if (rotor_position > channel->diagnostic_position_max)
@@ -328,8 +394,12 @@ void Motor_GroupControl_Update(uint8_t motor_index,
    * the arm instant.  A loaded zero pose may deflect by as much as 0.5 rotor
    * rad; it must still be able to target +2 rad without falsely tripping a
    * 2.1 rad arm-relative excursion check. */
+  float zero_excursion_limit =
+      group_profile == Motor_Group_ProfileGait
+          ? GROUP_GAIT_MAX_ZERO_EXCURSION_RAD
+          : GROUP_MAX_ZERO_EXCURSION_RAD;
   if (fabsf(rotor_position - channel->zero_position) >
-      GROUP_MAX_ZERO_EXCURSION_RAD) {
+      zero_excursion_limit) {
     Motor_GroupControl_StopWithContext(
         Motor_Group_StopPositionLimit, (int8_t)motor_index,
         rotor_position - channel->zero_position);
@@ -351,16 +421,49 @@ void Motor_GroupControl_Update(uint8_t motor_index,
     return;
   }
 
+  if (group_profile == Motor_Group_ProfileGait) {
+    float abs_velocity = fabsf(rotor_velocity);
+    channel->gait_hard_speed_samples =
+        abs_velocity > GROUP_GAIT_HARD_SPEED_RAD_S
+            ? (uint8_t)(channel->gait_hard_speed_samples + 1U)
+            : 0U;
+    channel->gait_soft_speed_samples =
+        abs_velocity > GROUP_GAIT_SOFT_SPEED_RAD_S
+            ? (uint8_t)(channel->gait_soft_speed_samples + 1U)
+            : 0U;
+    if (channel->gait_hard_speed_samples >=
+            GROUP_GAIT_HARD_SPEED_SAMPLES ||
+        channel->gait_soft_speed_samples >=
+            GROUP_GAIT_SOFT_SPEED_SAMPLES) {
+      Motor_GroupControl_StopWithContext(Motor_Group_StopController,
+                                         (int8_t)motor_index,
+                                         rotor_velocity);
+      return;
+    }
+  } else {
+    channel->gait_soft_speed_samples = 0U;
+    channel->gait_hard_speed_samples = 0U;
+  }
+
   float remaining = channel->target_position - channel->ramped_target;
   float target_speed = group_profile == Motor_Group_ProfileStandPose
                            ? GROUP_STAND_TARGET_SPEED_RAD_S
-                           : GROUP_TARGET_SPEED_RAD_S;
+                           : group_profile == Motor_Group_ProfileGait
+                                 ? GROUP_GAIT_TARGET_SPEED_RAD_S
+                                 : GROUP_TARGET_SPEED_RAD_S;
   float target_step = clamp_symmetric(remaining, target_speed * dt);
   channel->ramped_target += target_step;
   float ramp_velocity = target_step / dt;
 
   float previous_position_error = channel->previous_position_error;
   channel->position_error = channel->ramped_target - rotor_position;
+  if (group_profile == Motor_Group_ProfileGait &&
+      fabsf(channel->position_error) > GROUP_GAIT_ERROR_LIMIT_RAD) {
+    Motor_GroupControl_StopWithContext(Motor_Group_StopController,
+                                       (int8_t)motor_index,
+                                       channel->position_error);
+    return;
+  }
   channel->previous_position_error = channel->position_error;
   float speed_target = clamp_symmetric(
       ramp_velocity + GROUP_POSITION_KP * channel->position_error +
@@ -383,10 +486,13 @@ void Motor_GroupControl_Update(uint8_t motor_index,
     hold_torque = GROUP_HOLD_POSITION_KP_NM_RAD *
                   (channel->target_position - rotor_position);
   }
+  float torque_limit = group_profile == Motor_Group_ProfileGait
+                           ? GROUP_GAIT_TORQUE_MAX_NM
+                           : GROUP_TORQUE_MAX_NM;
   channel->torque = clamp_symmetric(
       GROUP_SPEED_KP * speed_error + channel->integral +
           GROUP_SPEED_KD * speed_delta + hold_torque,
-      GROUP_TORQUE_MAX_NM);
+      torque_limit);
   if (fabsf(channel->torque) > channel->diagnostic_max_abs_torque)
     channel->diagnostic_max_abs_torque = fabsf(channel->torque);
 
@@ -415,8 +521,11 @@ int Motor_GroupControl_GetAuthorizedTorque(uint8_t motor_index, float *torque)
        group_mode != Motor_Group_ActivePending) ||
       motor_index >= GROUP_MOTOR_COUNT)
     return 0;
+  float torque_limit = group_profile == Motor_Group_ProfileGait
+                           ? GROUP_GAIT_TORQUE_MAX_NM
+                           : GROUP_TORQUE_MAX_NM;
   if (!isfinite(channels[motor_index].torque) ||
-      fabsf(channels[motor_index].torque) > GROUP_TORQUE_MAX_NM) {
+      fabsf(channels[motor_index].torque) > torque_limit) {
     Motor_GroupControl_StopWithContext(Motor_Group_StopController,
                                        (int8_t)motor_index,
                                        channels[motor_index].torque);

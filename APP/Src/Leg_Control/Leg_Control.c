@@ -111,6 +111,7 @@ void Leg_Control_ForceZeroOutput(Motor_ControlReasonTypeDef reason)
 {
   uint32_t primask = __get_PRIMASK();
   __disable_irq();
+  Leg_Gait_RemoteDisarm();
   for (uint8_t leg = 0U; leg < 4U; ++leg) {
     for (uint8_t motor = 0U; motor < 2U; ++motor) {
       Motor_RuntimeStateTypeDef *state = &Legs[leg]->motor_state[motor];
@@ -1679,11 +1680,12 @@ void Leg_Control_Service(uint32_t now_ms)
     }
   }
 
+  Leg_Gait_ServiceRemote();
+
   if ((now_ms - last_service_tick) < LEG_SERVICE_PERIOD_MS) return;
   last_service_tick = now_ms;
 
-  /* Legacy gait services stay disabled.  The guarded all-zero controller is
-   * updated directly from each validated transport feedback frame. */
+  /* Remote gait is serviced above at the 1 kHz foreground cadence. */
 }
 
 /* ---- hold / stop ---- */

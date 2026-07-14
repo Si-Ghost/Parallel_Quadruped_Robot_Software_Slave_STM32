@@ -8,6 +8,8 @@ int Leg_Gait_StartAllMicroTest(void);
 int Leg_Gait_StartPrepPoseTest(void);
 int Leg_Gait_StartSineTest(uint8_t leg, float amplitude_mm, float freq_hz);
 int Leg_Gait_StartTrotTest(void);
+void Leg_Gait_ServiceRemote(void);
+void Leg_Gait_RemoteDisarm(void);
 
 void Leg_Gait_ServiceDebugTrace(void);
 void Leg_Gait_ServiceAllMicro(void);
