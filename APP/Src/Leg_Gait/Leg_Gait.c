@@ -548,13 +548,14 @@ void Leg_Gait_ServiceTrot(void)
   }
 
   {
+    Motor_GaitReturnReason guard_reason = Motor_GaitReturnNone;
     int8_t guard_motor = -1;
-    float guard_velocity = 0.0f;
+    float guard_detail = 0.0f;
     uint8_t already_returning = trot.stage == 3U ? 1U : 0U;
     uint32_t guard_primask = __get_PRIMASK();
     __disable_irq();
     int guard_return = Motor_GroupControl_TakeGaitReturnRequest(
-        &guard_motor, &guard_velocity);
+        &guard_reason, &guard_motor, &guard_detail);
     int return_started = guard_return
                              ? already_returning != 0U
                                    ? 1
@@ -577,9 +578,11 @@ void Leg_Gait_ServiceTrot(void)
       char guard_log[144];
       int len = snprintf(
           guard_log, sizeof(guard_log),
-          "LEG_TROT_GUARD speed_soft idx=%d velocity_urad_s=%ld "
+          "LEG_TROT_GUARD %s idx=%d detail_u=%ld "
           "action=return_zero rearm=stand\r\n",
-          (int)guard_motor, (long)(guard_velocity * 1000000.0f));
+          guard_reason == Motor_GaitReturnSoftError ? "error_soft"
+                                                    : "speed_soft",
+          (int)guard_motor, (long)(guard_detail * 1000000.0f));
       if (len > 0 && len < (int)sizeof(guard_log))
         Communication_SendString(guard_log);
       return;
@@ -900,7 +903,8 @@ int Leg_Gait_StartTrotTest(void)
   char buf[160];
   int len = snprintf(buf, sizeof(buf),
                      "LEG_TROT start source=debug dir=1 lift=%d step=%d "
-                     "half_ms=%d entry_ms=%u torque_mNm=250\r\n",
+                     "half_ms=%d entry_ms=%u torque_mNm=1000 "
+                     "path=ref_cycloid_sine\r\n",
                      (int)LEG_TROT_LIFT_HEIGHT_MM,
                      (int)(LEG_TROT_START_POINT_MM * 2.0f),
                      (int)LEG_TROT_STEP_RATE_MS,
@@ -941,8 +945,9 @@ static int start_remote_trot(int8_t direction)
   int len = snprintf(buf, sizeof(buf),
                      "LEG_REMOTE gait_start dir=%d level=5 step=%d lift=%d "
                      "cycle_ms=%u entry_ms=%u pkp=35900 pkd=1000 skp=10 "
-                     "ski=0.6 skd=1.5 tmax=0.25 err=0.35 vt=20 "
-                     "vsoft=35 vhard=60\r\n",
+                     "ski=0.6 skd=1.5 tmax=1.0 err_soft=0.35 "
+                     "err_hard=0.80 vt=20 vsoft=35 vhard=60 "
+                     "path=ref_cycloid_sine\r\n",
                      (int)direction,
                      (int)(LEG_TROT_START_POINT_MM * 2.0f),
                      (int)LEG_TROT_LIFT_HEIGHT_MM,
