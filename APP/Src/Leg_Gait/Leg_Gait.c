@@ -105,7 +105,7 @@ static uint32_t remote_last_reject_log_tick = 0U;
  * numbering to the operator. */
 static const Leg_TrotProfileTypeDef trot_profiles[LEG_TROT_PROFILE_COUNT] = {
     {5U, 1U, 2U, 30.0f, 40.0f, 220.0f, 300U, 600U, 600U,
-     0.35f, 4.00f},
+     0.50f, 4.00f},
     {6U, 2U, 3U, 50.0f, 75.0f, 215.0f, 220U, 440U, 440U,
      0.50f, 4.30f},
     {7U, 3U, 1U, 40.0f, 75.0f, 210.0f, 175U, 350U, 350U,
