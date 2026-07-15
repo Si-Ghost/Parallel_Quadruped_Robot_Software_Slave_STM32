@@ -116,16 +116,14 @@ static void prepare_tx_frame(Motor_TransportChannel *channel, uint8_t motor)
   if (transport_callbacks.load_command != NULL)
     (void)transport_callbacks.load_command(channel->leg_index, motor, &command);
 
-  /* The callback is the command-owner arbiter.  It normally returns a
-   * software-torque command, and may return the explicitly authorized gait
-   * internal-PD command.  Never synthesize or combine fields here. */
+  /* Driver-side position/velocity PD is never part of the approved test. */
   command.mode = 1U;
-#if MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY
-  command.T = 0.0f;
   command.W = 0.0f;
   command.Pos = 0.0f;
   command.K_P = 0.0f;
   command.K_W = 0.0f;
+#if MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY
+  command.T = 0.0f;
 #endif
 
   command.id = motor;

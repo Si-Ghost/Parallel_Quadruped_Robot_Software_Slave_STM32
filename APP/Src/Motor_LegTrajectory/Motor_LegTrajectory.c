@@ -402,8 +402,8 @@ int Motor_LegTrajectory_Arm(const Motor_StateSnapshotTypeDef states[2],
 {
   Motor_LegTrajectoryProfile profile;
   if (states == NULL || leg_index >= MOTOR_LEG_TRAJECTORY_LEG_COUNT ||
-      (leg_index != MOTOR_LEG_TRAJECTORY_RF_LEG_INDEX &&
-       level < MOTOR_LEG_TRAJECTORY_REFERENCE_LEVEL_MIN) ||
+      level < MOTOR_LEG_TRAJECTORY_LEVEL_MIN ||
+      level > MOTOR_LEG_TRAJECTORY_LEVEL_MAX ||
       !get_profile(level, &profile)) return 0;
   uint32_t stop_sequence = control.stop_sequence;
   memset(&control, 0, sizeof(control));

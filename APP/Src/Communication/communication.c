@@ -743,6 +743,46 @@ static void handle_motor_debug_command(const uint8_t *data, uint16_t len)
         }
     }
 
+    /* ------- Safety / keep-alive commands only below ------- */
+
+    for (uint16_t i = 0; i + sizeof(motor_stop_all_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], motor_stop_all_cmd, sizeof(motor_stop_all_cmd) - 1) == 0) {
+            Leg_Control_StopAllDebugTargets(0);
+            Communication_SendString("MOTOR_STOP_ALL ok\r\n");
+            Communication_SendMotorControlStatus();
+            return;
+        }
+    }
+
+    for (uint16_t i = 0; i + sizeof(motor_hold_current_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], motor_hold_current_cmd, sizeof(motor_hold_current_cmd) - 1) == 0) {
+            if (!Leg_Control_HoldCurrentPosition()) {
+                Communication_SendString("MOTOR_HOLD_CURRENT rejected\r\n");
+            }
+            return;
+        }
+    }
+
+    for (uint16_t i = 0; i + sizeof(motor_rescan_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], motor_rescan_cmd, sizeof(motor_rescan_cmd) - 1) == 0) {
+            Leg_Control_RequestHandshake();
+            return;
+        }
+    }
+
+    for (uint16_t i = 0; i + sizeof(leg_snapshot_cmd) - 1 <= len; i++) {
+        if (memcmp(&data[i], leg_snapshot_cmd, sizeof(leg_snapshot_cmd) - 1) == 0) {
+            Leg_Control_LogFootSnapshot();
+            return;
+        }
+    }
+
+    /* All old motor-internal-PID commands (MOTOR_GROUP_*, PID_*,
+       MOTOR_ZERO_*, MOTOR_SET*, MOTOR_STAND_ARM, LEG_* gait commands)
+       are intentionally unreachable — only software-PID torque path. */
+    return;
+
+    /* ---- dead code: old motor-internal-PID commands ---- */
     for (uint16_t i = 0; i + sizeof(motor_stand_arm_cmd) - 1 <= len; i++) {
         if (memcmp(&data[i], motor_stand_arm_cmd,
                    sizeof(motor_stand_arm_cmd) - 1) == 0) {

@@ -16,8 +16,6 @@
 #define GROUP_TARGET_ERROR_RAD            0.08f
 #define GROUP_GAIT_CONFIG_MIN_EXCURSION_RAD 3.50f
 #define GROUP_GAIT_CONFIG_MAX_EXCURSION_RAD 4.50f
-#define GROUP_GAIT_INTERNAL_PD_KP_MAX       6.00f
-#define GROUP_GAIT_INTERNAL_PD_KW_MAX       0.35f
 #define GROUP_MIN_DT_S                    0.0002f
 #define GROUP_MAX_DT_S                    \
   ((float)MOTOR_GROUP_ACTIVE_FEEDBACK_TIMEOUT_MS * 0.001f)
@@ -97,9 +95,6 @@ void Motor_GroupControl_Init(void)
   stop_detail = 0.0f;
   gait_limits.max_zero_excursion_rad =
       GROUP_GAIT_DEFAULT_MAX_ZERO_EXCURSION_RAD;
-  gait_limits.command_backend = Motor_Group_CommandSoftwareTorque;
-  gait_limits.internal_pd_kp = 0.0f;
-  gait_limits.internal_pd_kw = 0.0f;
 }
 
 void Motor_GroupControl_Stop(Motor_GroupStopReason reason)
@@ -325,18 +320,7 @@ int Motor_GroupControl_ConfigureGait(const Motor_GroupGaitLimits *limits)
       limits->max_zero_excursion_rad <
           GROUP_GAIT_CONFIG_MIN_EXCURSION_RAD ||
       limits->max_zero_excursion_rad >
-          GROUP_GAIT_CONFIG_MAX_EXCURSION_RAD ||
-      (limits->command_backend != Motor_Group_CommandSoftwareTorque &&
-       limits->command_backend != Motor_Group_CommandInternalPd))
-    return 0;
-
-  if (limits->command_backend == Motor_Group_CommandInternalPd &&
-      (!isfinite(limits->internal_pd_kp) ||
-       !isfinite(limits->internal_pd_kw) ||
-       limits->internal_pd_kp <= 0.0f ||
-       limits->internal_pd_kw <= 0.0f ||
-       limits->internal_pd_kp > GROUP_GAIT_INTERNAL_PD_KP_MAX ||
-       limits->internal_pd_kw > GROUP_GAIT_INTERNAL_PD_KW_MAX))
+          GROUP_GAIT_CONFIG_MAX_EXCURSION_RAD)
     return 0;
 
   gait_limits = *limits;
@@ -388,10 +372,6 @@ int Motor_GroupControl_FinishGaitHold(void)
     channels[i].target_position = channels[i].zero_position;
     channels[i].ramped_target = channels[i].zero_position;
     channels[i].integral = 0.0f;
-    channels[i].torque = 0.0f;
-    channels[i].previous_feedback_timestamp = 0U;
-    channels[i].previous_position_error = 0.0f;
-    channels[i].previous_speed_error = 0.0f;
   }
   group_profile = Motor_Group_ProfileUniformOffset;
   group_target_offset = 0.0f;
@@ -454,20 +434,6 @@ void Motor_GroupControl_Update(uint8_t motor_index,
   if (!isfinite(dt) || dt < GROUP_MIN_DT_S || dt > GROUP_MAX_DT_S) {
     Motor_GroupControl_StopWithContext(Motor_Group_StopController,
                                        (int8_t)motor_index, dt * 1000.0f);
-    return;
-  }
-
-  if (group_profile == Motor_Group_ProfileGait &&
-      gait_limits.command_backend == Motor_Group_CommandInternalPd) {
-    /* The driver owns the high-rate position/velocity loop in this backend.
-     * Keep feedback and mechanical guards active, but do not also run or
-     * authorize the STM32 cascade for the same motor command. */
-    channel->ramped_target = channel->target_position;
-    channel->position_error = channel->target_position - rotor_position;
-    channel->previous_position_error = channel->position_error;
-    channel->previous_speed_error = 0.0f;
-    channel->integral = 0.0f;
-    channel->torque = 0.0f;
     return;
   }
 
@@ -542,40 +508,14 @@ uint8_t Motor_GroupControl_IsActive(void)
           group_mode == Motor_Group_ActivePending) ? 1U : 0U;
 }
 
-int Motor_GroupControl_GetAuthorizedCommand(
-    uint8_t motor_index, Motor_GroupAuthorizedCommand *command)
+int Motor_GroupControl_GetAuthorizedTorque(uint8_t motor_index, float *torque)
 {
-  if (command == NULL) return 0;
-  memset(command, 0, sizeof(*command));
+  if (torque == NULL) return 0;
+  *torque = 0.0f;
   if ((group_mode != Motor_Group_Active &&
        group_mode != Motor_Group_ActivePending) ||
       motor_index >= GROUP_MOTOR_COUNT)
     return 0;
-
-  if (group_profile == Motor_Group_ProfileGait &&
-      gait_limits.command_backend == Motor_Group_CommandInternalPd) {
-    float target = channels[motor_index].target_position;
-    if (!isfinite(target) || !isfinite(gait_limits.internal_pd_kp) ||
-        !isfinite(gait_limits.internal_pd_kw) ||
-        fabsf(target - channels[motor_index].zero_position) >
-            gait_limits.max_zero_excursion_rad ||
-        gait_limits.internal_pd_kp <= 0.0f ||
-        gait_limits.internal_pd_kw <= 0.0f ||
-        gait_limits.internal_pd_kp > GROUP_GAIT_INTERNAL_PD_KP_MAX ||
-        gait_limits.internal_pd_kw > GROUP_GAIT_INTERNAL_PD_KW_MAX) {
-      Motor_GroupControl_StopWithContext(Motor_Group_StopController,
-                                         (int8_t)motor_index, target);
-      return 0;
-    }
-    command->backend = Motor_Group_CommandInternalPd;
-    command->torque = 0.0f;
-    command->velocity = 0.0f;
-    command->position = target;
-    command->kp = gait_limits.internal_pd_kp;
-    command->kw = gait_limits.internal_pd_kw;
-    return 1;
-  }
-
   float torque_limit = group_profile == Motor_Group_ProfileGait
                            ? GROUP_GAIT_TORQUE_MAX_NM
                            : GROUP_TORQUE_MAX_NM;
@@ -586,20 +526,7 @@ int Motor_GroupControl_GetAuthorizedCommand(
                                        channels[motor_index].torque);
     return 0;
   }
-  command->backend = Motor_Group_CommandSoftwareTorque;
-  command->torque = channels[motor_index].torque;
-  return 1;
-}
-
-int Motor_GroupControl_GetAuthorizedTorque(uint8_t motor_index, float *torque)
-{
-  if (torque == NULL) return 0;
-  *torque = 0.0f;
-  Motor_GroupAuthorizedCommand command;
-  if (!Motor_GroupControl_GetAuthorizedCommand(motor_index, &command) ||
-      command.backend != Motor_Group_CommandSoftwareTorque)
-    return 0;
-  *torque = command.torque;
+  *torque = channels[motor_index].torque;
   return 1;
 }
 
@@ -610,10 +537,6 @@ void Motor_GroupControl_GetSnapshot(Motor_GroupSnapshot *snapshot)
   uint8_t pending = group_mode == Motor_Group_ActivePending ? 1U : 0U;
   snapshot->mode = group_mode;
   snapshot->profile = pending != 0U ? pending_group_profile : group_profile;
-  snapshot->command_backend =
-      snapshot->profile == Motor_Group_ProfileGait
-          ? gait_limits.command_backend
-          : Motor_Group_CommandSoftwareTorque;
   snapshot->reason = stop_reason;
   snapshot->ready = group_ready;
   snapshot->all_at_zero = group_mode == Motor_Group_Active ? 1U : 0U;
@@ -622,8 +545,6 @@ void Motor_GroupControl_GetSnapshot(Motor_GroupSnapshot *snapshot)
   snapshot->stop_sequence = stop_sequence;
   snapshot->target_offset = pending != 0U ? pending_group_target_offset
                                           : group_target_offset;
-  snapshot->gait_kp = gait_limits.internal_pd_kp;
-  snapshot->gait_kw = gait_limits.internal_pd_kw;
   for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i) {
     snapshot->arm_position[i] = pending != 0U
                                     ? channels[i].pending_arm_position

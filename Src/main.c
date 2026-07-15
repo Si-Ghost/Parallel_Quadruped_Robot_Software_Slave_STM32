@@ -139,18 +139,7 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
   {
     Communication_NotifyTxComplete();
   }
-  else
-  {
-    // 电机的通道
-    for (int i = 0; i < 4; i++)
-    {
-      if (huart->Instance == Legs[i]->huartx->Instance)
-      {
-        Leg_Tx_Handler(Legs[i]);
-        break;
-      }
-    }
-  }
+  /* Motor UART TX is owned exclusively by Motor_Transport. */
 }
 
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
@@ -163,18 +152,7 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
   {
     Communication_RxCallback(huart, Size);
   }
-  else
-  {
-   // 电机的通道
-    for (int i = 0; i < 4; i++)
-    {
-      if (huart->Instance == Legs[i]->huartx->Instance)
-      {
-        Leg_Rx_Handler(Legs[i], Size);
-        break;
-      }
-    }
-  }
+  /* Motor UART RX is owned exclusively by Motor_Transport (circular DMA). */
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
@@ -269,6 +247,9 @@ int main(void)
       main_task_start = 0;
 
       Communication_Task();
+      /* Leg_Control_Service retains safety monitoring (trajectory timeout,
+         link loss, offline detection) — motor commands go exclusively through
+         Motor_Transport + Motor_LegTrajectory (software PID, Kp=Kw=0). */
       Leg_Control_Service(HAL_GetTick());
 #if !MOTOR_TRANSPORT_DIAG_ONLY
       uint32_t telemetry_tick = HAL_GetTick();
