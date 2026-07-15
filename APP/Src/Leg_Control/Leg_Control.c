@@ -1695,14 +1695,18 @@ int Leg_Control_ArmLegTrajectory(uint8_t leg, uint8_t level)
 {
   if (leg >= MOTOR_LEG_TRAJECTORY_LEG_COUNT ||
       level < MOTOR_LEG_TRAJECTORY_LEVEL_MIN ||
-      level > MOTOR_LEG_TRAJECTORY_LEVEL_MAX)
+      level > MOTOR_LEG_TRAJECTORY_LEVEL_MAX) {
+    Communication_SendString("LEG_TRAJ_ARM rejected: bad leg/level\r\n");
     return 0;
+  }
   Motor_StateSnapshotTypeDef states[2];
   Motor_LegTrajectorySnapshot trajectory;
   Leg_Control_GetLegTrajectorySnapshot(&trajectory);
   if (trajectory.mode == Motor_LegTrajectory_DryRun ||
-      trajectory.mode == Motor_LegTrajectory_Active)
+      trajectory.mode == Motor_LegTrajectory_Active) {
+    Communication_SendString("LEG_TRAJ_ARM rejected: trajectory busy\r\n");
     return 0;
+  }
   /* A completed single-leg test remains in controlled Hold.  Re-arming the
    * next leg/level deliberately exits that Hold through the common zero-output
    * path, then captures fresh multi-turn feedback as the new origin. */
@@ -1711,10 +1715,15 @@ int Leg_Control_ArmLegTrajectory(uint8_t leg, uint8_t level)
   for (uint8_t motor = 0U; motor < 2U; ++motor) {
     if (!Leg_Control_GetMotorStateSnapshot(
             first_motor_index + motor,
-            &states[motor]))
+            &states[motor])) {
+      Communication_SendString("LEG_TRAJ_ARM rejected: no motor state\r\n");
       return 0;
+    }
   }
-  return Motor_LegTrajectory_Arm(states, leg, level, HAL_GetTick());
+  int ret = Motor_LegTrajectory_Arm(states, leg, level, HAL_GetTick());
+  if (!ret)
+    Communication_SendString("LEG_TRAJ_ARM rejected: motor traj arm fail\r\n");
+  return ret;
 }
 
 static int start_leg_trajectory(uint8_t dry_run)
