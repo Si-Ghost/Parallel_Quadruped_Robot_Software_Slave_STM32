@@ -365,9 +365,10 @@ int Motor_GroupControl_FinishGaitHold(void)
       group_profile != Motor_Group_ProfileGait)
     return 0;
   for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i) {
-    if (fabsf(channels[i].zero_position - channels[i].actual_position) >
-        GROUP_TARGET_ERROR_RAD)
-      return 0;
+    /* Loaded standing produces a real steady-state deflection.  Finishing a
+     * gait only changes controller profile while keeping the same mechanical
+     * zero target, so unloaded feedback proximity must not gate this state
+     * transition. */
     channels[i].target_position = channels[i].zero_position;
     channels[i].ramped_target = channels[i].zero_position;
     channels[i].integral = 0.0f;

@@ -96,7 +96,6 @@ static Leg_TrotTypeDef trot = {0};
 static uint8_t remote_armed = 0U;
 static uint8_t remote_last_s1 = 0U;
 static uint8_t remote_last_s2 = 0U;
-static uint8_t remote_zero_recovering = 0U;
 static uint32_t remote_last_reject_log_tick = 0U;
 
 /* UI gears are ordered by operator speed, while Software_Ref names its
@@ -630,7 +629,6 @@ void Leg_Gait_ServiceTrot(void)
       }
       trot.active = 0U;
       trot.stage = 0U;
-      remote_zero_recovering = 0U;
       char result[196];
       int len = snprintf(result, sizeof(result),
                          "LEG_TROT_RESULT level=%u s2=%u dir=%d "
@@ -976,7 +974,6 @@ void Leg_Gait_RemoteDisarm(void)
   __disable_irq();
   if (trot.active) (void)Motor_GroupControl_ReturnGaitToZero();
   remote_armed = 0U;
-  remote_zero_recovering = 0U;
   trot.active = 0U;
   trot.stage = 0U;
   trot.stop_requested = 0U;
@@ -1008,21 +1005,9 @@ static int start_remote_trot(int8_t direction, uint8_t ui_s2)
     }
     return 0;
   }
-  if (group.all_at_zero == 0U) {
-    if (remote_zero_recovering == 0U) {
-      if (Leg_Control_ArmAllZero() && Leg_Control_StartAllZero()) {
-        remote_zero_recovering = 1U;
-        Communication_SendString(
-            "LEG_REMOTE gait_wait_zero hold_refresh=1\r\n");
-      } else {
-        remote_armed = 0U;
-        Communication_SendString(
-            "LEG_REMOTE gait_rejected zero_refresh_failed rearm=stand\r\n");
-      }
-    }
-    return 0;
-  }
-  remote_zero_recovering = 0U;
+  /* configure_trot_profile() only accepts an active UniformOffset controller
+   * whose commanded offset is zero.  That is the correct loaded-stand
+   * precondition; all_at_zero is only an unloaded tracking diagnostic. */
   if (!configure_trot_profile(profile)) {
     Communication_SendString(
         "LEG_REMOTE gait_rejected profile_config rearm=stand\r\n");
@@ -1079,11 +1064,9 @@ void Leg_Gait_ServiceRemote(void)
       Communication_SendString("LEG_REMOTE stand queued_after_cycle\r\n");
     } else if (Leg_Control_ArmAllZero() && Leg_Control_StartAllZero()) {
       remote_armed = 1U;
-      remote_zero_recovering = 0U;
       Communication_SendString("LEG_REMOTE stand zero_target hold=1 armed=1\r\n");
     } else {
       remote_armed = 0U;
-      remote_zero_recovering = 0U;
       Communication_SendString("LEG_REMOTE stand rejected\r\n");
     }
   }
