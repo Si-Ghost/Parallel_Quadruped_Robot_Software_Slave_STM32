@@ -29,6 +29,12 @@ typedef enum
 
 typedef enum
 {
+  Motor_Group_CommandSoftwareTorque = 0,
+  Motor_Group_CommandInternalPd = 1
+} Motor_GroupCommandBackend;
+
+typedef enum
+{
   Motor_Group_StopNone = 0,
   Motor_Group_StopOperator = 1,
   Motor_Group_StopInvalidState = 2,
@@ -40,13 +46,15 @@ typedef enum
   Motor_Group_StopController = 8,
   Motor_Group_StopStall = 9,
   Motor_Group_StopRescan = 10,
-  Motor_Group_StopTransport = 11
+  Motor_Group_StopTransport = 11,
+  Motor_Group_StopOwnerConflict = 12
 } Motor_GroupStopReason;
 
 typedef struct
 {
   Motor_GroupMode mode;
   Motor_GroupProfile profile;
+  Motor_GroupCommandBackend command_backend;
   Motor_GroupStopReason reason;
   uint8_t ready;
   uint8_t all_at_zero;
@@ -58,6 +66,8 @@ typedef struct
   float target_position[8];
   float actual_position[8];
   float position_error[8];
+  float gait_kp;
+  float gait_kw;
 } Motor_GroupSnapshot;
 
 typedef struct
@@ -70,7 +80,20 @@ typedef struct
 typedef struct
 {
   float max_zero_excursion_rad;
+  Motor_GroupCommandBackend command_backend;
+  float internal_pd_kp;
+  float internal_pd_kw;
 } Motor_GroupGaitLimits;
+
+typedef struct
+{
+  Motor_GroupCommandBackend backend;
+  float torque;
+  float velocity;
+  float position;
+  float kp;
+  float kw;
+} Motor_GroupAuthorizedCommand;
 
 void Motor_GroupControl_Init(void);
 int Motor_GroupControl_ArmZero(const Motor_StateSnapshotTypeDef states[8],
@@ -96,6 +119,8 @@ void Motor_GroupControl_StopWithContext(Motor_GroupStopReason reason,
                                         float detail);
 uint8_t Motor_GroupControl_IsArmed(void);
 uint8_t Motor_GroupControl_IsActive(void);
+int Motor_GroupControl_GetAuthorizedCommand(
+    uint8_t motor_index, Motor_GroupAuthorizedCommand *command);
 int Motor_GroupControl_GetAuthorizedTorque(uint8_t motor_index, float *torque);
 void Motor_GroupControl_GetSnapshot(Motor_GroupSnapshot *snapshot);
 void Motor_GroupControl_GetDiagnostics(Motor_GroupDiagnostics *diagnostics,

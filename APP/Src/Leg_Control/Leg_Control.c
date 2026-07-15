@@ -65,6 +65,12 @@ static volatile uint32_t transport_uart_error_bits[4];
 static volatile uint32_t transport_uart_error_sequence[4];
 static uint32_t transport_uart_error_reported[4];
 static uint32_t transport_uart_error_report_tick[4];
+static volatile int8_t transport_owner_conflict_index = -1;
+static volatile uint8_t transport_owner_conflict_mask = 0U;
+
+#define LEG_COMMAND_OWNER_GROUP       (1U << 0)
+#define LEG_COMMAND_OWNER_TRAJECTORY  (1U << 1)
+#define LEG_COMMAND_OWNER_SOFTWARE    (1U << 2)
 
 typedef struct
 {
@@ -291,16 +297,41 @@ static uint8_t transport_load_command(uint8_t leg, uint8_t motor, MOTOR_send *co
   memset(command, 0, sizeof(*command));
   command->id = motor;
   command->mode = 1U;
-  float torque = 0.0f;
   uint8_t motor_index = Leg_Control_MotorIndex(leg, motor);
-  if (Motor_GroupControl_GetAuthorizedTorque(motor_index, &torque) ||
-      Motor_LegTrajectory_GetAuthorizedTorque(motor_index, &torque) ||
-      Motor_SoftwareControl_GetAuthorizedTorque(motor_index, &torque))
-    command->T = torque;
-  command->W = 0.0f;
-  command->Pos = 0.0f;
-  command->K_P = 0.0f;
-  command->K_W = 0.0f;
+  Motor_GroupAuthorizedCommand group_command;
+  float trajectory_torque = 0.0f;
+  float software_torque = 0.0f;
+  uint8_t owner_mask = 0U;
+  uint8_t group_owned = Motor_GroupControl_GetAuthorizedCommand(
+      motor_index, &group_command) ? 1U : 0U;
+  uint8_t trajectory_owned = Motor_LegTrajectory_GetAuthorizedTorque(
+      motor_index, &trajectory_torque) ? 1U : 0U;
+  uint8_t software_owned = Motor_SoftwareControl_GetAuthorizedTorque(
+      motor_index, &software_torque) ? 1U : 0U;
+
+  if (group_owned) owner_mask |= LEG_COMMAND_OWNER_GROUP;
+  if (trajectory_owned) owner_mask |= LEG_COMMAND_OWNER_TRAJECTORY;
+  if (software_owned) owner_mask |= LEG_COMMAND_OWNER_SOFTWARE;
+  if ((owner_mask & (uint8_t)(owner_mask - 1U)) != 0U) {
+    /* This frame remains zero.  The foreground service records the conflict
+     * and revokes every controller without doing logging from the transport
+     * scheduling path. */
+    transport_owner_conflict_index = (int8_t)motor_index;
+    transport_owner_conflict_mask = owner_mask;
+    return 1U;
+  }
+
+  if (group_owned) {
+    command->T = group_command.torque;
+    command->W = group_command.velocity;
+    command->Pos = group_command.position;
+    command->K_P = group_command.kp;
+    command->K_W = group_command.kw;
+  } else if (trajectory_owned) {
+    command->T = trajectory_torque;
+  } else if (software_owned) {
+    command->T = software_torque;
+  }
   return 1U;
 }
 
@@ -1315,6 +1346,30 @@ void Leg_Control_Service(uint32_t now_ms)
   static uint32_t group_link_loss_start_ms = 0U;
   static uint8_t pending_group_link_log = 0U;
   static char pending_group_link_log_text[128];
+  int8_t owner_conflict_index;
+  uint8_t owner_conflict_mask;
+  uint32_t owner_primask = __get_PRIMASK();
+  __disable_irq();
+  owner_conflict_index = transport_owner_conflict_index;
+  owner_conflict_mask = transport_owner_conflict_mask;
+  transport_owner_conflict_index = -1;
+  transport_owner_conflict_mask = 0U;
+  if (owner_primask == 0U) __enable_irq();
+  if (owner_conflict_index >= 0) {
+    if ((owner_conflict_mask & LEG_COMMAND_OWNER_GROUP) != 0U) {
+      Motor_GroupControl_StopWithContext(Motor_Group_StopOwnerConflict,
+                                         owner_conflict_index,
+                                         (float)owner_conflict_mask);
+    }
+    char conflict[112];
+    int len = snprintf(conflict, sizeof(conflict),
+                       "MOTOR_OWNER_CONFLICT idx=%d mask=0x%02X action=zero_output\r\n",
+                       (int)owner_conflict_index,
+                       (unsigned int)owner_conflict_mask);
+    if (len > 0 && len < (int)sizeof(conflict))
+      Communication_SendString(conflict);
+    Leg_Control_ForceZeroOutput(Motor_Control_Reason_SafetyLimit);
+  }
   for (uint8_t leg = 0U; leg < 4U; ++leg) {
     uint32_t sequence = transport_uart_error_sequence[leg];
     if (sequence == transport_uart_error_reported[leg]) continue;
@@ -1434,7 +1489,7 @@ void Leg_Control_Service(uint32_t now_ms)
     static const char *const reason_name[] = {
         "none", "operator", "invalid", "offline", "link", "temperature",
         "motor_fault", "position", "controller", "stall", "rescan",
-        "transport"};
+        "transport", "owner_conflict"};
     const char *name = (unsigned int)stopped_group.reason <
                                (sizeof(reason_name) / sizeof(reason_name[0]))
                            ? reason_name[stopped_group.reason]
