@@ -43,13 +43,6 @@ typedef enum
   Motor_Group_StopTransport = 11
 } Motor_GroupStopReason;
 
-typedef enum
-{
-  Motor_GaitReturnNone = 0,
-  Motor_GaitReturnSoftSpeed = 1,
-  Motor_GaitReturnSoftError = 2
-} Motor_GaitReturnReason;
-
 typedef struct
 {
   Motor_GroupMode mode;
@@ -76,9 +69,6 @@ typedef struct
 
 typedef struct
 {
-  float target_speed_rad_s;
-  float soft_speed_rad_s;
-  float hard_speed_rad_s;
   float max_zero_excursion_rad;
 } Motor_GroupGaitLimits;
 
@@ -96,10 +86,6 @@ int Motor_GroupControl_ConfigureGait(const Motor_GroupGaitLimits *limits);
 int Motor_GroupControl_SetGaitTargets(const float target_positions[8]);
 int Motor_GroupControl_ReturnGaitToZero(void);
 int Motor_GroupControl_FinishGaitHold(void);
-int Motor_GroupControl_TakeGaitReturnRequest(
-    Motor_GaitReturnReason *reason,
-    int8_t *motor_index,
-    float *detail);
 void Motor_GroupControl_Update(uint8_t motor_index,
                                float rotor_position,
                                float rotor_velocity,

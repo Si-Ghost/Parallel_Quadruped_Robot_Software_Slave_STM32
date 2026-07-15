@@ -72,9 +72,6 @@ typedef struct
   uint32_t half_cycle_ms;
   uint32_t cycle_ms;
   uint32_t entry_ms;
-  float target_speed_rad_s;
-  float soft_speed_rad_s;
-  float hard_speed_rad_s;
   float max_zero_excursion_rad;
 } Leg_TrotProfileTypeDef;
 
@@ -108,11 +105,11 @@ static uint32_t remote_last_reject_log_tick = 0U;
  * numbering to the operator. */
 static const Leg_TrotProfileTypeDef trot_profiles[LEG_TROT_PROFILE_COUNT] = {
     {5U, 1U, 2U, 30.0f, 40.0f, 220.0f, 300U, 600U, 600U,
-     70.0f, 100.0f, 120.0f, 4.00f},
+     4.00f},
     {6U, 2U, 3U, 50.0f, 75.0f, 215.0f, 220U, 440U, 440U,
-     100.0f, 135.0f, 160.0f, 4.30f},
+     4.30f},
     {7U, 3U, 1U, 40.0f, 75.0f, 210.0f, 175U, 350U, 350U,
-     115.0f, 155.0f, 185.0f, 4.00f},
+     4.00f},
 };
 
 static uint8_t trot_profile_index_from_s2(uint8_t s2)
@@ -126,9 +123,6 @@ static int configure_trot_profile(const Leg_TrotProfileTypeDef *profile)
 {
   if (profile == NULL) return 0;
   Motor_GroupGaitLimits limits = {
-      .target_speed_rad_s = profile->target_speed_rad_s,
-      .soft_speed_rad_s = profile->soft_speed_rad_s,
-      .hard_speed_rad_s = profile->hard_speed_rad_s,
       .max_zero_excursion_rad = profile->max_zero_excursion_rad,
   };
   uint32_t primask = __get_PRIMASK();
@@ -607,48 +601,6 @@ void Leg_Gait_ServiceTrot(void)
     return;
   }
 
-  {
-    Motor_GaitReturnReason guard_reason = Motor_GaitReturnNone;
-    int8_t guard_motor = -1;
-    float guard_detail = 0.0f;
-    uint8_t already_returning = trot.stage == 3U ? 1U : 0U;
-    uint32_t guard_primask = __get_PRIMASK();
-    __disable_irq();
-    int guard_return = Motor_GroupControl_TakeGaitReturnRequest(
-        &guard_reason, &guard_motor, &guard_detail);
-    int return_started = guard_return
-                             ? already_returning != 0U
-                                   ? 1
-                                   : Motor_GroupControl_ReturnGaitToZero()
-                             : 0;
-    if (guard_primask == 0U) __enable_irq();
-    if (guard_return) {
-      if (!return_started) {
-        Communication_SendString("LEG_TROT abort guard_return_zero\r\n");
-        trot.active = 0U;
-        remote_armed = 0U;
-        return;
-      }
-      if (already_returning == 0U) {
-        trot.stage = 3U;
-        trot.stage_start_tick = now;
-      }
-      trot.stop_requested = 1U;
-      remote_armed = 0U;
-      char guard_log[144];
-      int len = snprintf(
-          guard_log, sizeof(guard_log),
-          "LEG_TROT_GUARD %s idx=%d detail_u=%ld "
-          "action=return_zero rearm=stand\r\n",
-          guard_reason == Motor_GaitReturnSoftError ? "error_soft"
-                                                    : "speed_soft",
-          (int)guard_motor, (long)(guard_detail * 1000000.0f));
-      if (len > 0 && len < (int)sizeof(guard_log))
-        Communication_SendString(guard_log);
-      return;
-    }
-  }
-
   if (trot.stage == 3U) {
     uint32_t finish_primask = __get_PRIMASK();
     __disable_irq();
@@ -1004,8 +956,8 @@ int Leg_Gait_StartTrotTest(void)
   int len = snprintf(buf, sizeof(buf),
                      "LEG_TROT start source=debug level=%u s2=%u dir=1 "
                      "lift=%d step=%d half_ms=%u entry_ms=%u "
-                     "vt=%d vsoft=%d vhard=%d xm_mrad=%d "
-                     "torque_mNm=3500 "
+                     "angle_out=10000 torque_mNm=3500 i_mNm=200 "
+                     "xm_mrad=%d "
                      "path=ref_cycloid_sine\r\n",
                      (unsigned int)profile->level,
                      (unsigned int)profile->ui_s2,
@@ -1013,9 +965,6 @@ int Leg_Gait_StartTrotTest(void)
                      (int)(profile->start_point_mm * 2.0f),
                      (unsigned int)profile->half_cycle_ms,
                      (unsigned int)profile->entry_ms,
-                     (int)profile->target_speed_rad_s,
-                     (int)profile->soft_speed_rad_s,
-                     (int)profile->hard_speed_rad_s,
                      (int)(profile->max_zero_excursion_rad * 1000.0f));
   if (len > 0 && len < (int)sizeof(buf)) Communication_SendString(buf);
   return 1;
@@ -1094,9 +1043,8 @@ static int start_remote_trot(int8_t direction, uint8_t ui_s2)
                      "LEG_REMOTE gait_start dir=%d level=%u s2=%u "
                      "step=%d lift=%d "
                      "cycle_ms=%u entry_ms=%u pkp=35900 pkd=1000 skp=10 "
-                     "ski=0.6 skd=1.5 tmax=3.5 err_soft=0.60 "
-                     "err_hard=1.00 vt=%d vsoft=%d vhard=%d "
-                     "return_vt=40 xm_mrad=%d ref_s2=%u "
+                     "ski=0.6 skd=1.5 angle_out=10000 tmax=3.5 "
+                     "i_max=0.2 guard=ref_pid_only xm_mrad=%d ref_s2=%u "
                      "path=ref_cycloid_sine\r\n",
                      (int)direction,
                      (unsigned int)profile->level,
@@ -1105,9 +1053,6 @@ static int start_remote_trot(int8_t direction, uint8_t ui_s2)
                      (int)profile->lift_height_mm,
                      (unsigned int)profile->cycle_ms,
                      (unsigned int)profile->entry_ms,
-                     (int)profile->target_speed_rad_s,
-                     (int)profile->soft_speed_rad_s,
-                     (int)profile->hard_speed_rad_s,
                      (int)(profile->max_zero_excursion_rad * 1000.0f),
                      (unsigned int)profile->ref_s2);
   if (len > 0 && len < (int)sizeof(buf)) Communication_SendString(buf);

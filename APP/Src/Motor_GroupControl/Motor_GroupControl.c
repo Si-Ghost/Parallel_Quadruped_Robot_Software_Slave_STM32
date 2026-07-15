@@ -13,31 +13,16 @@
 #define GROUP_GAIT_DEFAULT_MAX_ZERO_EXCURSION_RAD 4.00f
 #define GROUP_TARGET_SPEED_RAD_S          0.25f
 #define GROUP_STAND_TARGET_SPEED_RAD_S    0.125f
-/* The doc-sized reference slow profile (150 mm step, 50 mm lift, 300 ms
- * half-cycle) reaches about 62.5 rotor rad/s. */
-#define GROUP_GAIT_DEFAULT_TARGET_SPEED_RAD_S 70.0f
-#define GROUP_GAIT_RETURN_SPEED_RAD_S     40.0f
 #define GROUP_TARGET_ERROR_RAD            0.08f
-#define GROUP_GAIT_SOFT_ERROR_RAD          0.60f
-#define GROUP_GAIT_HARD_ERROR_RAD          1.00f
-#define GROUP_GAIT_SOFT_ERROR_SAMPLES       20U
-#define GROUP_GAIT_HARD_ERROR_SAMPLES        3U
-#define GROUP_GAIT_DEFAULT_SOFT_SPEED_RAD_S 100.0f
-#define GROUP_GAIT_DEFAULT_HARD_SPEED_RAD_S 120.0f
-#define GROUP_GAIT_CONFIG_MAX_SPEED_RAD_S  200.0f
 #define GROUP_GAIT_CONFIG_MIN_EXCURSION_RAD 3.50f
 #define GROUP_GAIT_CONFIG_MAX_EXCURSION_RAD 4.50f
-#define GROUP_GAIT_SOFT_SPEED_SAMPLES      20U
-#define GROUP_GAIT_HARD_SPEED_SAMPLES       3U
-#define GROUP_GAIT_HOLD_SPEED_RAD_S          1.0f
 #define GROUP_MIN_DT_S                    0.0002f
 #define GROUP_MAX_DT_S                    \
   ((float)MOTOR_GROUP_ACTIVE_FEEDBACK_TIMEOUT_MS * 0.001f)
 #define GROUP_POSITION_KP                 35.9f
 #define GROUP_POSITION_KD                 1.0f
-/* Keep the cautious group target ramp above, but use the already validated
- * single-motor static-hold cascade limits once position error is generated. */
 #define GROUP_SPEED_TARGET_MAX_RAD_S      100.0f
+#define GROUP_GAIT_ANGLE_OUT_MAX_RAD_S  10000.0f
 #define GROUP_SPEED_KP                    0.01f
 #define GROUP_SPEED_KI                    0.0006f
 #define GROUP_SPEED_KD                    0.0015f
@@ -68,10 +53,6 @@ typedef struct
   float diagnostic_max_abs_velocity;
   float diagnostic_max_abs_torque;
   uint32_t previous_feedback_timestamp;
-  uint8_t gait_soft_speed_samples;
-  uint8_t gait_hard_speed_samples;
-  uint8_t gait_soft_error_samples;
-  uint8_t gait_hard_error_samples;
 } Motor_GroupChannel;
 
 static Motor_GroupChannel channels[GROUP_MOTOR_COUNT];
@@ -85,11 +66,6 @@ static float pending_group_target_offset;
 static int8_t stop_motor_index;
 static float stop_detail;
 static uint32_t stop_sequence;
-static uint8_t gait_return_requested;
-static uint8_t gait_returning;
-static Motor_GaitReturnReason gait_return_reason;
-static int8_t gait_return_motor_index;
-static float gait_return_detail;
 static Motor_GroupGaitLimits gait_limits;
 
 static float clamp_symmetric(float value, float limit)
@@ -117,14 +93,6 @@ void Motor_GroupControl_Init(void)
   pending_group_target_offset = 0.0f;
   stop_motor_index = -1;
   stop_detail = 0.0f;
-  gait_return_requested = 0U;
-  gait_returning = 0U;
-  gait_return_reason = Motor_GaitReturnNone;
-  gait_return_motor_index = -1;
-  gait_return_detail = 0.0f;
-  gait_limits.target_speed_rad_s = GROUP_GAIT_DEFAULT_TARGET_SPEED_RAD_S;
-  gait_limits.soft_speed_rad_s = GROUP_GAIT_DEFAULT_SOFT_SPEED_RAD_S;
-  gait_limits.hard_speed_rad_s = GROUP_GAIT_DEFAULT_HARD_SPEED_RAD_S;
   gait_limits.max_zero_excursion_rad =
       GROUP_GAIT_DEFAULT_MAX_ZERO_EXCURSION_RAD;
 }
@@ -348,14 +316,7 @@ int Motor_GroupControl_ConfigureGait(const Motor_GroupGaitLimits *limits)
   if (limits == NULL || group_mode != Motor_Group_Active ||
       group_profile != Motor_Group_ProfileUniformOffset ||
       fabsf(group_target_offset) > 0.0001f ||
-      !isfinite(limits->target_speed_rad_s) ||
-      !isfinite(limits->soft_speed_rad_s) ||
-      !isfinite(limits->hard_speed_rad_s) ||
       !isfinite(limits->max_zero_excursion_rad) ||
-      limits->target_speed_rad_s <= 0.0f ||
-      limits->soft_speed_rad_s <= limits->target_speed_rad_s ||
-      limits->hard_speed_rad_s <= limits->soft_speed_rad_s ||
-      limits->hard_speed_rad_s > GROUP_GAIT_CONFIG_MAX_SPEED_RAD_S ||
       limits->max_zero_excursion_rad <
           GROUP_GAIT_CONFIG_MIN_EXCURSION_RAD ||
       limits->max_zero_excursion_rad >
@@ -384,7 +345,6 @@ int Motor_GroupControl_SetGaitTargets(const float target_positions[8])
   for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i)
     channels[i].target_position = target_positions[i];
   group_profile = Motor_Group_ProfileGait;
-  gait_returning = 0U;
   group_target_offset = 0.0f;
   return 1;
 }
@@ -396,7 +356,6 @@ int Motor_GroupControl_ReturnGaitToZero(void)
     return 0;
   for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i)
     channels[i].target_position = channels[i].zero_position;
-  gait_returning = 1U;
   return 1;
 }
 
@@ -407,37 +366,14 @@ int Motor_GroupControl_FinishGaitHold(void)
     return 0;
   for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i) {
     if (fabsf(channels[i].zero_position - channels[i].actual_position) >
-            GROUP_TARGET_ERROR_RAD ||
-        fabsf(channels[i].actual_velocity) > GROUP_GAIT_HOLD_SPEED_RAD_S)
+        GROUP_TARGET_ERROR_RAD)
       return 0;
     channels[i].target_position = channels[i].zero_position;
     channels[i].ramped_target = channels[i].zero_position;
     channels[i].integral = 0.0f;
-    channels[i].gait_soft_speed_samples = 0U;
-    channels[i].gait_hard_speed_samples = 0U;
-    channels[i].gait_soft_error_samples = 0U;
-    channels[i].gait_hard_error_samples = 0U;
   }
   group_profile = Motor_Group_ProfileUniformOffset;
   group_target_offset = 0.0f;
-  gait_return_requested = 0U;
-  gait_returning = 0U;
-  return 1;
-}
-
-int Motor_GroupControl_TakeGaitReturnRequest(
-    Motor_GaitReturnReason *reason,
-    int8_t *motor_index,
-    float *detail)
-{
-  if (group_mode != Motor_Group_Active ||
-      group_profile != Motor_Group_ProfileGait ||
-      gait_return_requested == 0U)
-    return 0;
-  if (reason != NULL) *reason = gait_return_reason;
-  if (motor_index != NULL) *motor_index = gait_return_motor_index;
-  if (detail != NULL) *detail = gait_return_detail;
-  gait_return_requested = 0U;
   return 1;
 }
 
@@ -500,92 +436,32 @@ void Motor_GroupControl_Update(uint8_t motor_index,
     return;
   }
 
+  float ramp_velocity = 0.0f;
   if (group_profile == Motor_Group_ProfileGait) {
-    float abs_velocity = fabsf(rotor_velocity);
-    channel->gait_hard_speed_samples =
-        abs_velocity > gait_limits.hard_speed_rad_s
-            ? (uint8_t)(channel->gait_hard_speed_samples + 1U)
-            : 0U;
-    channel->gait_soft_speed_samples =
-        (gait_returning == 0U &&
-         abs_velocity > gait_limits.soft_speed_rad_s)
-            ? (uint8_t)(channel->gait_soft_speed_samples + 1U)
-            : 0U;
-    if (channel->gait_hard_speed_samples >=
-        GROUP_GAIT_HARD_SPEED_SAMPLES) {
-      Motor_GroupControl_StopWithContext(Motor_Group_StopController,
-                                         (int8_t)motor_index,
-                                         rotor_velocity);
-      return;
-    }
-    if (channel->gait_soft_speed_samples >=
-        GROUP_GAIT_SOFT_SPEED_SAMPLES) {
-      for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i)
-        channels[i].target_position = channels[i].zero_position;
-      if (gait_return_requested == 0U) {
-        gait_return_requested = 1U;
-        gait_return_reason = Motor_GaitReturnSoftSpeed;
-        gait_return_motor_index = (int8_t)motor_index;
-        gait_return_detail = rotor_velocity;
-      }
-      channel->gait_soft_speed_samples = 0U;
-    }
+    /* Software_Ref feeds the generated gait target directly into the angle
+     * PID.  It has no extra target-speed ramp and no measured-speed or
+     * tracking-error abort threshold. */
+    channel->ramped_target = channel->target_position;
   } else {
-    channel->gait_soft_speed_samples = 0U;
-    channel->gait_hard_speed_samples = 0U;
-    channel->gait_soft_error_samples = 0U;
-    channel->gait_hard_error_samples = 0U;
+    float remaining = channel->target_position - channel->ramped_target;
+    float target_speed = group_profile == Motor_Group_ProfileStandPose
+                             ? GROUP_STAND_TARGET_SPEED_RAD_S
+                             : GROUP_TARGET_SPEED_RAD_S;
+    float target_step = clamp_symmetric(remaining, target_speed * dt);
+    channel->ramped_target += target_step;
+    ramp_velocity = target_step / dt;
   }
-
-  float remaining = channel->target_position - channel->ramped_target;
-  float target_speed = group_profile == Motor_Group_ProfileStandPose
-                           ? GROUP_STAND_TARGET_SPEED_RAD_S
-                           : group_profile == Motor_Group_ProfileGait
-                                 ? gait_returning != 0U
-                                       ? GROUP_GAIT_RETURN_SPEED_RAD_S
-                                       : gait_limits.target_speed_rad_s
-                                 : GROUP_TARGET_SPEED_RAD_S;
-  float target_step = clamp_symmetric(remaining, target_speed * dt);
-  channel->ramped_target += target_step;
-  float ramp_velocity = target_step / dt;
 
   float previous_position_error = channel->previous_position_error;
   channel->position_error = channel->ramped_target - rotor_position;
-  if (group_profile == Motor_Group_ProfileGait) {
-    float abs_error = fabsf(channel->position_error);
-    channel->gait_hard_error_samples =
-        abs_error > GROUP_GAIT_HARD_ERROR_RAD
-            ? (uint8_t)(channel->gait_hard_error_samples + 1U)
-            : 0U;
-    channel->gait_soft_error_samples =
-        (gait_returning == 0U && abs_error > GROUP_GAIT_SOFT_ERROR_RAD)
-            ? (uint8_t)(channel->gait_soft_error_samples + 1U)
-            : 0U;
-    if (channel->gait_hard_error_samples >=
-        GROUP_GAIT_HARD_ERROR_SAMPLES) {
-      Motor_GroupControl_StopWithContext(Motor_Group_StopController,
-                                         (int8_t)motor_index,
-                                         channel->position_error);
-      return;
-    }
-    if (channel->gait_soft_error_samples >=
-        GROUP_GAIT_SOFT_ERROR_SAMPLES) {
-      for (uint8_t i = 0U; i < GROUP_MOTOR_COUNT; ++i)
-        channels[i].target_position = channels[i].zero_position;
-      if (gait_return_requested == 0U) {
-        gait_return_requested = 1U;
-        gait_return_reason = Motor_GaitReturnSoftError;
-        gait_return_motor_index = (int8_t)motor_index;
-        gait_return_detail = channel->position_error;
-      }
-      channel->gait_soft_error_samples = 0U;
-    }
-  }
   channel->previous_position_error = channel->position_error;
+  float angle_out_limit = group_profile == Motor_Group_ProfileGait
+                              ? GROUP_GAIT_ANGLE_OUT_MAX_RAD_S
+                              : GROUP_SPEED_TARGET_MAX_RAD_S;
   float speed_target = clamp_symmetric(
       ramp_velocity + GROUP_POSITION_KP * channel->position_error +
           GROUP_POSITION_KD * (channel->position_error - previous_position_error),
-      GROUP_SPEED_TARGET_MAX_RAD_S);
+      angle_out_limit);
   float speed_error = speed_target - rotor_velocity;
   float speed_delta = speed_error - channel->previous_speed_error;
   channel->previous_speed_error = speed_error;
@@ -593,7 +469,8 @@ void Motor_GroupControl_Update(uint8_t motor_index,
       channel->integral + GROUP_SPEED_KI * speed_error,
       GROUP_SPEED_INTEGRAL_MAX);
   float hold_torque = 0.0f;
-  if (fabsf(channel->target_position - channel->ramped_target) <=
+  if (group_profile != Motor_Group_ProfileGait &&
+      fabsf(channel->target_position - channel->ramped_target) <=
       GROUP_HOLD_ENTRY_ERROR_RAD) {
     /* The reference cascade has only 0.359 N.m/rad of immediate static
      * stiffness (35.9 * 0.01); its integrator supplies load torque later.
