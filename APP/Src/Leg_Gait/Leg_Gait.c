@@ -72,6 +72,7 @@ typedef struct
   uint32_t half_cycle_ms;
   uint32_t cycle_ms;
   uint32_t entry_ms;
+  float swing_fraction;
   float max_zero_excursion_rad;
 } Leg_TrotProfileTypeDef;
 
@@ -104,11 +105,11 @@ static uint32_t remote_last_reject_log_tick = 0U;
  * numbering to the operator. */
 static const Leg_TrotProfileTypeDef trot_profiles[LEG_TROT_PROFILE_COUNT] = {
     {5U, 1U, 2U, 30.0f, 40.0f, 220.0f, 300U, 600U, 600U,
-     4.00f},
+     0.35f, 4.00f},
     {6U, 2U, 3U, 50.0f, 75.0f, 215.0f, 220U, 440U, 440U,
-     4.30f},
+     0.50f, 4.30f},
     {7U, 3U, 1U, 40.0f, 75.0f, 210.0f, 175U, 350U, 350U,
-     4.00f},
+     0.50f, 4.00f},
 };
 
 static uint8_t trot_profile_index_from_s2(uint8_t s2)
@@ -649,7 +650,6 @@ void Leg_Gait_ServiceTrot(void)
   float rotor_targets[8];
   float phase = 0.0f;
   float entry_blend = 1.0f;
-  uint8_t half_cycle = 0U;
   uint8_t enter_cycle = 0U;
   uint32_t phase_offset_ms = profile->half_cycle_ms / 2U;
   uint32_t cycle_time = 0U;
@@ -660,7 +660,6 @@ void Leg_Gait_ServiceTrot(void)
     entry_blend = 0.5f - 0.5f * cosf(LEG_PI * t);
     cycle_time = (elapsed + phase_offset_ms) % profile->cycle_ms;
     phase = (float)cycle_time / (float)profile->cycle_ms;
-    half_cycle = cycle_time >= profile->half_cycle_ms ? 1U : 0U;
     if (trot.stop_requested != 0U) {
       if (group.profile == Motor_Group_ProfileGait) {
         uint32_t return_primask = __get_PRIMASK();
@@ -689,7 +688,6 @@ void Leg_Gait_ServiceTrot(void)
     uint32_t elapsed = now - trot.stage_start_tick;
     cycle_time = (elapsed + phase_offset_ms) % profile->cycle_ms;
     phase = (float)cycle_time / (float)profile->cycle_ms;
-    half_cycle = cycle_time >= profile->half_cycle_ms ? 1U : 0U;
     if ((trot.stop_requested || trot.one_cycle) &&
         trot.stop_after_tick == 0U) {
       uint32_t remaining_ms = profile->cycle_ms - cycle_time;
@@ -716,11 +714,14 @@ void Leg_Gait_ServiceTrot(void)
 
   for (uint8_t leg = 0U; leg < 4U; ++leg) {
     uint8_t pair_a = (leg == 0U || leg == 3U) ? 1U : 0U;
-    uint8_t swing = pair_a ? (half_cycle == 0U) : (half_cycle != 0U);
-    uint32_t phase_ms = half_cycle
-                            ? cycle_time - profile->half_cycle_ms
-                            : cycle_time;
-    float t = (float)phase_ms / (float)profile->half_cycle_ms;
+    float leg_phase = phase + (pair_a != 0U ? 0.0f : 0.5f);
+    if (leg_phase >= 1.0f) leg_phase -= 1.0f;
+    uint8_t swing = leg_phase < profile->swing_fraction ? 1U : 0U;
+    float t = swing != 0U
+                  ? leg_phase / profile->swing_fraction
+                  : (leg_phase - profile->swing_fraction) /
+                        (1.0f - profile->swing_fraction);
+    if (t < 0.0f) t = 0.0f;
     if (t > 1.0f) t = 1.0f;
     float x;
     float y = profile->base_y_mm;
@@ -785,7 +786,7 @@ void Leg_Gait_ServiceTrot(void)
     int len = snprintf(buf, sizeof(buf),
                        "LEG_TROT_STATE level=%u s2=%u stage=%u dir=%d "
                        "phase=%ld blend=%ld stop=%u "
-                       "step=%d lift=%d half_ms=%u\r\n",
+                       "step=%d lift=%d duty=%u half_ms=%u\r\n",
                        (unsigned int)profile->level,
                        (unsigned int)profile->ui_s2,
                        (unsigned int)trot.stage, (int)trot.direction,
@@ -794,6 +795,8 @@ void Leg_Gait_ServiceTrot(void)
                        (unsigned int)trot.stop_requested,
                        (int)(profile->start_point_mm * 2.0f),
                        (int)profile->lift_height_mm,
+                       (unsigned int)((1.0f - profile->swing_fraction) *
+                                      100.0f),
                        (unsigned int)profile->half_cycle_ms);
     if (len > 0 && len < (int)sizeof(buf)) Communication_SendString(buf);
   }
@@ -956,7 +959,7 @@ int Leg_Gait_StartTrotTest(void)
                      "lift=%d step=%d half_ms=%u entry_ms=%u "
                      "angle_out=10000 torque_mNm=3500 i_mNm=200 "
                      "xm_mrad=%d "
-                     "path=ref_cycloid_sine\r\n",
+                     "path=cycloid_sine\r\n",
                      (unsigned int)profile->level,
                      (unsigned int)profile->ui_s2,
                      (int)profile->lift_height_mm,
@@ -1027,10 +1030,10 @@ static int start_remote_trot(int8_t direction, uint8_t ui_s2)
   int len = snprintf(buf, sizeof(buf),
                      "LEG_REMOTE gait_start dir=%d level=%u s2=%u "
                      "step=%d lift=%d "
-                     "cycle_ms=%u entry_ms=%u pkp=35900 pkd=1000 skp=10 "
+                     "cycle_ms=%u entry_ms=%u duty=%u pkp=35900 pkd=1000 skp=10 "
                      "ski=0.6 skd=1.5 angle_out=10000 tmax=3.5 "
                      "i_max=0.2 guard=ref_pid_only xm_mrad=%d ref_s2=%u "
-                     "path=ref_cycloid_sine\r\n",
+                     "path=cycloid_sine\r\n",
                      (int)direction,
                      (unsigned int)profile->level,
                      (unsigned int)profile->ui_s2,
@@ -1038,6 +1041,8 @@ static int start_remote_trot(int8_t direction, uint8_t ui_s2)
                      (int)profile->lift_height_mm,
                      (unsigned int)profile->cycle_ms,
                      (unsigned int)profile->entry_ms,
+                     (unsigned int)((1.0f - profile->swing_fraction) *
+                                    100.0f),
                      (int)(profile->max_zero_excursion_rad * 1000.0f),
                      (unsigned int)profile->ref_s2);
   if (len > 0 && len < (int)sizeof(buf)) Communication_SendString(buf);
