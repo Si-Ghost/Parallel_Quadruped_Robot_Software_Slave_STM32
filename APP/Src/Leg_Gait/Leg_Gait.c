@@ -107,7 +107,7 @@ static uint32_t remote_last_reject_log_tick = 0U;
  * so the reference timing is preserved without exposing its non-monotonic
  * numbering to the operator. */
 static const Leg_TrotProfileTypeDef trot_profiles[LEG_TROT_PROFILE_COUNT] = {
-    {5U, 1U, 2U, 50.0f, 75.0f, 220.0f, 300U, 600U, 600U,
+    {5U, 1U, 2U, 30.0f, 40.0f, 220.0f, 300U, 600U, 600U,
      70.0f, 100.0f, 120.0f, 4.00f},
     {6U, 2U, 3U, 50.0f, 75.0f, 215.0f, 220U, 440U, 440U,
      100.0f, 135.0f, 160.0f, 4.30f},
@@ -698,24 +698,52 @@ void Leg_Gait_ServiceTrot(void)
 
   float rotor_targets[8];
   float phase = 0.0f;
+  float entry_blend = 1.0f;
   uint8_t half_cycle = 0U;
   uint8_t enter_cycle = 0U;
+  uint32_t phase_offset_ms = profile->half_cycle_ms / 2U;
+  uint32_t cycle_time = 0U;
   if (trot.stage == 1U) {
     uint32_t elapsed = now - trot.stage_start_tick;
     float t = (float)elapsed / (float)profile->entry_ms;
     if (t > 1.0f) t = 1.0f;
-    phase = 0.5f - 0.5f * cosf(LEG_PI * t);
+    entry_blend = 0.5f - 0.5f * cosf(LEG_PI * t);
+    cycle_time = (elapsed + phase_offset_ms) % profile->cycle_ms;
+    phase = (float)cycle_time / (float)profile->cycle_ms;
+    half_cycle = cycle_time >= profile->half_cycle_ms ? 1U : 0U;
+    if (trot.stop_requested != 0U) {
+      if (group.profile == Motor_Group_ProfileGait) {
+        uint32_t return_primask = __get_PRIMASK();
+        __disable_irq();
+        int return_started = Motor_GroupControl_ReturnGaitToZero();
+        if (return_primask == 0U) __enable_irq();
+        if (!return_started) {
+          Communication_SendString("LEG_TROT abort entry_return_zero\r\n");
+          trot.active = 0U;
+          remote_armed = 0U;
+          return;
+        }
+        trot.stage = 3U;
+        trot.stage_start_tick = now;
+        Communication_SendString("LEG_TROT entry_cancel return_zero\r\n");
+      } else {
+        trot.active = 0U;
+        trot.stage = 0U;
+        trot.stop_requested = 0U;
+        Communication_SendString("LEG_TROT entry_cancel zero_hold\r\n");
+      }
+      return;
+    }
     if (elapsed >= profile->entry_ms) enter_cycle = 1U;
   } else {
     uint32_t elapsed = now - trot.stage_start_tick;
-    uint32_t cycle_time = elapsed % profile->cycle_ms;
+    cycle_time = (elapsed + phase_offset_ms) % profile->cycle_ms;
     phase = (float)cycle_time / (float)profile->cycle_ms;
     half_cycle = cycle_time >= profile->half_cycle_ms ? 1U : 0U;
     if ((trot.stop_requested || trot.one_cycle) &&
         trot.stop_after_tick == 0U) {
-      uint32_t cycles = elapsed / profile->cycle_ms + 1U;
-      trot.stop_after_tick = trot.stage_start_tick +
-                             cycles * profile->cycle_ms;
+      uint32_t remaining_ms = profile->cycle_ms - cycle_time;
+      trot.stop_after_tick = now + remaining_ms;
     }
     if (trot.stop_after_tick != 0U &&
         (int32_t)(now - trot.stop_after_tick) >= 0) {
@@ -738,34 +766,30 @@ void Leg_Gait_ServiceTrot(void)
 
   for (uint8_t leg = 0U; leg < 4U; ++leg) {
     uint8_t pair_a = (leg == 0U || leg == 3U) ? 1U : 0U;
+    uint8_t swing = pair_a ? (half_cycle == 0U) : (half_cycle != 0U);
+    uint32_t phase_ms = half_cycle
+                            ? cycle_time - profile->half_cycle_ms
+                            : cycle_time;
+    float t = (float)phase_ms / (float)profile->half_cycle_ms;
+    if (t > 1.0f) t = 1.0f;
     float x;
     float y = profile->base_y_mm;
-    if (trot.stage == 1U) {
-      float start_sign = pair_a ? -1.0f : 1.0f;
-      x = LEG_TROT_BASE_X_MM +
-          (float)trot.direction * start_sign * profile->start_point_mm * phase;
-      y = LEG_TROT_ZERO_Y_MM +
-          (profile->base_y_mm - LEG_TROT_ZERO_Y_MM) * phase;
+    if (swing) {
+      float cycloid = t - sinf(LEG_TWO_PI * t) / LEG_TWO_PI;
+      x = -profile->start_point_mm +
+          2.0f * profile->start_point_mm * cycloid;
+      y -= profile->lift_height_mm *
+           (0.5f - 0.5f * cosf(LEG_TWO_PI * t));
     } else {
-      uint8_t swing = pair_a ? (half_cycle == 0U) : (half_cycle != 0U);
-      uint32_t cycle_time = (now - trot.stage_start_tick) %
-                            profile->cycle_ms;
-      uint32_t phase_ms = half_cycle
-                              ? cycle_time - profile->half_cycle_ms
-                              : cycle_time;
-      float t = (float)phase_ms / (float)profile->half_cycle_ms;
-      if (t > 1.0f) t = 1.0f;
-      if (swing) {
-        float cycloid = t - sinf(LEG_TWO_PI * t) / LEG_TWO_PI;
-        x = -profile->start_point_mm +
-            2.0f * profile->start_point_mm * cycloid;
-        y -= profile->lift_height_mm *
-             (0.5f - 0.5f * cosf(LEG_TWO_PI * t));
-      } else {
-        x = profile->start_point_mm -
-            2.0f * profile->start_point_mm * t;
-      }
-      x = LEG_TROT_BASE_X_MM + (float)trot.direction * x;
+      x = profile->start_point_mm -
+          2.0f * profile->start_point_mm * t;
+    }
+    x = LEG_TROT_BASE_X_MM + (float)trot.direction * x;
+    if (trot.stage == 1U) {
+      x = LEG_TROT_BASE_X_MM +
+          entry_blend * (x - LEG_TROT_BASE_X_MM);
+      y = LEG_TROT_ZERO_Y_MM +
+          entry_blend * (y - LEG_TROT_ZERO_Y_MM);
     }
 
     Leg_PointTypeDef foot = {.x = x, .y = y};
@@ -798,22 +822,25 @@ void Leg_Gait_ServiceTrot(void)
   if (enter_cycle) {
     trot.stage = 2U;
     trot.stage_start_tick = now;
-    if (trot.stop_requested || trot.one_cycle)
-      trot.stop_after_tick = now + profile->cycle_ms;
+    if (trot.one_cycle) {
+      uint32_t remaining_ms = profile->cycle_ms - phase_offset_ms;
+      trot.stop_after_tick = now + remaining_ms;
+    }
     Communication_SendString("LEG_TROT entry_complete cycle_start\r\n");
   }
 
   if ((now - trot.last_log_tick) >= LEG_TROT_LOG_PERIOD_MS) {
     trot.last_log_tick = now;
-    char buf[168];
+    char buf[192];
     int len = snprintf(buf, sizeof(buf),
                        "LEG_TROT_STATE level=%u s2=%u stage=%u dir=%d "
-                       "phase=%ld stop=%u "
+                       "phase=%ld blend=%ld stop=%u "
                        "step=%d lift=%d half_ms=%u\r\n",
                        (unsigned int)profile->level,
                        (unsigned int)profile->ui_s2,
                        (unsigned int)trot.stage, (int)trot.direction,
                        (long)(phase * 1000000.0f),
+                       (long)(entry_blend * 1000000.0f),
                        (unsigned int)trot.stop_requested,
                        (int)(profile->start_point_mm * 2.0f),
                        (int)profile->lift_height_mm,
