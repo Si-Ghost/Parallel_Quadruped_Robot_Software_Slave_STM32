@@ -293,7 +293,8 @@ static uint8_t transport_load_command(uint8_t leg, uint8_t motor, MOTOR_send *co
   command->mode = 1U;
   float torque = 0.0f;
   uint8_t motor_index = Leg_Control_MotorIndex(leg, motor);
-  if (Motor_LegTrajectory_GetAuthorizedTorque(motor_index, &torque))
+  if (Motor_LegTrajectory_GetAuthorizedTorque(motor_index, &torque) ||
+      Motor_GroupControl_GetAuthorizedTorque(motor_index, &torque))
     command->T = torque;
   command->W = 0.0f;
   command->Pos = 0.0f;
