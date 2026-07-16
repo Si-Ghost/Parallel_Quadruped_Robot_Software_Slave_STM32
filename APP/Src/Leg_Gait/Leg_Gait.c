@@ -94,6 +94,7 @@ typedef struct
   uint8_t stage;
   uint8_t profile_index;
   int8_t direction;
+  float turn_factor;
   uint8_t stop_requested;
   uint8_t one_cycle;
   uint8_t dry_run;
@@ -1102,10 +1103,14 @@ void Leg_Gait_ServiceTrot(void)
     uint8_t pair_a = (leg == 0U || leg == 3U) ? 1U : 0U;
     float leg_phase = phase + (pair_a != 0U ? 0.0f : 0.5f);
     if (leg_phase >= 1.0f) leg_phase -= 1.0f;
+    /* Mixed turning: left legs (0,2) lengthen, right (1,3) shorten */
+    float turn_scale = (leg == 0U || leg == 2U)
+                           ? 1.0f + trot.turn_factor
+                           : 1.0f - trot.turn_factor;
     Leg_TrotTrajectoryConfig trajectory_config = {
         .base_x_mm = LEG_TROT_BASE_X_MM,
         .base_y_mm = profile->base_y_mm,
-        .half_step_mm = profile->start_point_mm,
+        .half_step_mm = profile->start_point_mm * turn_scale,
         .lift_height_mm = profile->lift_height_mm,
         .swing_fraction = profile->swing_fraction,
         .cycle_ms = profile->cycle_ms,
@@ -1535,7 +1540,16 @@ void Leg_Gait_ServiceRemote(void)
   }
   if (requested_direction == 0) remote_dryrun_latched = 0U;
 
+  /* Mixed turning: ch2 scales step length differentially left vs right.
+   * Factor from Software_Ref: 0.0005 * ch2, clamped to ±0.5. */
+  float turn = 0.0f;
+  if (rc.s1 == 3U && abs(rc.ch2) > LEG_REMOTE_CHANNEL_DEADZONE)
+    turn = 0.0005f * (float)rc.ch2;
+  if (turn > 0.50f) turn = 0.50f;
+  if (turn < -0.50f) turn = -0.50f;
+
   if (trot.active) {
+    trot.turn_factor = turn;
     if (trot.dry_run == 0U &&
         trot.profile_index < LEG_TROT_PROFILE_COUNT &&
         rc.s1 == 3U && rc.s2 >= 1U && rc.s2 <= 3U &&
