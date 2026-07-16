@@ -11,7 +11,8 @@
 #define MOTOR_TRANSPORT_OFFLINE_TIMEOUT_MS 100U
 #define MOTOR_TRANSPORT_QUIESCE_TIMEOUT_MS 5U
 
-/* ACTIVE output is authorized only by the guarded software controllers. */
+/* Board-side gait dry-run: preserve feedback traffic but force every motor
+ * command field that can produce motion to zero at the final TX boundary. */
 #define MOTOR_TRANSPORT_ZERO_OUTPUT_ONLY 0U
 
 _Static_assert((MOTOR_TRANSPORT_RING_SIZE & (MOTOR_TRANSPORT_RING_SIZE - 1U)) == 0U,
@@ -327,6 +328,13 @@ HAL_StatusTypeDef Motor_Transport_Start(void)
       (void)Motor_Transport_Stop();
       return HAL_ERROR;
     }
+    /* RS-485 direction switching at 4 Mbaud produces NE/FE on every
+     * transaction.  HAL_UART_IRQHandler aborts the DMA on every error
+     * interrupt, which destroys the permanent RX ring.  Disable the
+     * USART error interrupt so only DMA events drive the transport.
+     * CRC + resync handle corrupted bytes; ORE is still detected by
+     * the rx_ring_is_armed() poll fallback in the service loop. */
+    CLEAR_BIT(channel->uart->Instance->CR3, USART_CR3_EIE);
   }
   transport_running = 1U;
   return HAL_OK;
@@ -426,46 +434,6 @@ uint8_t Motor_Transport_GetStats(uint8_t channel_index, Motor_TransportStats *st
   stats->restart_count = channel->restart_count;
   stats->schedule_overrun_count = schedule_overrun_count;
   return 1U;
-}
-
-uint8_t Motor_Transport_HandleLineErrorIrq(UART_HandleTypeDef *huart)
-{
-  if (!transport_initialized || !transport_running || huart == NULL) return 0U;
-  for (uint8_t i = 0U; i < MOTOR_TRANSPORT_CHANNEL_COUNT; ++i) {
-    Motor_TransportChannel *channel = &channels[i];
-    if (huart != channel->uart) continue;
-
-    uint32_t isr = READ_REG(huart->Instance->ISR);
-    uint32_t hal_error_bits = HAL_UART_ERROR_NONE;
-    uint32_t clear_flags = 0U;
-    if ((isr & USART_ISR_PE) != 0U) {
-      hal_error_bits |= HAL_UART_ERROR_PE;
-      clear_flags |= UART_CLEAR_PEF;
-    }
-    if ((isr & USART_ISR_NE) != 0U) {
-      hal_error_bits |= HAL_UART_ERROR_NE;
-      clear_flags |= UART_CLEAR_NEF;
-    }
-    if ((isr & USART_ISR_FE) != 0U) {
-      hal_error_bits |= HAL_UART_ERROR_FE;
-      clear_flags |= UART_CLEAR_FEF;
-    }
-    if (clear_flags == 0U) return 0U;
-
-    /* HAL_UART_IRQHandler aborts DMA RX for every error when DMAR is set.
-     * PE/NE/FE are recoverable byte-level line errors for this permanent
-     * circular ring: keep DMA armed and let CRC/ID parsing discard damage.
-     * ORE/RTO/DMA errors are intentionally left for HAL and the existing
-     * foreground restart/fail-safe path. */
-    __HAL_UART_CLEAR_FLAG(huart, clear_flags);
-    channel->uart_error_bits |= hal_error_bits;
-    ++channel->uart_error_count;
-    if (transport_callbacks.uart_error != NULL)
-      transport_callbacks.uart_error(channel->leg_index, hal_error_bits,
-                                     HAL_GetTick());
-    return 1U;
-  }
-  return 0U;
 }
 
 uint8_t Motor_Transport_HandleTxComplete(UART_HandleTypeDef *huart)
