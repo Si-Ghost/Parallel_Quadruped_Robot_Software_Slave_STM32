@@ -79,22 +79,23 @@ void Motor_State_UpdateRawFeedback(Motor_StateTypeDef *state,
 {
   if (state == NULL) return;
 
-  /* Single-turn absolute encoder wraps at 2π.  Unwrap to a continuous
-   * multi-turn value so the joint angle and zero-excursion guard see a
-   * monotonic position instead of a 2π discontinuity every revolution. */
+  /* Single-turn absolute encoder wraps at 2π.  Detect wrap by comparing
+   * the raw reading against the previous raw reading — |Δ| > π means the
+   * encoder crossed the boundary, and the physical delta is wrapped back
+   * to the shortest path.  Accumulate into a continuous multi-turn value. */
   if (state->prev_raw_valid) {
     float delta = rotor_position - state->prev_raw_rotor_position;
     if (delta > MOTOR_STATE_PI)
-      state->rotor_position -= MOTOR_STATE_TWO_PI;
+      state->rotor_position += delta - MOTOR_STATE_TWO_PI;
     else if (delta < -MOTOR_STATE_PI)
-      state->rotor_position += MOTOR_STATE_TWO_PI;
+      state->rotor_position += delta + MOTOR_STATE_TWO_PI;
     else
-      state->rotor_position = rotor_position;
+      state->rotor_position += delta;
   } else {
     state->rotor_position = rotor_position;
     state->prev_raw_valid = 1U;
   }
-  state->prev_raw_rotor_position = state->rotor_position;
+  state->prev_raw_rotor_position = rotor_position;
   state->raw_velocity = raw_velocity;
   state->raw_torque = raw_torque;
   state->temperature_c = temperature_c;
