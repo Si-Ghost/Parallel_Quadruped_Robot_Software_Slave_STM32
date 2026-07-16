@@ -38,7 +38,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_UART_ERROR_LOG_PERIOD_MS 10000U
 #define LEG_IO_ERROR_OFFLINE_COUNT  5U
 #define LEG_IO_RETRY_COUNT          1U
-#define LEG_ROTOR_ZERO_NEAR_RAD     1.50f
+#define LEG_ROTOR_ZERO_NEAR_RAD     3.00f
 #define LEG_SINGLE_MOTOR_MAX_ROTOR_OFFSET_RAD 1.001f
 #define LEG_SINGLE_MOTOR_MAX_KP               0.50f
 #define LEG_SINGLE_MOTOR_MAX_KW               0.05f
