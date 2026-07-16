@@ -23,10 +23,10 @@
 #define GROUP_POSITION_KD                 1.0f
 #define GROUP_SPEED_TARGET_MAX_RAD_S      100.0f
 #define GROUP_GAIT_ANGLE_OUT_MAX_RAD_S  10000.0f
-#define GROUP_SPEED_KP                    0.06f
-#define GROUP_SPEED_KI                    0.0036f
-#define GROUP_SPEED_KD                    0.0090f
-#define GROUP_SPEED_INTEGRAL_MAX          0.60f
+#define GROUP_SPEED_KP                    0.01f
+#define GROUP_SPEED_KI                    0.0006f
+#define GROUP_SPEED_KD                    0.0015f
+#define GROUP_SPEED_INTEGRAL_MAX          0.20f
 #define GROUP_HOLD_POSITION_KP_NM_RAD     1.00f
 #define GROUP_HOLD_ENTRY_ERROR_RAD        0.0001f
 #define GROUP_TORQUE_MAX_NM               1.50f
