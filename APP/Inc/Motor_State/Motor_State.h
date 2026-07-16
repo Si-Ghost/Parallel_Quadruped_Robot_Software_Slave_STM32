@@ -98,6 +98,8 @@ typedef struct
   uint32_t debug_last_log_tick;
   uint32_t io_error_last_log_tick;
   uint8_t io_error_count;
+  float prev_raw_rotor_position;
+  uint8_t prev_raw_valid;
 } Motor_StateTypeDef;
 
 /* Existing Leg_Control/Leg_Gait source API remains valid during migration. */
