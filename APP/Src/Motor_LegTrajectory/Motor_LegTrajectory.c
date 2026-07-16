@@ -423,18 +423,18 @@ int Motor_LegTrajectory_Arm(const Motor_StateSnapshotTypeDef states[2],
         (now_ms - state->timestamp) > 10U ||
         !isfinite(state->rotor_position) ||
         !isfinite(state->joint_position) || state->motor_error != 0U ||
-        state->temperature_c >= 40) {
+        state->temperature_c >= 80) {
       control.mode = Motor_LegTrajectory_Stopped;
       control.reason = state->motor_error != 0U
                            ? Motor_LegTrajectory_StopMotorFault
-                           : state->temperature_c >= 40
+                           : state->temperature_c >= 80
                                  ? Motor_LegTrajectory_StopTemperature
                                  : Motor_LegTrajectory_StopOffline;
       control.stop_motor_index =
           (int8_t)(control.first_motor_index + motor);
       control.stop_detail = state->motor_error != 0U
                                 ? (float)state->motor_error
-                                : state->temperature_c >= 40
+                                : state->temperature_c >= 80
                                       ? (float)state->temperature_c
                                       : (float)(now_ms - state->timestamp);
       ++control.stop_sequence;
