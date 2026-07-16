@@ -7,6 +7,7 @@
 #include "GO-M8010-6.h"
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 extern Leg_HandlerTypeDef* Legs[4];
