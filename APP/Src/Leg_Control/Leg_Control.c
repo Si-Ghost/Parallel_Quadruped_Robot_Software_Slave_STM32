@@ -38,7 +38,7 @@ extern UART_HandleTypeDef huart8;
 #define LEG_UART_ERROR_LOG_PERIOD_MS 10000U
 #define LEG_IO_ERROR_OFFLINE_COUNT  5U
 #define LEG_IO_RETRY_COUNT          1U
-#define LEG_ROTOR_ZERO_NEAR_RAD     1.50f
+#define LEG_ROTOR_ZERO_NEAR_RAD     3.00f
 #define LEG_SINGLE_MOTOR_MAX_ROTOR_OFFSET_RAD 1.001f
 #define LEG_SINGLE_MOTOR_MAX_KP               0.50f
 #define LEG_SINGLE_MOTOR_MAX_KW               0.05f
@@ -320,7 +320,7 @@ static void transport_feedback_received(uint8_t leg,
     Motor_LegTrajectory_Stop(Motor_LegTrajectory_StopMotorFault,
                              (int8_t)motor_index,
                              (float)feedback->MError);
-  else if (Motor_LegTrajectory_IsRunning() && feedback->Temp >= 80)
+  else if (Motor_LegTrajectory_IsRunning() && feedback->Temp >= 50)
     Motor_LegTrajectory_Stop(Motor_LegTrajectory_StopTemperature,
                              (int8_t)motor_index,
                              (float)feedback->Temp);
@@ -331,7 +331,7 @@ static void transport_feedback_received(uint8_t leg,
     Motor_GroupControl_StopWithContext(Motor_Group_StopMotorFault,
                                        (int8_t)motor_index,
                                        (float)feedback->MError);
-  else if (Motor_GroupControl_IsActive() && feedback->Temp >= 80)
+  else if (Motor_GroupControl_IsActive() && feedback->Temp >= 50)
     Motor_GroupControl_StopWithContext(Motor_Group_StopTemperature,
                                        (int8_t)motor_index,
                                        (float)feedback->Temp);
@@ -974,7 +974,7 @@ static int start_single_motor_trajectory(uint8_t motor_index, uint8_t dry_run)
   } else if (state == NULL || state->online != Motor_Online ||
              state->angle_valid != Motor_Angle_Valid ||
              (HAL_GetTick() - state->timestamp) > 10U ||
-             state->motor_error != 0U || state->temperature_c >= 80) {
+             state->motor_error != 0U || state->temperature_c >= 50) {
     single_motor_last_plan_reject_reason = "trajectory_feedback_or_health";
   } else if (dry_run == 0U && Motor_Transport_IsZeroOutputOnly() != 0U) {
     single_motor_last_plan_reject_reason = "transport_zero_guard";
@@ -1405,7 +1405,7 @@ void Leg_Control_Service(uint32_t now_ms)
           group_stop_detail = (float)state->motor_error;
           break;
         }
-        if (state->temperature_c >= 80) {
+        if (state->temperature_c >= 50) {
           group_stop = Motor_Group_StopTemperature;
           group_stop_motor = (int8_t)idx;
           group_stop_detail = (float)state->temperature_c;
@@ -1534,7 +1534,7 @@ void Leg_Control_Service(uint32_t now_ms)
         stop_detail = (float)state->motor_error;
         break;
       }
-      if (state->temperature_c >= 80) {
+      if (state->temperature_c >= 50) {
         stop_reason = Motor_LegTrajectory_StopTemperature;
         stop_motor = (int8_t)idx;
         stop_detail = (float)state->temperature_c;
@@ -1615,7 +1615,7 @@ void Leg_Control_Service(uint32_t now_ms)
     } else if ((now_ms - state->timestamp) > 10U) {
       Leg_Control_ForceZeroOutput(Motor_Control_Reason_Offline);
       stopped = 1U;
-    } else if (state->motor_error != 0U || state->temperature_c >= 80) {
+    } else if (state->motor_error != 0U || state->temperature_c >= 50) {
       Leg_Control_ForceZeroOutput(Motor_Control_Reason_SafetyLimit);
       stopped = 1U;
     } else if (single_motor_control.duration_ms != 0U &&
@@ -1747,7 +1747,7 @@ static int start_leg_trajectory(uint8_t dry_run)
     if (state == NULL || state->online != Motor_Online ||
         state->angle_valid != Motor_Angle_Valid ||
         (now_ms - state->timestamp) > 10U || state->motor_error != 0U ||
-        state->temperature_c >= 80 ||
+        state->temperature_c >= 50 ||
         (dry_run == 0U &&
          (snapshot.arm_zero_checked[motor] == 0U ||
           state->zero_checked == 0U ||
@@ -1872,7 +1872,7 @@ int Leg_Control_StartAllZero(void)
     if (state == NULL || state->online != Motor_Online ||
         state->angle_valid != Motor_Angle_Valid ||
         (HAL_GetTick() - state->timestamp) > 10U ||
-        state->motor_error != 0U || state->temperature_c >= 80 ||
+        state->motor_error != 0U || state->temperature_c >= 50 ||
         (group.mode == Motor_Group_Armed &&
          absf_local(state->rotor_position - group.arm_position[idx]) > 0.10f)) {
       Motor_GroupControl_StopWithContext(
